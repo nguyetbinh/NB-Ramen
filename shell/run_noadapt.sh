@@ -2,12 +2,12 @@ cd ../src || exit
 
 gpu=0
 
-tta_algo='Ramen'
+tta_algo='NoAdapt'
 tta_mode='mixed'
 
-datasets=('CIFAR10C' 'CIFAR100C' 'ImageNet5K' 'DomainNet')
+datasets=('CIFAR10C' 'CIFAR100C' 'ImageNetC5K' 'DomainNet')
 models=('clip_vitbase32' 'clip_vitbase16' 'clip_vitlarge14' 'clip_vitbase32')
-batchsizes=(100 100 50 100)
+batch_sizes=(100 100 50 100)
 
 for i in {0..3}; do
   {

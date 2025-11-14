@@ -1,0 +1,2 @@
+optimizer: signsgd
+lr: 0.000001
