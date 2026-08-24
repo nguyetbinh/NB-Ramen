@@ -30,19 +30,19 @@ The profiling run is identified by its resolved config and config hash. Normal
 
 ## Requirements
 
-- [ ] Validate only `off` and `causal_sync_v1` profiling modes.
-- [ ] Emit an all-or-none per-sample profiling extension with mode, synchronized
+- [x] Validate only `off` and `causal_sync_v1` profiling modes.
+- [x] Emit an all-or-none per-sample profiling extension with mode, synchronized
   query milliseconds, live candidates, eligible candidates, returned supports,
   and active classes.
-- [ ] Preserve strict item-order causality for batches larger than one.
-- [ ] Prove profile-on and profile-off return identical supports, gradients,
+- [x] Preserve strict item-order causality for batches larger than one.
+- [x] Prove profile-on and profile-off return identical supports, gradients,
   memory timelines, and predictions on deterministic fixtures.
-- [ ] Recompute p50, p95, maximum, and total query latency plus candidate/support
+- [x] Recompute p50, p95, maximum, and total query latency plus candidate/support
   distributions from the trace during strict resume; reject tampering or mixed
   optional rows.
-- [ ] Keep existing schema-v2 evidence valid and ordinary retrieval latency
+- [x] Keep existing schema-v2 evidence valid and ordinary retrieval latency
   explicitly unavailable.
-- [ ] Run paired profile-off/profile-on CIFAR100C MPS evidence with an identical
+- [x] Run paired profile-off/profile-on CIFAR100C MPS evidence with an identical
   stream fingerprint and verify strict resume.
 - [ ] Repeat a cost-limited DomainNet profile on fixed CUDA before selecting any
   compression mechanism.

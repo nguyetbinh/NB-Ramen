@@ -13,8 +13,8 @@ admit_to_memory = pre_update_normalized_entropy <= 0.50
 Ground-truth classes are joined only by the evaluator after the method returns.
 They are never provided to routing, admission, retrieval, or adaptation.
 
-The implementation and evidence contract passed 211 dependency-complete unit
-tests after independent review fixed strict-resume validation so a persisted
+The implementation and evidence contract are covered by the current 215-test
+dependency-complete suite. Independent review fixed strict-resume validation so a persisted
 gate decision must agree exactly with the configured threshold. Original
 `src/methods/Ramen.py` remains unchanged.
 
