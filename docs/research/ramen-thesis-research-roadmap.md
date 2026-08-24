@@ -102,7 +102,17 @@ The earlier discussion about CVPR Findings should be treated as an interpretatio
 
 [`src/datasets/utils.py`](../../src/datasets/utils.py) creates `TaggedMultipleDataset` by concatenating all samples into an index map containing `(domain_idx, sample_idx)`.
 
-[`src/main.py`](../../src/main.py) then evaluates mixed-domain TTA using a `DataLoader(..., shuffle=True, ...)`.
+Historically, [`src/main.py`](../../src/main.py) evaluated mixed-domain TTA
+using a `DataLoader(..., shuffle=True, generator=None)`.  The optional
+`--legacy_mixed_order` path reproduces that exact execution sequence after
+method construction: it consumes DataLoader's global base-seed draw and
+RandomSampler's separate global seed draw, then permutes with RandomSampler's
+local generator.  This exact contract requires `--num_workers 0`; legacy mode
+rejects worker processes.  Constructor RNG can therefore make legacy order method-
+dependent, just as it did historically.  The exported fingerprint—not the run
+seed—is authoritative, and this parity path is excluded from research-matrix
+and negative-adaptation pairing.  The normal seeded `iid_mixed` stream is the
+method-independent fair-comparison protocol.
 
 This means the current mixed-domain stream is effectively:
 

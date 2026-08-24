@@ -1,0 +1,12 @@
+max_capacity: 75
+capacity_scope: per_class
+topk: 1
+beta: 0.0
+spawn_threshold: 0.25
+max_contexts: 8
+router_temperature: 0.1
+router_momentum: null
+include_current: true
+
+optimizer: signsgd
+lr: 0.01

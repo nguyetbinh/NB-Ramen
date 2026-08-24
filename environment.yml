@@ -1,0 +1,15 @@
+name: nb-ramen
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pytorch=2.4.1
+  - torchvision=0.19.1
+  - numpy=1.26.4
+  - pillow=10.4.0
+  - pyyaml=6.0.2
+  - tqdm=4.66.5
+  - pip=24.2
+  - pip:
+      - git+https://github.com/openai/CLIP.git@d05afc436d78f1c48dc0dbf8e5980a9d471f35f6
