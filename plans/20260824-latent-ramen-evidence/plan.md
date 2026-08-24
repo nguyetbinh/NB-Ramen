@@ -33,4 +33,5 @@ Runtime probes and experiment reports belong in `reports/`. Generated raw traces
 - [CIFAR-100-C MPS block n=200 pilot](reports/cifar100c-mps-block-n200-pilot.md)
 - [CIFAR-100-C MPS recurring-prefix n=200 pilot](reports/cifar100c-mps-recurring-prefix-n200-pilot.md)
 - [Entropy-gated LatentRamen MPS smoke](reports/entropy-gated-latent-ramen-mps-smoke.md)
+- [Causal retrieval profiling MPS pilot](reports/cifar100c-mps-causal-retrieval-profile.md)
 - [CUDA and DomainNet execution strategy](reports/cuda-domainnet-execution-strategy.md)

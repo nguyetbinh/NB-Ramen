@@ -32,6 +32,19 @@ resume. For the gated method, resume additionally requires every decision to
 equal `admission_normalized_entropy <= max_normalized_entropy` from the exact
 hashed config. Older v2 traces without these optional extensions remain valid.
 
+`LatentRamen` also supports an opt-in diagnostic config value
+`retrieval_profile: causal_sync_v1`. Profiled traces add the complete optional
+set `retrieval_profile`, `retrieval_elapsed_ms`,
+`retrieval_candidate_count`, `retrieval_eligible_candidate_count`,
+`retrieval_returned_support_count`, and `retrieval_active_class_count`.
+Ordinary runs default to `off` and keep retrieval latency explicitly
+unavailable. The profiled interval synchronizes immediately before and after
+each causal one-item memory query; this deliberately perturbs execution, so
+profile-on end-to-end latency is diagnostic and is not comparable to normal
+method latency. Strict resume replays the memory buckets and recomputes all
+counter distributions and timing summaries. Research configs live below
+`cfg/research/phase04-causal-retrieval/`.
+
 Post-shift recovery is computed only for `block`, `recurring`, and `bursty`
 streams, whose contiguous domain episodes support its full-window definition.
 `novel_domain` remains `not_applicable`: it mixes eligible domains before and

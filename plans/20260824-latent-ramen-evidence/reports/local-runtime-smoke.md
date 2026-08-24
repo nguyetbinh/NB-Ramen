@@ -33,7 +33,7 @@ Command:
 Final result after the schema-v2 evidence lifecycle, strict artifact/reference
 provenance, semantic dataset preflight, analysis gates, legacy-order parity,
 support ablations, entropy-gated admission, stream-identity controls, and
-runtime integration: 211 tests passed. This includes
+runtime integration: 215 tests passed. This includes
 causal batch-order regressions, exact historical DataLoader/RNG parity checks,
 and adversarial evidence-file and artifact replacement checks.
 An independent Luna run reproduced 49/49 at an earlier causal-integration
@@ -125,7 +125,7 @@ after_reset_memory_bytes=0
 Luna also independently repeated the new ViT-B/16 check on explicit CPU with
 the two official CIFAR-100 samples and all 100 class prompts. Both artifact
 hashes matched before execution, the then-current full suite passed 143/143,
-and no files were edited by that run. The current 211-test suite result above
+and no files were edited by that run. The current 215-test suite result above
 covers the later provenance, deep-preflight, analysis-gate, support-ablation,
 and entropy-gating work.
 
@@ -184,3 +184,8 @@ identity-bound `recurring`, block-size-8, n=128 smoke both passed strict
 resume. The gate selected cleaner and smaller memory but underperformed
 ungated LatentRamen in both bounded samples; see the
 [entropy-gated MPS smoke](entropy-gated-latent-ramen-mps-smoke.md).
+
+Phase 4 added opt-in causal retrieval profiling. A paired 32-sample MPS pilot
+preserved all adaptation outputs and measured retrieval at 12.1% of profiled
+forward time, below the preregistered 50% compression gate. See the
+[causal retrieval profile](cifar100c-mps-causal-retrieval-profile.md).
