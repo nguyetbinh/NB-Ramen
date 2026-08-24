@@ -189,3 +189,10 @@ Phase 4 added opt-in causal retrieval profiling. A paired 32-sample MPS pilot
 preserved all adaptation outputs and measured retrieval at 12.1% of profiled
 forward time, below the preregistered 50% compression gate. See the
 [causal retrieval profile](cifar100c-mps-causal-retrieval-profile.md).
+
+A separate Phase 3 replication ran NoAdapt, Ramen, LatentRamen, and the
+entropy-gated ablation for seeds 0/1/2 on 64-sample, block-size-8 prefixes.
+Strict resume skipped all 12 artifacts. The gate reduced admitted-cache
+contamination and retained bytes in every seed but underperformed LatentRamen
+accuracy and produced a negative window in every seed; the detailed table is
+in the [entropy-gated report](entropy-gated-latent-ramen-mps-smoke.md).

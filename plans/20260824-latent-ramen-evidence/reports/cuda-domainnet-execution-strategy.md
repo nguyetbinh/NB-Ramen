@@ -8,7 +8,7 @@
 
 The complete experiment matrix must run on a separate Linux NVIDIA host. The
 local machine is an Apple M2 MacBook Air with 16 GB unified memory, no CUDA
-device or `nvidia-smi`, and about 22 GiB free after retaining the official
+device or `nvidia-smi`, and about 21 GiB free after retaining the official
 CIFAR-100-C archive and extraction. It can plan commands and validate CPU/MPS
 mechanics, including the completed official-wrapper smoke, but it cannot
 produce CUDA latency, CUDA allocator peaks, benchmark-scale CIFAR-100-C
@@ -88,7 +88,7 @@ publisher checksum pinned by this repository; its generated sidecar attests to
 the locally inventoried bytes, not to publisher authenticity. Record source
 URLs and archive checksums separately when acquiring it.
 
-The local Mac's roughly 22 GiB remaining space is insufficient to stage both
+The local Mac's roughly 21 GiB remaining space is insufficient to stage both
 DomainNet archives and extracted data alongside the retained CIFAR-100-C
 archive/extraction, environments, models, and evidence.
 
