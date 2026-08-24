@@ -142,3 +142,43 @@ This larger single-seed signal is still not a CUDA benchmark, but it strengthens
 the bounded negative conclusion: the fixed entropy gate produces a much
 cleaner and smaller cache without preserving LatentRamen's accuracy. The
 threshold remains frozen; it must not be tuned on this test stream.
+
+## Three-seed cost-limited replication
+
+A final noncanonical MPS matrix replicated the primary comparison for seeds
+0, 1, and 2 with benchmark configs, a 64-sample `block` prefix, and explicit
+`stream_block_size=8`:
+
+```text
+/Users/admin/Documents/NB-Ramen/evidence/cifar100c-phase03-mps-block-b8-n64-seeds012
+```
+
+Each seed has its own deterministic fingerprint, shared exactly by NoAdapt,
+Ramen, LatentRamen, and EntropyGatedLatentRamen within that seed. Strict
+`--execute --resume` validation skipped all 12 runs.
+
+| Method | Micro accuracy, mean ± population SD | Macro accuracy | Worst-domain | Forward total |
+|---|---:|---:|---:|---:|
+| NoAdapt | 0.3490 ± 0.0830 | 0.3338 | 0.0000 | 1.880 s |
+| Ramen | 0.3385 ± 0.0923 | 0.3194 | 0.0833 | 27.215 s |
+| LatentRamen | 0.3698 ± 0.0974 | 0.3527 | 0.0417 | 9.958 s |
+| Entropy-gated | 0.3125 ± 0.0510 | 0.2991 | 0.0000 | 7.719 s |
+
+The paired gated-minus-LatentRamen micro differences were `-0.015625`,
+`-0.03125`, and `-0.125` for seeds 0, 1, and 2. Macro differences were
+`-0.03125`, `-0.03125`, and `-0.09821`. Gated had one negative 50-sample
+window in every seed; LatentRamen had none.
+
+The gate admitted 18.75%, 20.31%, and 28.12% of samples. Mean admitted
+contamination fell from 65.1% for ungated LatentRamen to 36.0% for the gated
+cache. The retained-byte ratios were 0.1875, 0.2031, and 0.28125, an average
+77.6% reduction. Thus the reliability diagnostic repeats cleanly, but the
+accuracy and negative-adaptation criteria fail in every seed.
+
+These prefixes contain only 64 samples and eight short domain episodes; their
+zero/near-zero worst-domain results and single 50-sample negative window are
+coarse. Nevertheless, together with the n=128 and benchmark n=200 pilots, the
+three-seed replication makes the local decision unambiguous: the frozen 0.50
+entropy threshold should not be promoted or tuned. It remains preserved as a
+negative ablation until the preregistered CUDA/full-stream comparison can
+confirm or overturn the result.
