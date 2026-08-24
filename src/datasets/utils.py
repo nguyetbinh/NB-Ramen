@@ -1,7 +1,7 @@
 import os
 import sys
+from pathlib import Path
 from torch.utils.data import Dataset
-import pkg_resources
 from torchvision.datasets import VisionDataset, ImageFolder
 from torch.utils.data.dataset import TensorDataset
 from PIL import Image
@@ -34,7 +34,8 @@ Adapted from https://github.com/RobustBench/robustbench/blob/master/robustbench/
 
 
 def make_custom_dataset(root, path_imgs, class_to_idx):
-    with open(pkg_resources.resource_filename(__name__, path_imgs), 'r') as f:
+    resource_path = Path(__file__).resolve().parent / path_imgs
+    with resource_path.open('r', encoding='utf-8') as f:
         fnames = sorted(f.readlines())
 
     images = [(os.path.join(root,

@@ -1,0 +1,12 @@
+{
+  "max_accuracy_std": 0.01,
+  "max_class_context_nmi": 0.8,
+  "max_forward_latency_ratio": 1.25,
+  "max_memory_ratio": 1.1,
+  "min_routing_accuracy_association": 0.2,
+  "minimum_repeats": 3,
+  "natural_domain_gain_min": 0.005,
+  "oracle_recovery_min": 0.01,
+  "router_closure_min": 0.25,
+  "structured_degradation_min": 0.01
+}
