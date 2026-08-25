@@ -2,10 +2,10 @@
 
 ## Thesis Direction Report
 
-**Base paper:** Ramen: Robust Test-Time Adaptation of Vision-Language Models with Active Sample Selection  
+**Base paper:** *Ramen: Robust Test-Time Adaptation of Vision-Language Models with Active Sample Selection*  
 **Repository:** `nguyetbinh/NB-Ramen`  
 **Working branch:** `evidence`  
-**Research direction:** Open-World / Open-Set mixed-domain Test-Time Adaptation  
+**Research direction:** Open-World / Open-Set Mixed-Domain Test-Time Adaptation  
 
 ---
 
@@ -15,256 +15,155 @@ The thesis objective is:
 
 > **Prevent semantic OOD contamination of cached adaptation gradients while preserving useful mixed-domain adaptation.**
 
-The central idea is not to make Ramen's cache merely "cleaner" according to pseudo-label correctness. The goal is to make the gradient memory preserve information that is genuinely useful for adaptation while suppressing gradient components that are harmful under semantic uncertainty.
-
-A concise formulation is:
+The central design principle is:
 
 $$
 \boxed{
-\text{domain-relevant evidence}
+\text{retrieve by domain relevance}
 +
-\text{adaptation-compatible gradients}
+\text{adapt by gradient compatibility}
 }
 $$
 
-instead of:
+The thesis should not define memory quality only through prediction confidence or pseudo-label correctness. A sample may be semantically uncertain or even misclassified while still carrying useful domain-adaptation information. Conversely, a confident sample may produce an adaptation gradient that conflicts with the locally useful adaptation direction.
+
+The final target is therefore not a generic OOD filter. It is a **gradient-memory mechanism that preserves adaptation-compatible evidence and suppresses harmful semantic gradient components**.
+
+A working title is:
+
+> **Consensus-Aware Gradient Memory for Open-World Mixed-Domain Test-Time Adaptation**
+
+---
+
+## 2. Why Ramen is a suitable base
+
+Ramen addresses mixed-domain TTA by constructing a sample-specific support set from cached historical samples. For each test sample, the method:
+
+```text
+image
+  -> CLIP feature z
+  -> zero-shot logits
+  -> pseudo-class c_hat
+  -> entropy loss
+  -> per-sample gradient g
+  -> cache (z, g, entropy) under predicted class
+  -> retrieve nearby support from class memories
+  -> entropy + feature-distance weighting
+  -> aggregate cached gradients
+  -> temporary adaptation
+  -> inference
+  -> reset model parameters
+```
+
+The important architectural property is:
 
 $$
 \boxed{
-\text{high-confidence samples only}
+\text{model parameters are temporary, but gradient memory persists}
 }
 $$
 
-A possible working title is:
+Therefore, if an unreliable sample enters the cache, its gradient may influence multiple future queries even though the adapted model itself is reset after each prediction.
 
-> **Trustworthy Gradient Memory for Open-World Mixed-Domain Test-Time Adaptation**
-
----
-
-## 2. Why Ramen is a suitable base paper
-
-Ramen addresses mixed-domain TTA. Instead of adapting each query using an undifferentiated mixed stream, it retrieves a query-specific support set from a persistent memory.
-
-For a test sample $x_i$, Ramen computes:
-
-- image embedding $z_i$;
-- zero-shot logits;
-- pseudo-label $\hat y_i$;
-- entropy $H_i$;
-- per-sample adaptation gradient $g_i$.
-
-The original implementation then stores the sample in the cache corresponding to the predicted class and later retrieves cached gradients according to feature similarity and class balancing.
-
-Conceptually:
-
-```text
-x_i
- ↓
-embedding z_i + pseudo-label + entropy + gradient g_i
- ↓
-class-partitioned memory
- ↓
-retrieve nearby support samples
- ↓
-weighted gradient aggregation
- ↓
-temporary adaptation
- ↓
-prediction
- ↓
-reset model parameters
-```
-
-The important architectural property is that the model parameters are reset after inference while the memory persists across the stream.
-
-Therefore, the long-lived adaptation state is primarily:
-
-$$
-\boxed{\text{the cached feature-gradient memory}}
-$$
-
-This makes memory contamination a natural research target.
+This makes persistent gradient memory a natural research object for trustworthiness.
 
 ---
 
-## 3. Original intuition: semantic OOD can contaminate persistent gradient memory
+## 3. Original hypothesis and what the current evidence shows
 
-Consider an open-world stream containing both known and unknown semantic classes.
+### 3.1 Initial hypothesis
 
-Example:
-
-```text
-rainy dog      -> known
-rainy cat      -> known
-rainy fox      -> unknown
-night wolf     -> unknown
-sketch car     -> known
-```
-
-The CLIP classifier only contains known classes. Therefore an unknown sample such as `fox` may still be assigned a known pseudo-label:
-
-```text
-fox -> dog
-```
-
-Ramen may then cache:
+The first hypothesis was:
 
 $$
-(z_{\text{fox}}, g_{\text{fox}}, \hat y=\text{dog}).
-$$
-
-This is more important than a single bad TTA update because the gradient becomes persistent memory:
-
-```text
-unknown sample
-      ↓
-wrong / unsafe adaptation gradient
-      ↓
-cached
-      ↓
-retrieved for future queries
-      ↓
-reused multiple times
-```
-
-Thus a local semantic error can potentially become persistent adaptation contamination.
-
-This motivates the thesis-level question:
-
-> **How should a memory-based TTA system decide which parts of cached adaptation evidence are safe to reuse under semantic OOD?**
-
----
-
-## 4. First attempted solution: confidence / entropy-based reliability
-
-The first reliability hypothesis was:
-
-$$
-\text{low entropy}
+\text{unreliable prediction}
 \Rightarrow
-\text{reliable memory item}.
+\text{unreliable memory item}
 $$
 
-This led to `EntropyGatedLatentRamen`, where memory admission used normalized predictive entropy:
+which motivated entropy-based memory admission.
+
+The implemented `EntropyGatedLatentRamen` uses normalized predictive entropy:
 
 $$
-H_{norm}(x)
+\bar H(x)
 =
-\frac{H(p(y\mid x))}{\log K}.
+\frac{H(p(y\mid x))}{\log K}
 $$
 
-A sample was admitted if:
+and admits a sample only when:
 
 $$
-H_{norm}(x) \le 0.50.
+\bar H(x)\le0.5.
 $$
 
-This mechanism successfully produced a cleaner and smaller memory.
+### 3.2 Observed result
 
-Observed evidence included:
+The entropy gate clearly improves pseudo-label purity and reduces retained memory, but it consistently reduces adaptation accuracy in the current pilots.
 
-- substantially lower admitted pseudo-label contamination;
-- higher pseudo-label accuracy among admitted samples;
-- much lower retained memory usage.
+Representative evidence from the existing branch:
 
-However, adaptation accuracy consistently degraded relative to ungated `LatentRamen` in the bounded pilot experiments.
+- admitted pseudo-label accuracy improves substantially;
+- admitted contamination decreases substantially;
+- retained memory decreases strongly;
+- final adaptation accuracy is worse than ungated `LatentRamen`;
+- the negative direction repeats across the small multi-seed pilot.
 
-For example, in the CIFAR-100-C $n=200$ pilot:
-
-- LatentRamen micro accuracy: approximately $0.330$;
-- Entropy-gated micro accuracy: approximately $0.315$;
-- admitted contamination was greatly reduced;
-- retained memory was reduced by approximately $85\%$.
-
-The same negative direction appeared across the three-seed short-prefix replication.
-
----
-
-## 5. Main finding from the negative result
-
-The entropy-gating experiment provides an important research insight:
+Therefore the current evidence supports:
 
 $$
 \boxed{
-\text{pseudo-label correctness}
-\neq
-\text{adaptation usefulness}
-}
-$$
-
-and more generally:
-
-$$
-\boxed{
-\text{cleaner memory}
-\neq
+\text{cleaner pseudo-label memory}
+\not\Rightarrow
 \text{better adaptation memory}
 }
 $$
 
-A sample can be misclassified yet still contain a gradient component useful for adapting to the current domain.
+and rejects the simple assumption:
 
-Conversely, a high-confidence sample is not guaranteed to produce a gradient that improves adaptation.
+$$
+\boxed{
+\text{low entropy}
+\Rightarrow
+\text{useful adaptation gradient}
+}
+$$
 
-Therefore semantic reliability should not be defined only from:
-
-- entropy;
-- maximum probability;
-- pseudo-label correctness proxy.
-
-The negative result suggests that the relevant object is not merely the sample prediction, but the **adaptation gradient produced by that sample**.
-
-This changes the research question from:
-
-> "Is this sample trustworthy?"
-
-into:
-
-> **"Is this gradient compatible with the adaptation evidence provided by other relevant samples?"**
+The entropy-gated method should remain in the repository as a **negative ablation**, not be tuned further on the final test streams.
 
 ---
 
-## 6. Important limitation of current evidence
+## 4. Important scope correction: current contamination is not yet semantic OOD
 
-The current `evidence` branch primarily studies closed-set CIFAR-100-C streams.
+The existing CIFAR-100-C experiments are still closed-set: CLIP receives the full dataset class vocabulary. Current "contamination" mainly means that the pseudo-label differs from the true class.
 
-The existing "contamination" diagnostics mostly correspond to pseudo-label errors:
+That is not yet the thesis setting.
 
-$$
-\hat y_i \neq y_i.
-$$
-
-This is not yet true semantic OOD contamination.
-
-A proper open-set experiment must explicitly divide the semantic label space:
+The thesis requires a real semantic open-set protocol:
 
 $$
 \mathcal Y
 =
-\mathcal Y_K
-\cup
-\mathcal Y_U,
+\mathcal Y_K\cup\mathcal Y_U,
 $$
 
 with:
 
 $$
-\mathcal Y_K \cap \mathcal Y_U = \emptyset.
+\mathcal Y_K\cap\mathcal Y_U=\varnothing.
 $$
 
-For CIFAR-100-C, a clean MVP protocol is:
+For the first benchmark, use a fixed class split on CIFAR-100-C, for example:
 
 $$
-100\text{ classes}
+100
 =
 80\text{ known}
 +
 20\text{ unknown}.
 $$
 
-The CLIP text classifier should contain prompts only for the $80$ known classes, while the test stream still contains images from all $100$ classes.
-
-Critically, known and unknown classes should experience the **same corruption/domain process**.
+CLIP receives prompts only for the 80 known classes, while the test stream still contains samples from all 100 classes.
 
 Example:
 
@@ -272,616 +171,1000 @@ Example:
 fog / dog       -> known
 fog / car       -> known
 fog / fox       -> unknown
-
 snow / dog      -> known
-snow / car      -> known
 snow / fox      -> unknown
 ```
 
-This separates:
+This design keeps the domain/corruption mechanism controlled while introducing semantic novelty.
+
+The benchmark should support several unknown ratios:
 
 $$
-\text{semantic novelty}
+\rho_{OOD}\in\{0,0.1,0.3,0.5\}.
 $$
 
-from:
-
-$$
-\text{domain/style novelty}.
-$$
-
-Using a completely different dataset as OOD in the first experiment would make it difficult to determine whether the method detects semantics or merely dataset/domain differences.
+This benchmark must be implemented before making any claim about semantic-OOD gradient contamination.
 
 ---
 
-## 7. Updated thesis hypothesis: adaptation compatibility instead of confidence
+## 5. Revised research hypothesis
 
-The revised hypothesis is:
+The revised hypothesis is not that an OOD sample should be discarded.
 
-> **A cached gradient should be trusted according to its compatibility with local adaptation evidence, not only according to prediction confidence.**
+Instead:
 
-The central signal becomes **gradient consensus / gradient agreement**.
+> **A cached adaptation gradient is useful when its update direction is compatible with the locally shared adaptation direction, regardless of whether the originating sample has a perfectly correct pseudo-label.**
 
-Suppose a query has support gradients:
-
-$$
-g_1,g_2,\ldots,g_n.
-$$
-
-If several domain-relevant samples contain a common adaptation direction, this shared component can be interpreted as local adaptation evidence.
-
-Example:
-
-```text
-rainy dog       -> →→→↑
-rainy cat       -> →→↑
-rainy car       -> →→→↑
-
-rainy fox/OOD   -> ←→↓
-```
-
-The first three gradients share a dominant direction. The OOD gradient contains both compatible and conflicting components.
-
-The desired behavior is therefore not necessarily:
-
-```text
-OOD -> discard entire gradient
-```
-
-but rather:
-
-```text
-candidate gradient
-       ↓
-compare with local gradient consensus
-       ↓
-compatible component   -> preserve
-conflicting component  -> suppress / downweight
-```
-
-This directly matches the thesis objective:
+Conceptually, a sample gradient may be decomposed as:
 
 $$
-\boxed{
-\text{prevent harmful contamination}
+g_i
+=
+g_i^{domain}
 +
-\text{preserve useful adaptation information}
-}
+g_i^{semantic}
++
+\epsilon_i.
 $$
+
+For samples sharing the same environment, part of the domain-induced adaptation signal may be common across different semantic classes.
+
+An unknown sample may therefore contain:
+
+$$
+\underbrace{g_i^{domain}}_{\text{potentially useful}}
++
+\underbrace{g_i^{semantic}}_{\text{potentially harmful}}.
+$$
+
+A hard OOD filter removes both components.
+
+The thesis instead aims to retain directions corroborated by the support memory while suppressing unsupported or conflicting directions.
 
 ---
 
-## 8. Why this direction is especially suitable for Ramen
+## 6. Research pipeline
 
-Ramen already computes per-sample gradients efficiently.
-
-Therefore gradient reliability can be studied without adding a separate backward pass for every memory item.
-
-The implementation also uses SignSGD in the released configurations. The final update is approximately:
-
-$$
-\theta'
-=
-\theta
--
-\eta\,\operatorname{sign}(g).
-$$
-
-This has an important consequence.
-
-Simply scaling the final aggregated gradient is often insufficient because:
-
-$$
-\operatorname{sign}(0.1g)
-=
-\operatorname{sign}(g).
-$$
-
-Reliability must influence **which gradients contribute before aggregation**, so that it changes the final coordinate-wise direction.
-
-This makes gradient agreement particularly natural for Ramen.
-
----
-
-## 9. Candidate mechanism: Consensus-Aware Gradient Memory
-
-### 9.1 Gradient consensus
-
-For support gradients $g_1,\ldots,g_n$, define an element-wise sign consensus:
-
-$$
-s_k
-=
-\operatorname{sign}
-\left(
-\sum_i \operatorname{sign}(g_{ik})
-\right).
-$$
-
-For memory item $j$, define sign agreement:
-
-$$
-r_j^{grad}
-=
-\frac{1}{D}
-\sum_{k=1}^{D}
-\mathbf 1
-\left[
-\operatorname{sign}(g_{jk})=s_k
-\right].
-$$
-
-Then:
-
-$$
-0\le r_j^{grad}\le1.
-$$
-
-A high value means the sample gradient agrees with the local adaptation consensus.
-
-A low value indicates conflicting adaptation evidence.
-
-### 9.2 Soft gradient suppression
-
-Rather than rejecting a sample completely, a coordinate mask can be used:
-
-$$
-m_{jk}
-=
-\mathbf 1
-\left[
-\operatorname{sign}(g_{jk})=s_k
-\right].
-$$
-
-Then:
-
-$$
-\tilde g_j
-=
-m_j\odot g_j.
-$$
-
-This keeps the gradient components that agree with consensus while suppressing incompatible components.
-
-### 9.3 Integration with Ramen
-
-Ramen currently has a conceptual weight:
-
-$$
-w_{ij}^{Ramen}
-=
-\exp(-H_j)
-\exp(-\beta d(z_i,z_j)).
-$$
-
-A consensus-aware form could be:
-
-$$
-w_{ij}
-=
-\exp(-H_j)
-\exp(-\beta d(z_i,z_j))
-(r_j^{grad})^\gamma.
-$$
-
-The final aggregate is:
-
-$$
-g_i^*
-=
-\sum_{j\in S_i}
-w_{ij}\tilde g_j.
-$$
-
-This preserves Ramen's domain-relevance and prediction-balance structure while introducing adaptation compatibility.
-
----
-
-## 10. Domain relevance and gradient reliability must remain separate
-
-A central thesis distinction is:
+The next research cycle should be:
 
 $$
 \boxed{
-\text{domain relevance}
-\neq
-\text{gradient reliability}
+\text{Open-Set Benchmark}
+\rightarrow
+\text{Oracle Gradient Analysis}
+\rightarrow
+\text{Gradient Consensus}
+\rightarrow
+\text{Consensus-Aware Ramen}
 }
 $$
 
-Consider:
+The current latent router is not part of this cycle. Existing evidence shows routing collapse in the bounded pilots and no useful oracle routing upper bound. The thesis should isolate the gradient-memory question first.
+
+---
+
+# Part I — Open-Set Ramen Benchmark
+
+## 7. Open-set dataset wrapper
+
+Create an Open-Set CIFAR-100-C wrapper with a fixed known/unknown split.
+
+Required properties:
 
 ```text
-query: rainy dog
-memory item: rainy fox
+known_class_ids
+unknown_class_ids
+known_classes
+is_ood
+original_label
+known_label_or_minus_one
 ```
 
-The sample may be highly relevant to the current domain:
+The model-facing class vocabulary must contain only:
 
 $$
-D_{ij}\approx1,
+\mathcal Y_K.
 $$
 
-because both images contain the same corruption/environment.
-
-However, its classification/adaptation gradient may be semantically unsafe:
+The stream-facing dataset must still contain:
 
 $$
-R_j\ll1.
+\mathcal Y_K\cup\mathcal Y_U.
 $$
 
-Therefore an open-world memory should ideally retain domain information while controlling gradient influence.
+The method must never receive `is_ood` or the original unknown label. These fields are evaluator-only.
 
-This motivates a longer-term factorized memory view:
+Recommended initial split:
 
 ```text
-                 sample
-                   │
-         ┌─────────┴─────────┐
-         ▼                   ▼
-   domain evidence      adaptation gradient
-         │                   │
-         ▼                   ▼
-   DOMAIN MEMORY       GRADIENT MEMORY
-   broad retention      reliability-aware
-         │                   │
-         └─────────┬─────────┘
-                   ▼
-          safe local adaptation
+CIFAR-100-C
+├── 80 known classes
+└── 20 held-out unknown classes
 ```
 
-This factorization is a possible later-stage contribution. It should not be implemented before the open-set benchmark and gradient-consensus evidence are established.
+The exact class split must be versioned and fixed before final evaluation.
 
 ---
 
-## 11. Oracle experiments required before the final mechanism
+## 8. Open-set stream construction
 
-The next experimental infrastructure should include true semantic-OOD oracle variants.
+Reuse the existing deterministic mixed-domain stream infrastructure.
 
-| Variant | OOD embedding/context | OOD gradient | Purpose |
-|---|---:|---:|---|
-| Ramen | yes | yes | original behavior |
-| Oracle-Drop-OOD | no | no | upper bound for complete rejection |
-| Oracle-No-OOD-Gradient | yes | no | retain domain information but remove semantic gradient |
-| Oracle-ID-only | ID only | ID only | trusted-memory reference |
+The first required stream modes are:
 
-The most informative comparison is:
+```text
+iid_mixed
+block
+recurring
+```
 
-$$
-\boxed{
-\text{Oracle-No-OOD-Gradient}
-\text{ vs }
-\text{Oracle-Drop-OOD}
-}
-$$
+Each stream must mix:
 
-If keeping OOD embeddings/context while removing their gradients performs better than fully dropping OOD samples, this supports the core thesis statement:
+```text
+domain shift
++
+known semantic classes
++
+unknown semantic classes
+```
 
-> unknown samples can contain useful domain information even when their adaptation gradients are unsafe.
+The unknown ratio must be explicit in the stream manifest.
 
-The second important comparison is:
+Required controls:
 
-$$
-\boxed{
-\text{Oracle-No-OOD-Gradient}
-\text{ vs }
-\text{Ramen}
-}
-$$
+```text
+--open_set
+--known_class_split <version>
+--ood_ratio <float>
+```
 
-If the oracle improves over Ramen, this directly establishes a semantic gradient-contamination gap.
+The stream fingerprint must bind the class split, OOD ratio, domain order, and sample identities.
 
 ---
 
-## 12. Metrics for the thesis
+## 9. Open-set evaluation metrics
 
-The final evaluation should not rely only on classification accuracy.
+Add the following primary metrics:
 
-### ID utility
+### Known-class adaptation
 
 $$
 ACC_{ID}
 $$
 
-Measures adaptation performance on known classes.
+computed only on known samples.
 
 ### OOD detection
 
-Use metrics such as:
+At minimum:
 
 $$
 AUROC,
 \qquad
-FPR95,
-\qquad
-OSCR.
+FPR95.
 $$
 
-### Cache Contamination Rate
+Use a clearly defined pre-adaptation OOD score such as maximum logit, MSP, entropy, or energy. OOD detection is an evaluation/control signal here, not the core contribution.
 
-For true semantic OOD:
+### Open-set combined performance
+
+Use one combined metric such as OSCR or H-score where appropriate.
+
+### Memory contamination diagnostics
+
+For evaluator-only analysis:
 
 $$
 CCR
 =
-\frac{\#\text{OOD entries retained in gradient memory}}
-{\#\text{gradient-memory entries}}.
+\frac{\#\text{OOD items stored}}{\#\text{stored items}}
 $$
 
-### Retrieved Gradient Contamination
-
-Measure the amount of actual adaptation weight contributed by semantic OOD:
+and weighted retrieved contamination:
 
 $$
-RCR_i
+RCR_t
 =
 \frac{
-\sum_{j\in S_i}w_{ij}\mathbf 1[j\in OOD]
+\sum_{j\in S_t}\alpha_{tj}\mathbf 1[j\in OOD]
 }{
-\sum_{j\in S_i}w_{ij}
+\sum_{j\in S_t}\alpha_{tj}
 }.
 $$
 
-### Gradient deviation from oracle-ID adaptation
-
-Construct the oracle ID-only support gradient:
-
-$$
-g_i^{ID}
-$$
-
-and compare it with the actual aggregate:
-
-$$
-g_i^{all}.
-$$
-
-Define:
-
-$$
-D_i
-=
-1-\cos(g_i^{all},g_i^{ID}).
-$$
-
-This directly measures how much OOD-contaminated memory changes the adaptation direction.
-
-### Efficiency
-
-Retain Ramen's deployment motivation by reporting:
-
-- latency;
-- retained memory bytes;
-- cache size;
-- additional compute caused by the reliability mechanism.
+These diagnostics must never affect adaptation.
 
 ---
 
-## 13. Research questions
+# Part II — Oracle Gradient Analysis
 
-The thesis can be organized around three research questions.
+## 10. Why Oracle analysis is required
 
-### RQ1 — Semantic OOD contamination
+Before implementing the final method, establish whether semantic OOD gradients actually distort Ramen's adaptation direction.
 
-> **How does semantic OOD affect persistent gradient memory in mixed-domain Ramen?**
+Oracle methods may use hidden ID/OOD labels only for diagnostic upper bounds. They are not deployable methods.
 
-This establishes whether unknown samples create a measurable gradient-contamination problem.
+Required variants:
 
-### RQ2 — Adaptation compatibility
+| Variant | OOD embedding/context | OOD gradient contribution |
+|---|---:|---:|
+| `Ramen` | yes | yes |
+| `OracleDropOODRamen` | no | no |
+| `OracleIDGradientRamen` | may remain available for analysis | no |
+| `OracleConsensusRamen` | yes | only consensus-compatible component |
 
-> **Can local gradient agreement identify adaptation evidence that is more useful than confidence-based memory admission?**
-
-This directly follows from the negative entropy-gating result.
-
-### RQ3 — Preserve domain information
-
-> **Can useful domain information from semantic-OOD samples be retained without allowing unsafe semantic gradients to dominate adaptation?**
-
-This is the most important long-term research question and creates a path toward a later paper.
-
----
-
-## 14. Current evidence and decisions
-
-### Established engineering evidence
-
-The current branch already provides:
-
-- reproducible Ramen and NoAdapt runs;
-- deterministic structured stream builders;
-- block and recurring stream support;
-- persistent-memory instrumentation;
-- oracle and support-ablation infrastructure;
-- latency and memory evidence;
-- per-sample trace generation;
-- entropy-gated memory admission;
-- strict artifact validation and repeatability checks.
-
-### Negative results that should be retained
-
-The following should remain part of the thesis rather than being discarded:
-
-1. The unsupervised latent router collapsed to one context in the bounded pilots.
-2. Oracle latent routing did not provide a clear upper bound over Ramen in those pilots.
-3. Entropy gating produced cleaner memory but consistently worse adaptation accuracy.
-4. Retrieval compression was not justified by the initial bounded profiling evidence.
-
-These results narrow the problem and motivate moving away from latent routing and confidence-only admission toward adaptation-gradient compatibility.
-
----
-
-## 15. Updated implementation roadmap
-
-### Phase A — Freeze existing evidence
-
-Do not overwrite entropy-gating runs.
-
-Treat `EntropyGatedLatentRamen` as a negative ablation demonstrating:
-
-$$
-\text{confidence purity}
-\not\Rightarrow
-\text{adaptation utility}.
-$$
-
-### Phase B — Build true open-set CIFAR-100-C
-
-Implement:
-
-$$
-80\text{ known}+20\text{ unknown classes}.
-$$
-
-Requirements:
-
-- CLIP text vocabulary contains only known classes;
-- stream contains both known and unknown samples;
-- same corruption process for known and unknown;
-- evaluator records `is_ood` but the method never receives it;
-- support multiple OOD ratios.
-
-Recommended ratios:
-
-$$
-\rho_{OOD}
-\in
-\{0.1,0.3,0.5\}.
-$$
-
-### Phase C — Oracle gradient-contamination study
-
-Implement:
-
-- `OracleDropOODRamen`;
-- `OracleNoOODGradientRamen`;
-- `OracleIDOnlyRamen`.
-
-Log:
-
-- OOD cache occupancy;
-- OOD retrieval contribution;
-- aggregate-gradient deviation;
-- ID accuracy;
-- OOD metrics.
-
-### Phase D — Gradient-consensus prototype
-
-Start with the simplest mechanism:
-
-$$
-r_j^{grad}
-=
-\text{sign agreement with local support consensus}.
-$$
-
-Use it only in aggregation first.
-
-Do not initially add:
-
-- a learned reliability network;
-- augmentation consistency;
-- latent routing;
-- dual memory;
-- gradient compression.
-
-### Phase E — Reliability-aware memory lifecycle
-
-If consensus is useful, extend it to:
-
-```text
-WRITE
- ↓
-should this gradient enter trusted memory?
-
-RETRIEVE
- ↓
-is this cached gradient compatible with the query support?
-
-AGGREGATE
- ↓
-how much of the gradient should contribute?
-```
-
-### Phase F — Factorized domain / gradient memory
-
-Only after the previous phases are understood, investigate:
+The most important comparison is:
 
 $$
 \boxed{
-\text{domain memory}
-\neq
-\text{gradient memory}
+\text{Ramen}
+\quad vs \quad
+\text{OracleIDGradientRamen}
 }
 $$
 
-This is the most promising path toward a follow-up publication.
+because it measures whether OOD gradient contribution is harmful when all other stream conditions are fixed.
 
 ---
 
-## 16. Thesis contribution target
+## 11. Oracle gradient target
 
-A reasonable thesis contribution is not:
+For a query $q$, let standard Ramen aggregate:
 
-> "We introduce a better OOD detector for Ramen."
+$$
+g_q^{all}
+=
+\sum_{j\in S_q}\alpha_{qj}g_j.
+$$
 
-It is:
+Using hidden evaluation labels, construct an ID-only oracle:
 
-> **We study semantic contamination in persistent gradient-memory TTA and introduce an adaptation-compatibility mechanism that preserves domain-relevant evidence while suppressing unsafe gradient influence.**
+$$
+g_q^{ID}
+=
+\sum_{j\in S_q,\;j\in ID}\alpha_{qj}g_j.
+$$
 
-The contribution can be organized as:
+Measure direction corruption:
 
-1. **Problem formulation:** semantic OOD contamination in cached sample-level adaptation gradients.
-2. **Empirical finding:** confidence-based memory purity is insufficient to characterize adaptation usefulness.
-3. **Method:** consensus-aware / compatibility-aware gradient memory.
-4. **Evaluation:** mixed-domain + semantic-OOD streams with both predictive and memory-level metrics.
+$$
+GDC_q
+=
+1-\cos(g_q^{all},g_q^{ID}).
+$$
+
+Also record sign disagreement because Ramen uses SignSGD:
+
+$$
+SDR_q
+=
+\frac{1}{D}
+\sum_{k=1}^{D}
+\mathbf 1
+\left[
+\operatorname{sign}(g_{q,k}^{all})
+\neq
+\operatorname{sign}(g_{q,k}^{ID})
+\right].
+$$
+
+These metrics answer a concrete question:
+
+> **Does semantic OOD change the adaptation direction that Ramen would have taken using only known support gradients?**
 
 ---
 
-## 17. Long-term research trajectory
+## 12. Interpretation matrix
 
-The thesis should leave a path toward later work:
+The oracle analysis should be interpreted as follows:
+
+| Observation | Interpretation |
+|---|---|
+| `OracleID > Ramen` | OOD gradients are harmful in aggregate |
+| `OracleDropOOD < OracleIDGradient` | OOD/domain evidence may still be useful even if OOD gradients are not |
+| `GDC` increases with OOD ratio | semantic contamination changes adaptation direction |
+| `GDC` remains near zero | gradient contamination is not the dominant problem |
+| entropy purity improves but Oracle gain is absent | prediction correctness is not the correct optimization target |
+
+The thesis remains about reliable gradient memory, but the exact final mechanism must be justified by this oracle structure rather than by confidence alone.
+
+---
+
+# Part III — Gradient Consensus
+
+## 13. Core method: Consensus-Aware Gradient Memory
+
+The proposed deployable method is **ConsensusRamen**.
+
+It preserves Ramen's existing strengths:
+
+- CLIP feature retrieval;
+- prediction balance across class memories;
+- per-sample cached gradients;
+- entropy weighting;
+- feature-distance weighting;
+- temporary sample-specific adaptation;
+- parameter reset after inference.
+
+It changes only how retrieved gradients are combined.
+
+The main idea is:
+
+$$
+\boxed{
+\text{trust gradient directions corroborated across support groups}
+}
+$$
+
+rather than:
+
+$$
+\boxed{
+\text{trust samples with low predictive entropy}
+}
+$$
+
+---
+
+## 14. Step 1 — Retrieve supports exactly as Ramen
+
+For query feature $z_q$, Ramen retrieves top-$k$ support samples from each active predicted-class cache.
+
+Keep the standard weighting:
+
+$$
+\alpha_{qj}
+=
+\exp(-H_j)
+\exp(-\beta d(z_q,z_j)).
+$$
+
+For class $c$, let the retrieved support subset be:
+
+$$
+S_{q,c}.
+$$
+
+---
+
+## 15. Step 2 — Build one local gradient per support class
+
+Instead of immediately summing all retrieved gradients, first aggregate within each active class:
+
+$$
+h_{q,c}
+=
+\frac{
+\sum_{j\in S_{q,c}}\alpha_{qj}g_j
+}{
+\sum_{j\in S_{q,c}}\alpha_{qj}+\epsilon
+}.
+$$
+
+This produces a set:
+
+$$
+\mathcal H_q
+=
+\{h_{q,1},h_{q,2},\ldots,h_{q,C_q}\}
+$$
+
+where $C_q$ is the number of active retrieved classes.
+
+The class-balanced structure is inherited directly from Ramen and prevents one predicted class from dominating the consensus calculation.
+
+---
+
+## 16. Step 3 — Coordinate-wise sign consensus
+
+Ramen uses SignSGD, therefore final update magnitude is less important than coordinate-wise direction.
+
+For gradient coordinate $k$, compute:
+
+$$
+v_{q,k}
+=
+\frac{1}{C_q}
+\sum_{c=1}^{C_q}
+\operatorname{sign}(h_{q,c,k}).
+$$
+
+Define consensus strength:
+
+$$
+q_{q,k}=|v_{q,k}|.
+$$
+
+Thus:
+
+$$
+0\le q_{q,k}\le1.
+$$
+
+Interpretation:
 
 ```text
-Ramen
-  ↓
-Mixed-domain gradient memory
-  ↓
-Semantic-OOD contamination analysis
-  ↓
-Consensus-aware trustworthy gradient memory
-  ↓
-Factorized domain / semantic adaptation evidence
-  ↓
-Continual Open-World gradient memory
-  ↓
-Trustworthy Open-World Test-Time Adaptation
+q ~= 1   -> most support classes agree on the update direction
+q ~= 0   -> strong conflict / no stable direction
 ```
 
-A particularly promising follow-up question is:
+The consensus direction is:
 
-> **Can an OOD sample contribute useful domain adaptation information even when its semantic adaptation gradient is unsafe?**
-
-This goes beyond simple OOD filtering and connects memory-based TTA with open-world adaptation, continual adaptation, and trustworthy model self-update.
+$$
+s_{q,k}
+=
+\operatorname{sign}(v_{q,k}).
+$$
 
 ---
 
-## 18. North Star
+## 17. Step 4 — Construct the safe gradient
 
-The thesis should remain centered on one distinction:
+### Hard-mask version: ConsensusRamen-v0
+
+Use threshold $\tau$:
+
+$$
+m_{q,k}
+=
+\mathbf 1[q_{q,k}\ge\tau].
+$$
+
+Let ordinary Ramen's aggregated gradient be:
+
+$$
+g_q^{Ramen}
+=
+\frac1{C_q}
+\sum_c h_{q,c}.
+$$
+
+Then:
+
+$$
+\boxed{
+g_q^{safe}
+=
+m_q\odot g_q^{Ramen}
+}
+$$
+
+Coordinates without sufficient consensus do not update the model.
+
+### Soft version: ConsensusRamen-v1
+
+Instead of a hard threshold:
+
+$$
+\boxed{
+g_q^{safe}
+=
+q_q^{\gamma}\odot g_q^{Ramen}
+}
+$$
+
+where $\gamma\ge0$ controls consensus sharpness.
+
+Because SignSGD eventually takes a sign, soft scaling should be evaluated carefully. The primary mechanism should therefore start with direction masking or coordinate selection, where consensus can actually change which coordinates survive into the SignSGD step.
+
+---
+
+## 18. Optional sample-level gradient compatibility
+
+A secondary diagnostic can score an individual cached gradient against the local consensus:
+
+$$
+r_{qj}
+=
+\frac1D
+\sum_{k=1}^{D}
+\mathbf 1
+\left[
+\operatorname{sign}(g_{j,k})
+=
+s_{q,k}
+\right].
+$$
+
+This is **not** the first deployable mechanism. It is an analysis signal that can later support:
+
+- reliability-aware retrieval;
+- memory eviction;
+- delayed admission;
+- sample reweighting.
+
+The first thesis method should remain minimal: compute consensus after standard Ramen retrieval and modify the aggregated update direction.
+
+---
+
+## 19. Why consensus is preferable to entropy gating
+
+Entropy asks:
+
+> **Is the model confident about this sample?**
+
+Gradient consensus asks:
+
+> **Is this adaptation direction supported by other locally retrieved evidence?**
+
+These are different quantities.
+
+The current negative entropy-gating result suggests that pseudo-label confidence is not sufficient to determine adaptation usefulness.
+
+Consensus directly operates on the object that ultimately changes the model:
+
+$$
+\boxed{g}
+$$
+
+and is especially natural in Ramen because sample-wise gradients are already computed and cached.
+
+No additional model, forward pass, or backward pass is required for the initial consensus mechanism.
+
+---
+
+# Part IV — Implementation Contract
+
+## 20. Files to add or modify
+
+Do not modify the original `src/methods/Ramen.py` behavior.
+
+Recommended additions:
+
+```text
+src/
+├── datasets/
+│   └── open_set.py
+├── evaluation/
+│   └── open_set_metrics.py
+├── methods/
+│   ├── ConsensusRamen.py
+│   ├── OracleIDGradientRamen.py
+│   └── OracleConsensusRamen.py
+└── memory/
+    └── existing structured-memory code reused where possible
+```
+
+Expected config additions:
+
+```text
+cfg/CIFAR100C/ConsensusRamen.yaml
+cfg/CIFAR100C/OracleIDGradientRamen.yaml
+cfg/research/open-set-cifar100-split-v1.json
+```
+
+---
+
+## 21. ConsensusRamen pseudocode
+
+```text
+input: current batch x
+
+1. z       <- CLIP image features
+2. logits  <- classify(z) over KNOWN classes only
+3. c_hat   <- argmax(logits)
+4. H       <- sample entropy
+5. g       <- per-sample gradients
+
+6. insert current (z, g, H, c_hat) into standard Ramen memory
+
+7. for each query q:
+       for each active predicted-class cache c:
+           retrieve top-k nearest supports
+           compute Ramen weights alpha
+           aggregate class gradient h[q,c]
+
+8. for each gradient coordinate k:
+       vote[q,k]      <- mean_c sign(h[q,c,k])
+       consensus[q,k] <- abs(vote[q,k])
+
+9. mask[q,k] <- consensus[q,k] >= tau
+
+10. g_ramen[q] <- mean_c h[q,c]
+11. g_safe[q]  <- mask[q] * g_ramen[q]
+
+12. set_by_sample_grad(g_safe)
+13. SignSGD temporary update
+14. inference
+15. reset model parameters
+
+16. memory persists
+```
+
+This is the primary method contract from which implementation plans should be generated.
+
+---
+
+## 22. Important edge cases
+
+### Too few active support classes
+
+Consensus is not meaningful with one active class.
+
+Define a minimum:
+
+$$
+C_q\ge C_{min}.
+$$
+
+If fewer than `C_min` classes are available, fallback to ordinary Ramen for that query.
+
+Initial recommendation:
+
+```text
+min_consensus_classes: 3
+```
+
+### Zero gradient coordinates
+
+`sign(0)=0` should remain neutral and must not count as agreement with either positive or negative votes.
+
+### Empty memory
+
+Fallback to current Ramen empty-support behavior. Do not invent an additional adaptation path.
+
+### Current-sample self-retrieval
+
+Preserve Ramen behavior in the primary method for comparability, but keep an explicit ablation excluding current-sample self-retrieval.
+
+---
+
+# Part V — Evidence and Diagnostics
+
+## 23. Trace fields to add
+
+Evaluator/method diagnostics should expose:
+
+```text
+is_ood                          # evaluator-only
+open_set_split_version
+ood_ratio
+retrieved_ood_fraction          # evaluator-only
+retrieved_ood_weight_fraction   # evaluator-only
+consensus_mean
+consensus_p10
+consensus_p50
+consensus_mask_rate
+active_consensus_classes
+ramen_vs_oracle_id_cosine       # oracle/evaluator-only
+ramen_vs_oracle_id_sign_disagreement
+```
+
+The method may use only model-derived quantities. Any field marked evaluator-only must never feed back into retrieval or adaptation.
+
+---
+
+## 24. Core thesis metrics
+
+### Predictive metrics
+
+$$
+ACC_{ID},
+\quad
+AUROC,
+\quad
+FPR95,
+\quad
+OSCR/H\text{-score}.
+$$
+
+### Gradient-memory metrics
+
+$$
+CCR,
+\quad
+RCR,
+\quad
+GDC,
+\quad
+SDR.
+$$
+
+### Stability metrics
+
+- negative-adaptation windows;
+- worst-domain ID accuracy;
+- recovery after domain shifts where applicable.
+
+### Cost metrics
+
+- synchronized forward latency;
+- retained memory bytes;
+- additional consensus computation time;
+- throughput.
+
+ConsensusRamen should not require an additional model forward or backward pass.
+
+---
+
+# Part VI — Required Baselines and Ablations
+
+## 25. Baselines
+
+Primary comparison:
+
+```text
+NoAdapt
+Ramen
+EntropyGatedLatentRamen / entropy-gated Ramen negative ablation
+OracleDropOODRamen
+OracleIDGradientRamen
+ConsensusRamen
+OracleConsensusRamen
+```
+
+If `LatentRamen` is retained in tables, it should be clearly secondary because latent routing is not the active method hypothesis in this thesis stage.
+
+---
+
+## 26. Consensus ablations
+
+Required ablations:
+
+```text
+A. ordinary Ramen aggregation
+B. hard coordinate consensus mask
+C. soft consensus weighting
+D. gradient agreement without open-set OOD
+E. exclude current-sample self-retrieval
+F. varying minimum active classes
+G. varying consensus threshold tau
+```
+
+The main method should use a preregistered/default threshold selected without tuning on final benchmark streams.
+
+---
+
+# Part VII — Research Questions
+
+## 27. RQ1 — Semantic OOD contamination
+
+> **Does semantic OOD contamination measurably change the adaptation direction produced by Ramen's persistent gradient memory?**
+
+Primary evidence:
+
+$$
+GDC,
+\quad
+SDR,
+\quad
+\text{Ramen vs OracleIDGradientRamen}.
+$$
+
+---
+
+## 28. RQ2 — Confidence versus adaptation usefulness
+
+> **Is prediction confidence sufficient to identify useful cached adaptation gradients?**
+
+The existing entropy-gating result is already negative preliminary evidence.
+
+The thesis should retain this as motivation for moving from prediction-level reliability to gradient-level compatibility.
+
+---
+
+## 29. RQ3 — Consensus-aware adaptation
+
+> **Can gradient consensus suppress harmful semantic contamination while preserving the domain-adaptation benefit of mixed-domain memory?**
+
+Primary comparison:
+
+$$
+\text{ConsensusRamen}
+\quad vs \quad
+\text{Ramen}
+\quad vs \quad
+\text{hard OOD filtering}.
+$$
+
+The desired outcome is not merely cleaner memory. It is better risk-adjusted adaptation under open-set mixed-domain streams.
+
+---
+
+# Part VIII — Implementation Roadmap
+
+## 30. Phase A — Open-set infrastructure
+
+Deliverables:
+
+```text
+OpenSetCIFAR100C wrapper
+fixed split v1
+OOD-ratio controlled streams
+ID/OOD evaluator
+open-set trace schema
+```
+
+Exit condition:
+
+- known-only setting reproduces the corresponding closed-set baseline closely;
+- hidden unknown samples never enter the model class vocabulary;
+- stream manifests bind the open-set split and OOD ratio;
+- ID/OOD metrics are reproducible.
+
+---
+
+## 31. Phase B — Oracle contamination analysis
+
+Deliverables:
+
+```text
+OracleDropOODRamen
+OracleIDGradientRamen
+GDC metric
+SDR metric
+retrieved OOD contribution diagnostics
+```
+
+Purpose:
+
+> characterize how semantic OOD affects the actual update direction.
+
+This phase establishes the empirical structure that the final method is designed to approximate without labels.
+
+---
+
+## 32. Phase C — ConsensusRamen-v0
+
+Implement:
+
+$$
+\boxed{
+\text{class-level gradient aggregation}
++
+\text{coordinate sign consensus}
++
+\text{hard mask}
+}
+$$
+
+Keep everything else identical to Ramen.
+
+Initial config surface:
+
+```yaml
+topk: <Ramen value>
+beta: <Ramen value>
+optimizer: signsgd
+lr: <Ramen value>
+consensus_threshold: 0.6
+min_consensus_classes: 3
+consensus_mode: hard_mask
+```
+
+The exact primary threshold must be fixed before final evaluation; early development sweeps must use a separate validation protocol.
+
+---
+
+## 33. Phase D — ConsensusRamen-v1 and ablations
+
+Only after v0 mechanics and evidence are stable, evaluate:
+
+- soft consensus weighting;
+- sample-level consensus reliability;
+- support reweighting;
+- memory admission/eviction based on repeated gradient incompatibility.
+
+These are extensions, not required for the first complete thesis method.
+
+---
+
+## 34. Phase E — Final evaluation
+
+Run at minimum:
+
+```text
+OOD ratios: 0%, 10%, 30%, 50%
+streams: iid_mixed, block, recurring
+seeds: >= 3
+primary dataset: CIFAR-100-C open-set split
+secondary dataset: DomainNet or another suitable natural-domain benchmark
+```
+
+Report both:
+
+$$
+\text{adaptation utility}
+$$
+
+and:
+
+$$
+\text{OOD / gradient-memory safety}.
+$$
+
+---
+
+# Part IX — What Is No Longer the Main Thesis Method
+
+## 35. Entropy gate
+
+The entropy gate remains an important negative ablation.
+
+Do not continue treating:
+
+$$
+\text{low entropy}
+$$
+
+as the primary definition of memory reliability.
+
+Its scientific role is now:
+
+> **show that improved pseudo-label purity and smaller memory do not necessarily improve adaptation.**
+
+---
+
+## 36. Latent router
+
+The current unsupervised latent router is not part of the active thesis method because bounded evidence showed context collapse and the oracle routing upper bound did not establish a useful gain.
+
+Keep the implementation and reports, but do not combine routing + semantic OOD + gradient consensus until the gradient-memory question is resolved independently.
+
+---
+
+# Part X — Thesis Contribution Story
+
+## 37. Contribution 1 — Empirical finding
+
+> **Prediction-level memory cleanliness is not equivalent to adaptation usefulness.**
+
+The entropy-gated experiments provide preliminary evidence that a cleaner pseudo-label memory can reduce adaptation performance.
+
+---
+
+## 38. Contribution 2 — Open-world gradient-memory formulation
+
+> **Semantic OOD in a persistent gradient cache should be evaluated by its effect on adaptation direction, not only by sample classification correctness.**
+
+This is operationalized using oracle ID-only gradients, direction cosine, and sign disagreement.
+
+---
+
+## 39. Contribution 3 — Consensus-aware method
+
+> **ConsensusRamen preserves gradient directions corroborated across class-balanced local support and suppresses conflicted coordinates before SignSGD adaptation.**
+
+The method is label-free at deployment and reuses Ramen's existing per-sample gradients without requiring another model forward/backward pass.
+
+---
+
+# 40. North Star
+
+The thesis should be summarized by:
 
 $$
 \boxed{
 \textbf{
-Prediction confidence is not the same as adaptation-gradient reliability.
+Retrieve by domain relevance;
+adapt by gradient compatibility.
 }
 }
 $$
 
-The goal is therefore not to build the cleanest memory according to pseudo-label correctness.
+The final objective remains:
 
-The goal is to build a memory whose stored evidence produces **useful and safe adaptation under mixed-domain semantic uncertainty**.
+$$
+\boxed{
+\textbf{
+Prevent harmful semantic-OOD contamination of cached adaptation gradients
+while preserving useful mixed-domain adaptation.
+}
+}
+$$
 
-In one sentence:
+The immediate implementation target is therefore **not another confidence gate**. It is:
 
-> **Retrieve by domain relevance, adapt by gradient compatibility.**
+$$
+\boxed{
+\textbf{
+Open-Set Ramen
+\rightarrow
+Oracle gradient evidence
+\rightarrow
+ConsensusRamen-v0
+}
+}
+$$
+
+This report is intended to serve as the source document for subsequent implementation-plan files. Any generated plan should preserve the phase order and method contract defined above.
