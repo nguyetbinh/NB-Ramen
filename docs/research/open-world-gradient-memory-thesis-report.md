@@ -1167,4 +1167,52 @@ ConsensusRamen-v0
 }
 $$
 
-This report is intended to serve as the source document for subsequent implementation-plan files. Any generated plan should preserve the phase order and method contract defined above.
+---
+
+# Appendix A — Plan-generation contract
+
+Any implementation plan generated from this report must preserve the following dependency order:
+
+```text
+A. Open-set dataset/evaluation infrastructure
+        ↓
+B. Oracle gradient diagnostics
+        ↓
+C. ConsensusRamen-v0
+        ↓
+D. Consensus ablations/extensions
+        ↓
+E. final multi-seed evaluation
+```
+
+Do **not** generate a plan that starts ConsensusRamen before the open-set evaluator and oracle diagnostics exist.
+
+Each plan should specify:
+
+```text
+objective
+files touched
+new interfaces / config keys
+data-flow changes
+method equations implemented
+evaluator-only vs method-visible fields
+tests
+smoke command
+expected artifacts
+exit criteria
+```
+
+The implementation invariants are:
+
+1. `src/methods/Ramen.py` remains behaviorally unchanged.
+2. Ground-truth ID/OOD information is evaluator-only except in explicitly named `Oracle*` methods.
+3. `ConsensusRamen` uses no target labels.
+4. `ConsensusRamen-v0` requires no additional model forward/backward pass beyond Ramen.
+5. Consensus is computed after standard Ramen support retrieval, not as an OOD detector before retrieval.
+6. The primary v0 mechanism modifies the update direction through coordinate masking before SignSGD.
+7. If active support classes are fewer than `min_consensus_classes`, the method falls back to ordinary Ramen for that query.
+8. Entropy gating remains a preserved negative ablation and is not silently retuned.
+9. Latent routing is out of scope for the active method path.
+10. Every final comparison must use identical versioned stream fingerprints within a paired experimental cell.
+
+This report is the source document for subsequent implementation-plan files.
