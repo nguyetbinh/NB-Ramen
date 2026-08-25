@@ -529,16 +529,13 @@ $$
 
 ## 15. Step 2 — Build one local gradient per support class
 
-Instead of immediately summing all retrieved gradients, first aggregate within each active class:
+Instead of immediately summing all retrieved gradients, first build the same
+weighted per-class contribution that Ramen uses:
 
 $$
 h_{q,c}
 =
-\frac{
 \sum_{j\in S_{q,c}}\alpha_{qj}g_j
-}{
-\sum_{j\in S_{q,c}}\alpha_{qj}+\epsilon
-}.
 $$
 
 This produces a set:
@@ -551,7 +548,10 @@ $$
 
 where $C_q$ is the number of active retrieved classes.
 
-The class-balanced structure is inherited directly from Ramen and prevents one predicted class from dominating the consensus calculation.
+The final average across classes is class-balanced.  The per-class contribution
+is intentionally **not** normalized by its total weight: renormalizing it
+would change Ramen's update magnitude, making ConsensusRamen a different
+baseline even when its mask is bypassed.
 
 ---
 
@@ -1027,12 +1027,15 @@ topk: <Ramen value>
 beta: <Ramen value>
 optimizer: signsgd
 lr: <Ramen value>
-consensus_threshold: 0.6
+consensus_threshold: 0.2
 min_consensus_classes: 3
 consensus_mode: hard_mask
 ```
 
-The exact primary threshold must be fixed before final evaluation; early development sweeps must use a separate validation protocol.
+`0.2` was locked after the isolated, explicitly noncanonical MPS development
+pilot recorded in `plans/20260824-latent-ramen-evidence/reports/open-set-mps-directional-pilot-20260825.md`.
+It must not be retuned on canonical final streams; any alternative threshold
+belongs to a separately reported ablation.
 
 ---
 
@@ -1060,6 +1063,12 @@ seeds: >= 3
 primary dataset: CIFAR-100-C open-set split
 secondary dataset: DomainNet or another suitable natural-domain benchmark
 ```
+
+For the primary CIFAR-100-C ratio sweep, keep the selected source exposure
+fixed at 400 examples per corruption domain (6,000 examples before an
+explicit cost-limited prefix). This count is divisible by every preregistered
+ratio denominator. It prevents an OOD-ratio comparison from silently changing
+the number of adaptation updates, cache occupancy, or stream duration.
 
 Report both:
 

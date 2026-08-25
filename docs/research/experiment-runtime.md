@@ -203,4 +203,168 @@ corruption/ImageNet-C/{classnames.txt,<corruption>/<severity>/<class>/}
 domainbed/domain_net/{clipart,infograph,painting,quickdraw,real,sketch}/<class>/
 ```
 
+## Open-set CIFAR-100-C gradient-memory evidence
+
+The active open-world thesis path uses the fixed
+`open-set-cifar100-split-v1` partition (80 known classes and 20 held-out
+classes). Enable it only with `CIFAR100C` mixed streams; `--ood_ratio` is
+selected deterministically per source domain and the final stream fingerprint
+binds the split, requested ratio, realized counts, domain order, and sample
+identities. The evaluator retains ID/OOD labels only in evidence records; the
+ordinary methods receive images only.
+
+Start with a paired, cost-limited CPU or CUDA smoke. Run `NoAdapt` first, then
+give its resulting `trace.jsonl` to the adapted method; both commands must
+produce the same stream fingerprint.
+
+```shell
+PYTHONPATH=src python src/main.py \
+  --dataset CIFAR100C --open_set --known_class_split open-set-cifar100-split-v1 \
+  --ood_ratio 0.30 --tta_mode mixed --stream_mode block --stream_block_size 64 \
+  --tta_algo NoAdapt --model clip_vitbase16 --seed 0 --device cuda \
+  --data_root "$RAMEN_DATA_ROOT" --artifact-provenance fast \
+  --max_eval_samples 200 --evidence_dir "$RAMEN_EVIDENCE_DIR" \
+  --run_id open-c100-noadapt-block-s0
+
+PYTHONPATH=src python src/main.py \
+  --dataset CIFAR100C --open_set --known_class_split open-set-cifar100-split-v1 \
+  --ood_ratio 0.30 --tta_mode mixed --stream_mode block --stream_block_size 64 \
+  --tta_algo OracleIDGradientRamen --model clip_vitbase16 --seed 0 --device cuda \
+  --data_root "$RAMEN_DATA_ROOT" --artifact-provenance fast \
+  --max_eval_samples 200 --evidence_dir "$RAMEN_EVIDENCE_DIR" \
+  --reference_trace "$RAMEN_EVIDENCE_DIR/open-c100-noadapt-block-s0/trace.jsonl" \
+  --run_id open-c100-oracle-id-block-s0
+```
+
+Open-set traces add the all-or-none evaluator fields `original_label`,
+`known_label_or_minus_one`, `is_ood`, split version, ratio, and a
+pre-adaptation energy score (`-logsumexp`). Oracle gradient diagnostics add
+retrieved OOD fractions plus all-vs-ID direction cosine/sign disagreement.
+They are diagnostic upper bounds, not deployable methods. A local CPU/MPS
+check is recorded in `plans/20260824-latent-ramen-evidence/reports/`; CUDA
+effectiveness evidence still requires a Linux NVIDIA runner and the verified
+datasets.
+
+ConsensusRamen traces add a separate all-or-none method-only group: coordinate
+agreement mean/p10/p50, retained-coordinate rate, active class count, and
+`consensus_applied`. Summary agreement and mask-rate aggregates include only
+rows where the hard mask actually ran; empty or below-minimum-class ordinary
+Ramen fallbacks are counted separately.
+
+`ConsensusRamenSoft` is a separately selectable, preregistered v1 ablation
+identity. It selects `cfg/CIFAR100C/ConsensusRamenSoft.yaml` and reuses the
+same method implementation with `consensus_mode: soft_weight`; it is not part
+of the locked seven-method v0 canonical matrix.
+
+`ConsensusRamenNoSelf` is likewise a separately selectable causal-history
+ablation. It selects `cfg/CIFAR100C/ConsensusRamenNoSelf.yaml`, which retrieves
+only supports from previous forwards before admitting the current batch. It is
+also outside the locked v0 matrix.
+
+## Canonical open-set Consensus matrix
+
+The current thesis matrix is intentionally separate from the legacy latent
+matrix. On a Linux NVIDIA host with verified official CIFAR-100-C, plan its
+252 paired runs (or add `--execute --resume` to run/continue them) with:
+
+```shell
+PYTHONPATH=src python -m runtime.experiment_matrix \
+  --open-set-consensus --device cuda --artifact-provenance fast \
+  --data-root "$RAMEN_DATA_ROOT" --evidence-dir "$RAMEN_EVIDENCE_DIR"
+```
+
+It fixes NoAdapt, Ramen, EntropyGatedLatentRamen (the preserved negative
+ablation), OracleDropOODRamen, OracleIDGradientRamen, ConsensusRamen, and
+OracleConsensusRamen
+across OOD ratios 0/0.1/0.3/0.5, `iid_mixed`/`block`/`recurring`, and seeds
+0/1/2. The planner schedules each NoAdapt trace before its exact
+same-cell adapted controls. Each ratio selects exactly 400 source examples per
+corruption domain (6,000 before any optional smoke prefix), so ratio results
+change OOD prevalence rather than adaptation exposure, stream length, or cache
+opportunity. This fixed source budget is bound into the run ID, manifest, and
+stream fingerprint. After completion, produce the descriptive report
+without invoking the legacy latent gate:
+
+```shell
+PYTHONPATH=src python -m evaluation.open_set_consensus_analysis \
+  --evidence-dir "$RAMEN_EVIDENCE_DIR" --data-root "$RAMEN_DATA_ROOT" \
+  --artifact-provenance fast
+```
+
+### Canonical open-set oracle/Consensus matrix
+
+The runnable canonical plan is intentionally separate from the legacy
+LatentRamen matrix and its router gate. It plans 252 verified,
+fixed-source-exposure CUDA runs: `NoAdapt`, `Ramen`, `EntropyGatedLatentRamen`,
+`OracleDropOODRamen`, `OracleIDGradientRamen`, `ConsensusRamen`, and `OracleConsensusRamen` across OOD ratios `0/0.1/0.3/0.5`,
+`iid_mixed/block/recurring`, and seeds `0/1/2`. Each adapted run references the
+ratio-bound `NoAdapt` trace from its own cell, and every run ID binds the OOD
+ratio. Only the three explicitly named Oracle methods may receive evaluator OOD
+context; ConsensusRamen remains method-only. OracleConsensusRamen is an
+evaluator-only consensus upper bound and intentionally has no all-vs-ID
+direction diagnostic, because it filters OOD cache admission before aggregate
+directions are formed.
+
+```shell
+PYTHONPATH=src python - <<'PY'
+import os
+from src.runtime.experiment_matrix import build_command, build_open_set_evidence_matrix
+
+runs = build_open_set_evidence_matrix(
+    evidence_dir=os.path.join(os.environ["RAMEN_EVIDENCE_ROOT"], "open-set-cifar100c-canonical"),
+    data_root=os.environ["RAMEN_DATA_ROOT"],
+)
+for run in runs:
+    print(" ".join(build_command(run)))
+PY
+```
+
+Run commands in their emitted order (or pass the planned runs to
+`execute_matrix`); do not independently launch adapted methods before their
+paired baseline is complete. Analyze only with the separate descriptive
+contract, never `evaluation.experiment_analysis`:
+
+```shell
+PYTHONPATH=src python -m evaluation.open_set_consensus_analysis \
+  --evidence-dir "$RAMEN_EVIDENCE_ROOT/open-set-cifar100c-canonical" \
+  --data-root "$RAMEN_DATA_ROOT" --artifact-provenance fast
+```
+
+The analyzer validates complete method coverage, exact paired stream
+fingerprints, OOD-context confinement, ID/open-set metrics, oracle direction
+diagnostics, and Consensus diagnostics. Its `canonical_cuda_expected` label
+distinguishes complete full-stream CUDA evidence from an explicitly
+`noncanonical_pilot`; it deliberately emits no Consensus certification or
+legacy latent-router go/no-go verdict.
+
+## Canonical DomainNet open-set secondary matrix
+
+The required natural-domain secondary benchmark is planned separately from
+CIFAR-100-C. It is intentionally **planner-only**: it produces no DomainNet
+measurements and does not imply that a local DomainNet tree, its 345-class
+taxonomy, or CUDA are available. On a Linux NVIDIA host after verified
+six-environment DomainNet acquisition, emit the fixed 252-run plan with:
+
+```shell
+PYTHONPATH=src python -m runtime.open_set_domainnet_matrix \
+  --device cuda --artifact-provenance fast \
+  --data-root "$RAMEN_DATA_ROOT" \
+  --evidence-dir "$RAMEN_EVIDENCE_ROOT/open-set-domainnet-canonical"
+```
+
+It locks the `open-set-domainnet-name-rank-v1` 276-known/69-unknown recipe,
+all seven Phase-E baselines, OOD ratios `0/0.1/0.3/0.5`,
+`iid_mixed/block/recurring`, and seeds `0/1/2`. Each adapted run references
+the exact same-cell NoAdapt trace. At runtime the normal open-set stream
+builder materializes and fingerprints the actual class taxonomy plus split;
+therefore a changed DomainNet directory cannot masquerade as the same
+benchmark.
+
+The secondary benchmark fixes **690 source examples per environment** (4,140
+before stream scheduling). Unlike CIFAR-100-C's 400 corruption examples, this
+is a semantic coverage decision: at 10% OOD it reserves exactly 69 OOD
+examples, one for each held-out DomainNet class. It remains divisible by every
+preregistered OOD-ratio denominator. Do not replace this with a cost-limited
+prefix or a non-CUDA pilot inside the canonical evidence directory.
+
 The preflight also supports `ImageNetC`, `PACS`, `VLCS`, `TerraIncognita`, and `OfficeHome`; use `--all-datasets` to check every supported layout.
