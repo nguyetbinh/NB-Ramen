@@ -104,6 +104,9 @@ class EntropyGatedLatentRamen(LatentRamen):
                 admission_normalized_entropy=normalized_entropy,
                 admitted_to_memory=admitted,
             )
+            self.last_diagnostics["pre_adaptation_ood_score"] = -torch.logsumexp(
+                logits.detach(), dim=1
+            )
 
         self.model.step_and_zero_grad()
         with torch.no_grad():

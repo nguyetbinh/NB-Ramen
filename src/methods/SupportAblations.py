@@ -201,6 +201,9 @@ class SupportSelectionRamen(TTABase):
             self.last_diagnostics = self._diagnostics(
                 routing, contexts, support_counts, memory_sizes, memory_bytes, active_contexts
             )
+            self.last_diagnostics["pre_adaptation_ood_score"] = -torch.logsumexp(
+                logits.detach(), dim=1
+            )
         self.model.step_and_zero_grad()
         with torch.no_grad():
             output = self.model(x)

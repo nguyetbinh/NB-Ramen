@@ -1,0 +1,13 @@
+max_capacity: 750
+topk: 5
+beta: 5.0
+oracle_ood_source: evaluator_is_ood
+
+optimizer: signsgd
+lr: 0.01
+
+# Fixed ConsensusRamen-v0 surface; evaluator membership affects only ID
+# support admission for this explicitly named diagnostic upper bound.
+consensus_threshold: 0.2
+min_consensus_classes: 3
+consensus_mode: hard_mask

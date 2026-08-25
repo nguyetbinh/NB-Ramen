@@ -1,0 +1,14 @@
+max_capacity: 750
+topk: 5
+beta: 5.0
+
+optimizer: signsgd
+lr: 0.01
+
+# Causal-history ablation of ConsensusRamen-v0.  A batch may only retrieve
+# supports admitted by earlier forwards; it is admitted after aggregation for
+# future batches.  All other ConsensusRamen-v0 choices remain locked.
+consensus_threshold: 0.2
+min_consensus_classes: 3
+consensus_mode: hard_mask
+include_current: false

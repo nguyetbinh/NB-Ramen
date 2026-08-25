@@ -3,14 +3,18 @@ import hashlib
 import io
 import json
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 import unittest
 from unittest.mock import patch
 
 from src.runtime.experiment_matrix import (
     IncompleteRunError,
+    OPEN_SET_METHODS,
+    OPEN_SET_OOD_RATIOS,
     build_command,
     build_experiment_matrix,
+    build_open_set_evidence_matrix,
     execute_matrix,
     main as matrix_main,
     make_run_id,
@@ -18,6 +22,7 @@ from src.runtime.experiment_matrix import (
     validate_completed_run,
 )
 from src.evaluation.evidence import SUMMARY_SCHEMA_VERSION, TRACE_SCHEMA_VERSION
+from src.evaluation.evidence import CONSENSUS_TRACE_FIELDS, ORACLE_GRADIENT_TRACE_FIELDS
 from src.runtime.artifact_provenance import (
     CIFAR100C_OFFICIAL_ACQUISITION,
     SCHEMA_VERSION as ARTIFACT_SCHEMA_VERSION,
@@ -239,6 +244,89 @@ def _mutate_summary(run, mutate):
     path.write_text(json.dumps(summary), encoding="utf-8")
 
 
+def _write_valid_open_set_evidence(run, *, diagnostics=False, consensus=False):
+    """Make one-row ratio-zero evidence with the runtime's exact unavailable contract."""
+    if not run.run_dir.exists():
+        _write_valid_evidence(run)
+    stream_path, manifest_path = run.run_dir / "stream.json", run.run_dir / "manifest.json"
+    summary_path, trace_path = run.run_dir / "summary.json", run.run_dir / "trace.jsonl"
+    stream = json.loads(stream_path.read_text(encoding="utf-8"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    row = json.loads(trace_path.read_text(encoding="utf-8"))
+    metadata = stream["metadata"]
+    metadata["open_set"] = {
+        "split_version": run.known_class_split,
+        "requested_ood_ratio": run.ood_ratio,
+        "requested_per_domain_source_budget": run.open_set_per_domain_source_budget,
+        "realized_per_domain_source_budget": [run.open_set_per_domain_source_budget],
+        "selected_pool_per_domain_counts": [{
+            "known": run.open_set_per_domain_source_budget,
+            "ood": 0,
+            "total": run.open_set_per_domain_source_budget,
+        }],
+        "realized_ood_ratio": 0.0,
+        "realized_ood_count": 0,
+        "realized_known_count": 1,
+        "known_class_ids": [5, 10],
+        "unknown_class_ids": [20, 30],
+    }
+    metadata.pop("fingerprint", None)
+    fingerprint = _fingerprint(metadata, stream["references"])
+    metadata["fingerprint"] = fingerprint
+    stream["fingerprint"] = fingerprint
+    manifest["stream"] = metadata
+    manifest["args"].update({
+        "open_set": True,
+        "known_class_split": run.known_class_split,
+        "ood_ratio": run.ood_ratio,
+        "open_set_per_domain_source_budget": run.open_set_per_domain_source_budget,
+    })
+    row.update({
+        "ground_truth_class": 10, "prediction": 1, "correct": True,
+        "original_label": 10, "known_label_or_minus_one": 1, "is_ood": False,
+        "open_set_split_version": run.known_class_split, "ood_ratio": run.ood_ratio,
+        "pre_adaptation_ood_score": 0.1,
+    })
+    summary["stream_fingerprint"] = fingerprint
+    summary["open_set"] = {
+        "status": "unavailable", "reason": "OOD metrics require at least one OOD sample",
+        "score": "negative_logsumexp_pre_adaptation_logits", "id_accuracy": 1.0,
+        "auroc": None, "fpr95": None, "fpr95_threshold": None,
+        "ood_recall_at_fpr95": None, "h_score": None, "id_count": 1, "ood_count": 0,
+        "split_version": run.known_class_split, "requested_ood_ratio": run.ood_ratio,
+        "realized_ood_ratio": 0.0, "realized_ood_count": 0, "realized_known_count": 1,
+        "id_domain_accuracies": {"domain-a": 1.0}, "worst_domain_id_accuracy": 1.0,
+    }
+    if diagnostics:
+        row.update({
+            "retrieved_ood_fraction": 0.0, "retrieved_ood_weight_fraction": 0.0,
+            "ramen_vs_oracle_id_cosine": 1.0, "ramen_vs_oracle_id_sign_disagreement": 0.0,
+        })
+        summary["oracle_gradient_diagnostics"] = {
+            "status": "computed", "retrieved_ood_fraction_mean": 0.0,
+            "retrieved_ood_weight_fraction_mean": 0.0,
+            "gradient_direction_corruption_mean": 0.0, "sign_disagreement_mean": 0.0,
+            "defined_direction_count": 1,
+        }
+    if consensus:
+        row.update({
+            "consensus_mean_agreement": 0.8, "consensus_p10_agreement": 0.6,
+            "consensus_p50_agreement": 0.8, "consensus_mask_rate": 0.5,
+            "consensus_active_class_count": 2, "consensus_applied": False,
+        })
+        summary["consensus_diagnostics"] = {
+            "status": "computed", "consensus_applied_sample_count": 0,
+            "consensus_applied_sample_fraction": 0.0, "mean_agreement": None,
+            "p10_agreement": None, "p50_agreement": None, "mask_rate": None,
+            "mean_active_class_count": None, "all_sample_mean_active_class_count": 2.0,
+        }
+    stream_path.write_text(json.dumps(stream), encoding="utf-8")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+    trace_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+
 def _extend_to_two_sample_memory_timeline(run, memory_bytes):
     """Keep otherwise-valid evidence aligned while replacing memory evidence."""
     stream_path = run.run_dir / "stream.json"
@@ -279,6 +367,94 @@ def _extend_to_two_sample_memory_timeline(run, memory_bytes):
 
 
 class ExperimentMatrixTests(unittest.TestCase):
+    def test_open_set_resume_requires_complete_mapping_and_unavailable_ratio_zero_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = next(run for run in build_open_set_evidence_matrix(
+                streams=("block",), ood_ratios=(0.0,), seeds=(0,), evidence_dir=directory,
+                data_root=directory,
+            ) if run.method == "NoAdapt")
+            _write_valid_open_set_evidence(run)
+            validate_completed_run(run)
+            _mutate_trace(run, lambda row: row.pop("pre_adaptation_ood_score"))
+            with self.assertRaisesRegex(IncompleteRunError, "open-set fields"):
+                validate_completed_run(run)
+            _write_valid_open_set_evidence(run)
+            def remap_known_label(row):
+                row["known_label_or_minus_one"] = 0
+                row["correct"] = False
+            _mutate_trace(run, remap_known_label)
+            with self.assertRaisesRegex(IncompleteRunError, "known_label_or_minus_one"):
+                validate_completed_run(run)
+            _write_valid_open_set_evidence(run)
+            _mutate_summary(run, lambda summary: summary["open_set"].__setitem__("auroc", 1.0))
+            with self.assertRaisesRegex(IncompleteRunError, "summary.open_set"):
+                validate_completed_run(run)
+
+    def test_open_set_named_diagnostics_are_complete_and_applied_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runs = build_open_set_evidence_matrix(
+                streams=("block",), ood_ratios=(0.0,), seeds=(0,), evidence_dir=directory,
+                data_root=directory,
+            )
+            oracle = replace(next(run for run in runs if run.method == "OracleIDGradientRamen"), reference_trace=None)
+            _write_valid_open_set_evidence(oracle, diagnostics=True)
+            validate_completed_run(oracle)
+            _mutate_summary(oracle, lambda summary: summary.pop("oracle_gradient_diagnostics"))
+            with self.assertRaisesRegex(IncompleteRunError, "oracle_gradient_diagnostics"):
+                validate_completed_run(oracle)
+
+            consensus = replace(next(run for run in runs if run.method == "ConsensusRamen"), reference_trace=None)
+            _write_valid_open_set_evidence(consensus, consensus=True)
+            validate_completed_run(consensus)
+            _mutate_summary(consensus, lambda summary: summary["consensus_diagnostics"].__setitem__("mask_rate", 0.5))
+            with self.assertRaisesRegex(IncompleteRunError, "consensus_diagnostics"):
+                validate_completed_run(consensus)
+            _write_valid_open_set_evidence(consensus, consensus=True)
+            _mutate_trace(consensus, lambda row: row.pop("consensus_applied"))
+            with self.assertRaisesRegex(IncompleteRunError, "consensus diagnostic fields"):
+                validate_completed_run(consensus)
+
+    def test_canonical_open_set_matrix_binds_ratio_and_paired_baseline(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            runs = build_open_set_evidence_matrix(
+                evidence_dir=temporary_directory, data_root=temporary_directory,
+            )
+            self.assertEqual(252, len(runs))
+            self.assertEqual(set(OPEN_SET_OOD_RATIOS), {run.ood_ratio for run in runs})
+            self.assertEqual(set(OPEN_SET_METHODS), {run.method for run in runs})
+            for run in runs:
+                self.assertTrue(run.open_set)
+                self.assertEqual("cuda", run.device)
+                command = build_command(run)
+                self.assertIn("--open_set", command)
+                self.assertEqual("open-set-cifar100-split-v1", command[command.index("--known_class_split") + 1])
+                self.assertEqual(f"{run.ood_ratio:g}", command[command.index("--ood_ratio") + 1])
+                self.assertEqual(
+                    str(run.open_set_per_domain_source_budget),
+                    command[command.index("--open-set-per-domain-source-budget") + 1],
+                )
+                if run.method != "NoAdapt":
+                    self.assertIsNotNone(run.reference_trace)
+                    self.assertIn(f"open-ood-{run.ood_ratio:g}".replace(".", "-"), str(run.reference_trace))
+
+    def test_canonical_open_set_matrix_rejects_pilot_device_or_unknown_ratio(self):
+        with self.assertRaisesRegex(ValueError, "requires device='cuda'"):
+            build_open_set_evidence_matrix(device="mps")
+        with self.assertRaisesRegex(ValueError, "one of 0, 0.1, 0.3, 0.5"):
+            build_open_set_evidence_matrix(ood_ratios=(0.2,))
+
+    def test_open_set_consensus_cli_plans_the_fixed_cuda_matrix(self):
+        with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(io.StringIO()) as output:
+            exit_code = matrix_main([
+                "--open-set-consensus", "--device", "cuda",
+                "--evidence-dir", directory, "--data-root", directory,
+            ])
+        payload = json.loads(output.getvalue())
+        self.assertEqual(0, exit_code)
+        self.assertEqual(252, len(payload["runs"]))
+        self.assertTrue(all(run["open_set"] for run in payload["runs"]))
+        self.assertTrue(all("--open_set" in command for command in payload["commands"]))
+
     def test_profile_resume_replays_counters_even_when_summary_is_recomputed(self):
         with tempfile.TemporaryDirectory() as directory:
             config_root = Path(directory) / "profile-config"
@@ -327,7 +503,7 @@ class ExperimentMatrixTests(unittest.TestCase):
                 "number_of_discovered_contexts": 1, "assignment_churn_rate": 0.0,
             }
             summary["method_memory"] = {
-                "status": "computed", "definition": "exact bytes retained by the method support memory after each causal sample update",
+                "status": "computed", "definition": "exact bytes retained by the method support memory after each completed method forward; a batch snapshot is repeated for its samples",
                 "unit": "bytes", "max_retained_bytes": 32, "final_retained_bytes": 32,
             }
             summary_path.write_text(json.dumps(summary))
@@ -351,6 +527,15 @@ class ExperimentMatrixTests(unittest.TestCase):
             )
         self.assertEqual(["NoAdapt", "EntropyGatedLatentRamen"], [run.method for run in runs])
         self.assertEqual(300, len(build_experiment_matrix(seeds=(0, 1, 2), max_eval_samples=1)))
+
+    def test_soft_consensus_ablation_is_explicitly_selectable_without_expanding_defaults(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runs = build_experiment_matrix(
+                datasets=("CIFAR100C",), streams=("block",), methods=("ConsensusRamenSoft",),
+                seeds=(0,), evidence_dir=directory, data_root=directory, device="cpu", max_eval_samples=1,
+            )
+        self.assertEqual(["NoAdapt", "ConsensusRamenSoft"], [run.method for run in runs])
+        self.assertEqual("soft_weight", runs[1].config_data["consensus_mode"])
 
     def test_admission_evidence_summary_is_recomputed_and_tamper_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -968,7 +1153,7 @@ class ExperimentMatrixTests(unittest.TestCase):
             _mutate_trace(run, lambda row: row.__setitem__("memory_bytes", 64))
             expected = {
                 "status": "computed",
-                "definition": "exact bytes retained by the method support memory after each causal sample update",
+                "definition": "exact bytes retained by the method support memory after each completed method forward; a batch snapshot is repeated for its samples",
                 "unit": "bytes",
                 "max_retained_bytes": 64,
                 "final_retained_bytes": 64,

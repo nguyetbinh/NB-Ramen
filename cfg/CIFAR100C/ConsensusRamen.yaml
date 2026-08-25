@@ -1,0 +1,16 @@
+max_capacity: 750
+topk: 5
+beta: 5.0
+
+optimizer: signsgd
+lr: 0.01
+
+# Locked from the isolated non-canonical MPS pilot before any canonical
+# CIFAR-100-C/CUDA stream is evaluated. See the directional-pilot report.
+consensus_threshold: 0.2
+min_consensus_classes: 3
+consensus_mode: hard_mask
+
+# v0 preserves Ramen's batch-atomic current-support visibility.  The causal
+# history-only variant is separately registered as ConsensusRamenNoSelf.
+include_current: true

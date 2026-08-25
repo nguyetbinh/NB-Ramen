@@ -285,6 +285,9 @@ class LatentRamen(TTABase):
                 retrieval_eligible_candidate_count=retrieval_eligible_candidate_count if profile else None,
                 retrieval_returned_support_count=retrieval_returned_support_count if profile else None,
             )
+            self.last_diagnostics["pre_adaptation_ood_score"] = -torch.logsumexp(
+                logits.detach(), dim=1
+            )
 
         self.model.step_and_zero_grad()
         with torch.no_grad():

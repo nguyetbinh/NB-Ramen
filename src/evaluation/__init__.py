@@ -30,6 +30,15 @@ from .routing_metrics import (
     number_of_discovered_contexts,
     routing_diagnostics,
 )
+from .open_set_metrics import (
+    OpenSetMetrics,
+    binary_auroc,
+    fpr_at_95_tpr,
+    h_score,
+    id_accuracy,
+    open_set_metrics,
+    open_set_metrics_from_trace_rows,
+)
 
 
 def __getattr__(name):
@@ -46,12 +55,14 @@ def __getattr__(name):
 __all__ = [
     "TRACE_SCHEMA_VERSION",
     "SUMMARY_SCHEMA_VERSION",
+    "OpenSetMetrics",
     "AnalysisThresholds",
     "JsonlTraceWriter",
     "RoutingDiagnostics",
     "WindowAccuracy",
     "atomic_write_json",
     "average_accuracy",
+    "binary_auroc",
     "analyse_completed_runs",
     "adjusted_rand_index",
     "assignment_churn_rate",
@@ -61,7 +72,12 @@ __all__ = [
     "context_purity",
     "domain_accuracies",
     "domain_shift_recovery_times",
+    "fpr_at_95_tpr",
+    "h_score",
+    "id_accuracy",
     "negative_adaptation_rate",
+    "open_set_metrics",
+    "open_set_metrics_from_trace_rows",
     "load_completed_runs",
     "normalized_mutual_information",
     "number_of_discovered_contexts",

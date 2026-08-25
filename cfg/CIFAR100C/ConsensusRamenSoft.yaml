@@ -1,0 +1,20 @@
+max_capacity: 750
+topk: 5
+beta: 5.0
+
+optimizer: signsgd
+lr: 0.01
+
+# Deferred ConsensusRamen-v1 ablation.  SignSGD removes positive gradient
+# scaling, so gamma=1 instead admits each coordinate with probability q: q=1
+# always retains the Ramen-sign update, q=0 always deletes it, and intermediate
+# q values are deterministic-seeded Bernoulli admissions.
+consensus_mode: soft_weight
+consensus_gamma: 1.0
+consensus_seed: 1729
+
+# Retained for one shared configuration surface and the below-minimum fallback;
+# soft_weight intentionally does not use a hard threshold.
+consensus_threshold: 0.2
+min_consensus_classes: 3
+include_current: true

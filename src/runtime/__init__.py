@@ -1,7 +1,7 @@
 """Dependency-light runtime checks for reproducible NB-Ramen experiments."""
 
 __all__ = (
-    "ExperimentRun", "build_command", "build_experiment_matrix",
+    "ExperimentRun", "build_command", "build_experiment_matrix", "build_open_set_evidence_matrix",
     "DeviceMemoryTracker", "collect_hardware_evidence",
     "ProvenanceError", "generate_cifar100c_provenance", "verify_cifar100c_provenance",
     "generate_domainnet_provenance", "verify_domainnet_provenance", "verify_clip_checkpoint",

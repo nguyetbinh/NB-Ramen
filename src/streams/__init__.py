@@ -2,6 +2,7 @@
 
 from .builders import (
     StreamDataset,
+    build_open_set_stream,
     build_single_domain_stream,
     build_stream,
     stream_fingerprint,
@@ -11,6 +12,7 @@ from .builders import (
 
 __all__ = [
     "StreamDataset",
+    "build_open_set_stream",
     "build_single_domain_stream",
     "build_stream",
     "stream_fingerprint",
