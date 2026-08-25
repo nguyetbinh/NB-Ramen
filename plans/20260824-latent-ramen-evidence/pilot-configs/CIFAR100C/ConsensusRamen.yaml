@@ -1,0 +1,12 @@
+# Isolated non-canonical MPS pilot ablation only. It must not replace the
+# preregistered v0 config at cfg/CIFAR100C/ConsensusRamen.yaml.
+max_capacity: 750
+topk: 5
+beta: 5.0
+
+optimizer: signsgd
+lr: 0.01
+
+consensus_threshold: 0.2
+min_consensus_classes: 3
+consensus_mode: hard_mask
