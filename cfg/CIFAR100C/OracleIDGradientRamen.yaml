@@ -1,0 +1,7 @@
+max_capacity: 750
+topk: 5
+beta: 5.0
+oracle_ood_source: evaluator_is_ood
+
+optimizer: signsgd
+lr: 0.01

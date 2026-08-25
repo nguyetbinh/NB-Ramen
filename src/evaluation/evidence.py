@@ -57,6 +57,28 @@ RETRIEVAL_PROFILE_TRACE_FIELDS = (
     "retrieval_returned_support_count",
     "retrieval_active_class_count",
 )
+OPEN_SET_TRACE_FIELDS = (
+    "original_label",
+    "known_label_or_minus_one",
+    "is_ood",
+    "open_set_split_version",
+    "ood_ratio",
+    "pre_adaptation_ood_score",
+)
+ORACLE_GRADIENT_TRACE_FIELDS = (
+    "retrieved_ood_fraction",
+    "retrieved_ood_weight_fraction",
+    "ramen_vs_oracle_id_cosine",
+    "ramen_vs_oracle_id_sign_disagreement",
+)
+CONSENSUS_TRACE_FIELDS = (
+    "consensus_mean_agreement",
+    "consensus_p10_agreement",
+    "consensus_p50_agreement",
+    "consensus_mask_rate",
+    "consensus_active_class_count",
+    "consensus_applied",
+)
 REFERENCE_IDENTITY_FIELDS = (
     "dataset",
     "model",
@@ -362,6 +384,57 @@ class JsonlTraceWriter:
             for field in RETRIEVAL_PROFILE_TRACE_FIELDS[2:]:
                 if not _is_nonnegative_integer(row[field]):
                     raise ValueError(f"{field} must be a non-negative integer")
+        open_set_present = [field in row for field in OPEN_SET_TRACE_FIELDS]
+        if any(open_set_present) and not all(open_set_present):
+            raise ValueError("open-set trace fields must be all present or all absent")
+        if all(open_set_present):
+            if not _is_nonnegative_integer(row["original_label"]):
+                raise ValueError("original_label must be a non-negative integer")
+            known_label = row["known_label_or_minus_one"]
+            if (
+                not isinstance(known_label, int)
+                or isinstance(known_label, bool)
+                or known_label < -1
+            ):
+                raise ValueError("known_label_or_minus_one must be an integer no smaller than -1")
+            if not isinstance(row["is_ood"], bool):
+                raise ValueError("is_ood must be a boolean")
+            if not isinstance(row["open_set_split_version"], str) or not row["open_set_split_version"]:
+                raise ValueError("open_set_split_version must be a non-empty string")
+            if not _is_finite_number(row["ood_ratio"], minimum=0.0, maximum=1.0):
+                raise ValueError("ood_ratio must be a finite probability")
+            if not _is_finite_number(row["pre_adaptation_ood_score"]):
+                raise ValueError("pre_adaptation_ood_score must be finite")
+            if row["is_ood"] != (known_label == -1):
+                raise ValueError("is_ood must agree with known_label_or_minus_one")
+        oracle_gradient_present = [field in row for field in ORACLE_GRADIENT_TRACE_FIELDS]
+        if any(oracle_gradient_present) and not all(oracle_gradient_present):
+            raise ValueError("oracle-gradient trace fields must be all present or all absent")
+        if all(oracle_gradient_present):
+            if not all(open_set_present):
+                raise ValueError("oracle-gradient trace fields require complete open-set evidence")
+            for field in ORACLE_GRADIENT_TRACE_FIELDS[:2]:
+                if not _is_finite_number(row[field], minimum=0.0, maximum=1.0):
+                    raise ValueError(f"{field} must be a finite probability")
+            if row["ramen_vs_oracle_id_cosine"] is not None and not _is_finite_number(
+                row["ramen_vs_oracle_id_cosine"], minimum=-1.0, maximum=1.0
+            ):
+                raise ValueError("ramen_vs_oracle_id_cosine must be finite in [-1, 1] or null")
+            if row["ramen_vs_oracle_id_sign_disagreement"] is not None and not _is_finite_number(
+                row["ramen_vs_oracle_id_sign_disagreement"], minimum=0.0, maximum=1.0
+            ):
+                raise ValueError("ramen_vs_oracle_id_sign_disagreement must be finite in [0, 1] or null")
+        consensus_present = [field in row for field in CONSENSUS_TRACE_FIELDS]
+        if any(consensus_present) and not all(consensus_present):
+            raise ValueError("consensus trace fields must be all present or all absent")
+        if all(consensus_present):
+            for field in CONSENSUS_TRACE_FIELDS[:4]:
+                if not _is_finite_number(row[field], minimum=0.0, maximum=1.0):
+                    raise ValueError(f"{field} must be a finite probability")
+            if not _is_nonnegative_integer(row["consensus_active_class_count"]):
+                raise ValueError("consensus_active_class_count must be a non-negative integer")
+            if not isinstance(row["consensus_applied"], bool):
+                raise ValueError("consensus_applied must be a boolean")
         memory_bytes = row["memory_bytes"]
         if memory_bytes is not None and (
             not isinstance(memory_bytes, int)
@@ -774,6 +847,25 @@ def verify_reference_trace_stream_fingerprint(
             )
         ):
             raise ValueError(f"reference stream has an invalid identity at row {index}")
+    open_set_metadata = metadata.get("open_set")
+    if open_set_metadata is not None:
+        if not isinstance(open_set_metadata, Mapping):
+            raise ValueError("reference stream open-set metadata is invalid")
+        known_ids = open_set_metadata.get("known_class_ids")
+        unknown_ids = open_set_metadata.get("unknown_class_ids")
+        split_version = open_set_metadata.get("split_version")
+        if (
+            not isinstance(known_ids, list) or not isinstance(unknown_ids, list)
+            or not isinstance(split_version, str) or not split_version
+            or any(not _is_nonnegative_integer(value) for value in known_ids + unknown_ids)
+            or set(known_ids).intersection(unknown_ids)
+        ):
+            raise ValueError("reference stream open-set split is invalid")
+        known_label_by_original = {label: index for index, label in enumerate(known_ids)}
+        unknown_id_set = set(unknown_ids)
+    else:
+        known_label_by_original = None
+        unknown_id_set = None
 
     trace_digest = hashlib.sha256()
     rows: list[Mapping[str, Any]] = []
@@ -872,7 +964,112 @@ def verify_reference_trace_stream_fingerprint(
                         raise ValueError(
                             f"reference trace row {line_number} has invalid admitted_to_memory"
                         )
-                if row["correct"] != (row["prediction"] == row["ground_truth_class"]):
+                open_set_present = [field in row for field in OPEN_SET_TRACE_FIELDS]
+                if any(open_set_present) and not all(open_set_present):
+                    raise ValueError(
+                        f"reference trace row {line_number} has partial open-set evidence"
+                    )
+                if all(open_set_present):
+                    known_label = row["known_label_or_minus_one"]
+                    if not _is_nonnegative_integer(row["original_label"]):
+                        raise ValueError(
+                            f"reference trace row {line_number} has invalid original_label"
+                        )
+                    if (
+                        not isinstance(known_label, int)
+                        or isinstance(known_label, bool)
+                        or known_label < -1
+                    ):
+                        raise ValueError(
+                            f"reference trace row {line_number} has invalid known_label_or_minus_one"
+                        )
+                    if not isinstance(row["is_ood"], bool) or row["is_ood"] != (known_label == -1):
+                        raise ValueError(
+                            f"reference trace row {line_number} has inconsistent is_ood"
+                        )
+                    if not isinstance(row["open_set_split_version"], str) or not row["open_set_split_version"]:
+                        raise ValueError(
+                            f"reference trace row {line_number} has invalid open_set_split_version"
+                        )
+                    if not _is_finite_number(row["ood_ratio"], minimum=0.0, maximum=1.0):
+                        raise ValueError(
+                            f"reference trace row {line_number} has invalid ood_ratio"
+                        )
+                    if not _is_finite_number(row["pre_adaptation_ood_score"]):
+                        raise ValueError(
+                            f"reference trace row {line_number} has invalid pre_adaptation_ood_score"
+                        )
+                    if known_label_by_original is None:
+                        raise ValueError(
+                            f"reference trace row {line_number} has open-set fields without split metadata"
+                        )
+                    original_label = row["original_label"]
+                    expected_known_label = known_label_by_original.get(original_label, -1)
+                    if original_label not in known_label_by_original and original_label not in unknown_id_set:
+                        raise ValueError(
+                            f"reference trace row {line_number} original_label is absent from the split"
+                        )
+                    if row["known_label_or_minus_one"] != expected_known_label:
+                        raise ValueError(
+                            f"reference trace row {line_number} known-label remapping disagrees with the split"
+                        )
+                    if row["open_set_split_version"] != open_set_metadata["split_version"]:
+                        raise ValueError(
+                            f"reference trace row {line_number} split version disagrees with the stream"
+                        )
+                    expected_correct = (
+                        not row["is_ood"]
+                        and row["prediction"] == row["known_label_or_minus_one"]
+                    )
+                else:
+                    expected_correct = row["prediction"] == row["ground_truth_class"]
+                oracle_gradient_present = [field in row for field in ORACLE_GRADIENT_TRACE_FIELDS]
+                if any(oracle_gradient_present) and not all(oracle_gradient_present):
+                    raise ValueError(
+                        f"reference trace row {line_number} has partial oracle-gradient evidence"
+                    )
+                if all(oracle_gradient_present):
+                    if not all(open_set_present):
+                        raise ValueError(
+                            f"reference trace row {line_number} has oracle-gradient evidence without open-set provenance"
+                        )
+                    for field in ORACLE_GRADIENT_TRACE_FIELDS[:2]:
+                        if not _is_finite_number(row[field], minimum=0.0, maximum=1.0):
+                            raise ValueError(
+                                f"reference trace row {line_number} has invalid {field}"
+                            )
+                    cosine = row["ramen_vs_oracle_id_cosine"]
+                    sign_disagreement = row["ramen_vs_oracle_id_sign_disagreement"]
+                    if cosine is not None and not _is_finite_number(cosine, minimum=-1.0, maximum=1.0):
+                        raise ValueError(
+                            f"reference trace row {line_number} has invalid ramen_vs_oracle_id_cosine"
+                        )
+                    if sign_disagreement is not None and not _is_finite_number(
+                        sign_disagreement, minimum=0.0, maximum=1.0
+                    ):
+                        raise ValueError(
+                            f"reference trace row {line_number} has invalid ramen_vs_oracle_id_sign_disagreement"
+                        )
+                consensus_present = [field in row for field in CONSENSUS_TRACE_FIELDS]
+                if any(consensus_present) and not all(consensus_present):
+                    raise ValueError(
+                        f"reference trace row {line_number} has partial consensus evidence"
+                    )
+                if all(consensus_present):
+                    for field in CONSENSUS_TRACE_FIELDS[:4]:
+                        if not _is_finite_number(row[field], minimum=0.0, maximum=1.0):
+                            raise ValueError(
+                                f"reference trace row {line_number} has invalid {field}"
+                            )
+                    if not _is_nonnegative_integer(row["consensus_active_class_count"]):
+                        raise ValueError(
+                            f"reference trace row {line_number} has invalid consensus_active_class_count"
+                        )
+                    if not isinstance(row["consensus_applied"], bool):
+                        raise ValueError(
+                            f"reference trace row {line_number} has invalid consensus_applied"
+                        )
+                if row["correct"] != expected_correct:
                     raise ValueError(
                         f"reference trace row {line_number} correct disagrees with prediction"
                     )
@@ -980,6 +1177,49 @@ def verify_reference_trace_stream_fingerprint(
         })
     if sliding["values"] != expected_windows:
         raise ValueError("reference summary sliding-window evidence disagrees with its trace")
+    consensus_rows = [
+        row for row in rows
+        if all(field in row for field in CONSENSUS_TRACE_FIELDS)
+    ]
+    consensus_summary = summary.get("consensus_diagnostics")
+    if consensus_rows:
+        if not isinstance(consensus_summary, Mapping) or consensus_summary.get("status") != "computed":
+            raise ValueError("reference summary consensus diagnostics are invalid")
+        applied_rows = [row for row in consensus_rows if row["consensus_applied"]]
+        expected_consensus = {
+            "consensus_applied_sample_count": len(applied_rows),
+            "consensus_applied_sample_fraction": len(applied_rows) / len(consensus_rows),
+            "all_sample_mean_active_class_count": (
+                sum(row["consensus_active_class_count"] for row in consensus_rows) / len(consensus_rows)
+            ),
+        }
+        summary_to_trace_field = {
+            "mean_agreement": "consensus_mean_agreement",
+            "p10_agreement": "consensus_p10_agreement",
+            "p50_agreement": "consensus_p50_agreement",
+            "mask_rate": "consensus_mask_rate",
+            "mean_active_class_count": "consensus_active_class_count",
+        }
+        for field, trace_field in summary_to_trace_field.items():
+            expected_consensus[field] = (
+                sum(row[trace_field] for row in applied_rows) / len(applied_rows)
+                if applied_rows else None
+            )
+        for field, expected in expected_consensus.items():
+            actual = consensus_summary.get(field)
+            if expected is None:
+                if actual is not None:
+                    raise ValueError(
+                        f"reference summary consensus diagnostics disagree with its trace: {field}"
+                    )
+            elif not _is_finite_number(actual, minimum=0.0) or not math.isclose(
+                    actual, expected, rel_tol=1e-9, abs_tol=1e-12
+            ):
+                raise ValueError(
+                    f"reference summary consensus diagnostics disagree with its trace: {field}"
+                )
+    elif consensus_summary is not None:
+        raise ValueError("reference summary has consensus diagnostics without consensus trace evidence")
     _require_same_regular_path(
         trace_path, trace_stat, "reference trace changed before validation completed"
     )

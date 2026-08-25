@@ -19,14 +19,17 @@ from pathlib import Path
 
 from models.get_pretrained_model import get_pretrained_model
 from datasets import get_dataset_class
+from datasets.open_set import OpenSetCIFAR100C, OpenSetDomainNet
 from methods import get_method_class
-from streams import build_single_domain_stream, build_stream, truncate_stream
+from streams import build_open_set_stream, build_single_domain_stream, build_stream, truncate_stream
 from streams.legacy import build_legacy_torch_iid_stream
 from evaluation import (
     JsonlTraceWriter,
     SUMMARY_SCHEMA_VERSION,
     compare_trace_negative_adaptation,
     domain_shift_recovery_times,
+    id_accuracy,
+    open_set_metrics,
     routing_diagnostics,
     write_run_manifest,
     write_summary,
@@ -43,6 +46,25 @@ from runtime.artifact_provenance import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUN_ID_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')
+OPEN_SET_DATASET_CLASSES = {
+    ('CIFAR100C', 'open-set-cifar100-split-v1'): OpenSetCIFAR100C,
+    ('DomainNet', 'open-set-domainnet-name-rank-v1'): OpenSetDomainNet,
+}
+OPEN_SET_SPLIT_FILENAMES = {
+    ('CIFAR100C', 'open-set-cifar100-split-v1'): 'open-set-cifar100-split-v1.json',
+    ('DomainNet', 'open-set-domainnet-name-rank-v1'): 'open-set-domainnet-split-v1.json',
+}
+
+
+def _open_set_dataset_class(dataset_name, split_name):
+    """Return the evaluator wrapper for one supported versioned protocol."""
+    dataset_class = OPEN_SET_DATASET_CLASSES.get((dataset_name, split_name))
+    if dataset_class is None:
+        supported = ', '.join(
+            f'{dataset}/{split}' for dataset, split in sorted(OPEN_SET_DATASET_CLASSES)
+        )
+        raise ValueError(f'unsupported open-set dataset/split; expected one of: {supported}')
+    return dataset_class
 
 
 def _artifact_provenance(args):
@@ -156,6 +178,17 @@ def _method_diagnostics(tta_model, batch_size):
         'retrieval_eligible_candidate_count': expand('retrieval_eligible_candidate_count'),
         'retrieval_returned_support_count': expand('retrieval_returned_support_count'),
         'retrieval_active_class_count': expand('retrieval_active_class_count'),
+        'pre_adaptation_ood_score': expand('pre_adaptation_ood_score'),
+        'retrieved_ood_fraction': expand('retrieved_ood_fraction'),
+        'retrieved_ood_weight_fraction': expand('retrieved_ood_weight_fraction'),
+        'ramen_vs_oracle_id_cosine': expand('ramen_vs_oracle_id_cosine'),
+        'ramen_vs_oracle_id_sign_disagreement': expand('ramen_vs_oracle_id_sign_disagreement'),
+        'consensus_mean_agreement': expand('consensus_mean_agreement'),
+        'consensus_p10_agreement': expand('consensus_p10_agreement'),
+        'consensus_p50_agreement': expand('consensus_p50_agreement'),
+        'consensus_mask_rate': expand('consensus_mask_rate'),
+        'consensus_active_class_count': expand('consensus_active_class_count'),
+        'consensus_applied': expand('consensus_applied'),
     }
 
 
@@ -167,6 +200,16 @@ def _provide_oracle_domain_context(tta_model, domain_idx):
     if not callable(set_context):
         raise RuntimeError('oracle-context method has no context hook')
     set_context(domain_idx)
+
+
+def _provide_oracle_ood_context(tta_model, is_ood):
+    """Hand evaluator ID/OOD flags only to an explicitly named oracle diagnostic."""
+    if not getattr(tta_model, 'requires_oracle_ood_context', False):
+        return
+    set_context = getattr(tta_model, 'set_oracle_is_ood', None)
+    if not callable(set_context):
+        raise RuntimeError('oracle-OOD method has no context hook')
+    set_context(is_ood)
 
 
 def _evidence_paths(args):
@@ -248,6 +291,12 @@ def ordered_stream_test(
     dataset_num_samples = np.bincount(
         [domain_idx for domain_idx, _ in stream_dataset.references], minlength=len(datasets)
     )
+    open_set_stream = stream_dataset.metadata.get('open_set')
+    if open_set_stream is not None and not isinstance(open_set_stream, dict):
+        raise ValueError('open-set stream metadata must be a mapping')
+    id_domain_corrects = torch.zeros(len(datasets), dtype=torch.int) if open_set_stream else None
+    id_domain_samples = torch.zeros(len(datasets), dtype=torch.int) if open_set_stream else None
+    open_set_rows = []
 
     if segments is None:
         evaluation_parts = [stream_dataset]
@@ -269,6 +318,9 @@ def ordered_stream_test(
     admission_fields_available = None
     retrieval_profile_rows = []
     retrieval_profile_available = None
+    oracle_gradient_rows = []
+    consensus_rows = []
+    consensus_diagnostics_available = None
     memory_tracker = DeviceMemoryTracker(args.device)
     memory_tracker.start()
 
@@ -289,13 +341,35 @@ def ordered_stream_test(
                     if getattr(args, 'legacy_mixed_order', False) else None
                 ),
             )
-            for image, label, domain_idx, sample_idx in tqdm(dataloader):
+            for batch in tqdm(dataloader):
+                if open_set_stream is None:
+                    image, label, domain_idx, sample_idx = batch
+                    evaluator_metadata = None
+                    original_label = label
+                    is_ood = torch.zeros_like(label, dtype=torch.bool)
+                else:
+                    image, source_label, domain_idx, sample_idx, evaluator_metadata = batch
+                    required_metadata = {
+                        'original_label', 'known_label_or_minus_one', 'is_ood',
+                    }
+                    if not isinstance(evaluator_metadata, dict) or set(evaluator_metadata) != required_metadata:
+                        raise ValueError('open-set batches must carry complete evaluator-only metadata')
+                    original_label = evaluator_metadata['original_label']
+                    label = evaluator_metadata['known_label_or_minus_one']
+                    is_ood = evaluator_metadata['is_ood']
+                    if not all(torch.is_tensor(value) for value in (original_label, label, is_ood)):
+                        raise ValueError('collated open-set evaluator metadata must be tensors')
+                    if not torch.equal(source_label.to(torch.long), original_label.to(torch.long)):
+                        raise ValueError('open-set source label disagrees with evaluator metadata')
+                    if bool(torch.any(is_ood.to(torch.bool) != (label.to(torch.long) == -1))):
+                        raise ValueError('open-set ID/OOD flags disagree with known labels')
                 image, label = image.to(args.device), label.to(args.device)
 
                 # The evaluator's domain label is deliberately unavailable to
                 # ordinary methods.  The explicitly named oracle diagnostic
                 # receives it through its one-shot context hook only.
                 _provide_oracle_domain_context(tta_model, domain_idx)
+                _provide_oracle_ood_context(tta_model, is_ood)
 
                 _sync_device(args.device)
                 started = time.perf_counter()
@@ -309,6 +383,10 @@ def ordered_stream_test(
                     correct = pred.eq(label)
                     is_correct = correct.cpu().int()
                     dataset_num_corrects.index_add_(0, domain_idx, is_correct)
+                    if open_set_stream is not None:
+                        id_mask = ~is_ood.to(torch.bool)
+                        id_domain_corrects.index_add_(0, domain_idx[id_mask], is_correct[id_mask])
+                        id_domain_samples.index_add_(0, domain_idx[id_mask], torch.ones_like(is_correct[id_mask]))
 
                 if args.device.type == 'mps':
                     _sync_device(args.device)
@@ -336,6 +414,9 @@ def ordered_stream_test(
                 entropies = entropy.detach().cpu().tolist()
                 domains = domain_idx.tolist()
                 samples = sample_idx.tolist()
+                originals = original_label.detach().cpu().tolist()
+                known_labels = label.detach().cpu().tolist()
+                ood_flags = is_ood.detach().cpu().tolist()
                 admission_predictions = diagnostics['admission_prediction']
                 admission_entropies = diagnostics['admission_normalized_entropy']
                 admissions = diagnostics['admitted_to_memory']
@@ -364,13 +445,52 @@ def ordered_stream_test(
                     retrieval_profile_available = batch_profile_available
                 elif retrieval_profile_available != batch_profile_available:
                     raise ValueError('retrieval profile diagnostics availability changed within one run')
+                ood_scores = diagnostics['pre_adaptation_ood_score']
+                if open_set_stream is not None and any(value is None for value in ood_scores):
+                    raise ValueError(
+                        'open-set evaluation requires a finite pre_adaptation_ood_score diagnostic from the method'
+                    )
+                oracle_gradient_available = bool(
+                    getattr(tta_model, 'emits_oracle_gradient_diagnostics', False)
+                )
+                oracle_fields = (
+                    'retrieved_ood_fraction', 'retrieved_ood_weight_fraction',
+                    'ramen_vs_oracle_id_cosine', 'ramen_vs_oracle_id_sign_disagreement',
+                )
+                if oracle_gradient_available and any(
+                    diagnostics[field][offset] is None
+                    for field in oracle_fields[:2]
+                    for offset in range(batch_size)
+                ):
+                    raise ValueError('oracle-gradient methods must emit retrieved OOD diagnostics')
+                consensus_fields = (
+                    'consensus_mean_agreement', 'consensus_p10_agreement',
+                    'consensus_p50_agreement', 'consensus_mask_rate',
+                    'consensus_active_class_count', 'consensus_applied',
+                )
+                consensus_available = {
+                    value is not None
+                    for field in consensus_fields
+                    for value in diagnostics[field]
+                }
+                if consensus_available not in ({False}, {True}):
+                    raise ValueError(
+                        'consensus diagnostics must be available for every sample or unavailable for every sample'
+                    )
+                batch_consensus_available = consensus_available == {True}
+                if consensus_diagnostics_available is None:
+                    consensus_diagnostics_available = batch_consensus_available
+                elif consensus_diagnostics_available != batch_consensus_available:
+                    raise ValueError('consensus diagnostics availability changed within one run')
 
                 for offset in range(batch_size):
                     row = {
                         'timestep': timestep,
                         'sample_idx': int(samples[offset]),
                         'ground_truth_domain': int(domains[offset]),
-                        'ground_truth_class': int(labels[offset]),
+                        'ground_truth_class': int(
+                            originals[offset] if open_set_stream is not None else labels[offset]
+                        ),
                         'prediction': int(predictions[offset]),
                         'correct': bool(correctness[offset]),
                         'predicted_entropy': float(entropies[offset]),
@@ -390,6 +510,22 @@ def ordered_stream_test(
                     if batch_profile_available:
                         row.update({field: diagnostics[field][offset] for field in profile_fields})
                         retrieval_profile_rows.append(row)
+                    if open_set_stream is not None:
+                        row.update({
+                            'original_label': int(originals[offset]),
+                            'known_label_or_minus_one': int(known_labels[offset]),
+                            'is_ood': bool(ood_flags[offset]),
+                            'open_set_split_version': open_set_stream['split_version'],
+                            'ood_ratio': float(open_set_stream['requested_ood_ratio']),
+                            'pre_adaptation_ood_score': float(ood_scores[offset]),
+                        })
+                        open_set_rows.append(row)
+                    if oracle_gradient_available:
+                        row.update({field: diagnostics[field][offset] for field in oracle_fields})
+                        oracle_gradient_rows.append(row)
+                    if batch_consensus_available:
+                        row.update({field: diagnostics[field][offset] for field in consensus_fields})
+                        consensus_rows.append(row)
                     trace_writer.write(row)
                     forward_latencies_ms.append(latency_ms)
                     if row['memory_bytes'] is not None:
@@ -429,7 +565,7 @@ def ordered_stream_test(
     if memory_bytes_available:
         method_memory = {
             'status': 'computed',
-            'definition': 'exact bytes retained by the method support memory after each causal sample update',
+            'definition': 'exact bytes retained by the method support memory after each completed method forward; a batch snapshot is repeated for its samples',
             'unit': 'bytes',
             'max_retained_bytes': max(retained_memory_bytes),
             'final_retained_bytes': retained_memory_bytes[-1],
@@ -478,6 +614,69 @@ def ordered_stream_test(
         }
 
     valid_accs = dataset_accs[~np.isnan(dataset_accs)]
+    open_set_summary = None
+    if open_set_stream is not None:
+        id_counts = id_domain_samples.numpy()
+        id_corrects = id_domain_corrects.numpy()
+        id_accuracies = np.divide(
+            id_corrects,
+            id_counts,
+            out=np.full(len(datasets), np.nan, dtype=float),
+            where=id_counts > 0,
+        )
+        metric_kwargs = {
+            'predictions': [row['prediction'] for row in open_set_rows],
+            'ground_truth_classes': [row['known_label_or_minus_one'] for row in open_set_rows],
+            'is_ood': [row['is_ood'] for row in open_set_rows],
+            'ood_scores': [row['pre_adaptation_ood_score'] for row in open_set_rows],
+        }
+        try:
+            metrics = open_set_metrics(**metric_kwargs)
+            detection = {
+                'status': 'computed',
+                'score': 'negative_logsumexp_pre_adaptation_logits',
+                'id_accuracy': metrics.id_accuracy,
+                'auroc': metrics.auroc,
+                'fpr95': metrics.fpr_at_95_tpr,
+                'fpr95_threshold': metrics.fpr95_threshold,
+                'ood_recall_at_fpr95': metrics.ood_recall_at_fpr95,
+                'h_score': metrics.h_score,
+                'id_count': metrics.id_count,
+                'ood_count': metrics.ood_count,
+            }
+        except ValueError as exc:
+            id_flags = metric_kwargs['is_ood']
+            detection = {
+                'status': 'unavailable',
+                'reason': str(exc),
+                'score': 'negative_logsumexp_pre_adaptation_logits',
+                'id_accuracy': id_accuracy(
+                    metric_kwargs['predictions'], metric_kwargs['ground_truth_classes'], id_flags,
+                ) if any(not flag for flag in id_flags) else None,
+                'auroc': None,
+                'fpr95': None,
+                'fpr95_threshold': None,
+                'ood_recall_at_fpr95': None,
+                'h_score': None,
+                'id_count': sum(not flag for flag in id_flags),
+                'ood_count': sum(id_flags),
+            }
+        valid_id_accs = id_accuracies[~np.isnan(id_accuracies)]
+        open_set_summary = {
+            **detection,
+            'split_version': open_set_stream['split_version'],
+            'requested_ood_ratio': open_set_stream['requested_ood_ratio'],
+            'realized_ood_ratio': open_set_stream['realized_ood_ratio'],
+            'realized_ood_count': open_set_stream['realized_ood_count'],
+            'realized_known_count': open_set_stream['realized_known_count'],
+            'id_domain_accuracies': {
+                name: (float(accuracy) if not np.isnan(accuracy) else None)
+                for name, accuracy in zip(domain_names, id_accuracies)
+            },
+            'worst_domain_id_accuracy': (
+                float(np.min(valid_id_accs)) if len(valid_id_accs) else None
+            ),
+        }
     if segments is not None:
         recovery = {
             'status': 'not_applicable',
@@ -548,6 +747,45 @@ def ordered_stream_test(
         },
         'stream_fingerprint': stream_dataset.fingerprint,
     }
+    if open_set_summary is not None:
+        summary['open_set'] = open_set_summary
+    if oracle_gradient_rows:
+        def oracle_mean(field, transform=lambda value: value):
+            values = [transform(row[field]) for row in oracle_gradient_rows if row[field] is not None]
+            return sum(values) / len(values) if values else None
+        summary['oracle_gradient_diagnostics'] = {
+            'status': 'computed',
+            'retrieved_ood_fraction_mean': oracle_mean('retrieved_ood_fraction'),
+            'retrieved_ood_weight_fraction_mean': oracle_mean('retrieved_ood_weight_fraction'),
+            'gradient_direction_corruption_mean': oracle_mean(
+                'ramen_vs_oracle_id_cosine', lambda value: 1.0 - value,
+            ),
+            'sign_disagreement_mean': oracle_mean('ramen_vs_oracle_id_sign_disagreement'),
+            'defined_direction_count': sum(
+                row['ramen_vs_oracle_id_cosine'] is not None for row in oracle_gradient_rows
+            ),
+        }
+    if consensus_rows:
+        def consensus_mean(field):
+            return sum(row[field] for row in consensus_rows) / len(consensus_rows)
+        applied_consensus_rows = [row for row in consensus_rows if row['consensus_applied']]
+        def applied_consensus_mean(field):
+            if not applied_consensus_rows:
+                return None
+            return sum(row[field] for row in applied_consensus_rows) / len(applied_consensus_rows)
+        summary['consensus_diagnostics'] = {
+            'status': 'computed',
+            'consensus_applied_sample_count': len(applied_consensus_rows),
+            'consensus_applied_sample_fraction': len(applied_consensus_rows) / len(consensus_rows),
+            # Agreement and retention describe actual hard-mask decisions,
+            # not ordinary-Ramen fallback samples.
+            'mean_agreement': applied_consensus_mean('consensus_mean_agreement'),
+            'p10_agreement': applied_consensus_mean('consensus_p10_agreement'),
+            'p50_agreement': applied_consensus_mean('consensus_p50_agreement'),
+            'mask_rate': applied_consensus_mean('consensus_mask_rate'),
+            'mean_active_class_count': applied_consensus_mean('consensus_active_class_count'),
+            'all_sample_mean_active_class_count': consensus_mean('consensus_active_class_count'),
+        }
     if profile_rows:
         values = sorted(row['retrieval_elapsed_ms'] for row in profile_rows)
         def percentile(fraction):
@@ -596,6 +834,7 @@ def ordered_stream_test(
 
 def main(args):
     evidence_paths = _evidence_paths(args)
+    open_set = bool(getattr(args, 'open_set', False))
     print('-' * 80)
     print(args)
     print('-' * 80)
@@ -612,7 +851,14 @@ def main(args):
     )
 
     print("Loading datasets...")
-    datasets = get_dataset_class(args.dataset)(root=args.data_root, transform=preprocess)
+    if open_set:
+        dataset_class = _open_set_dataset_class(args.dataset, args.known_class_split)
+        datasets = dataset_class(
+            root=args.data_root, transform=preprocess,
+            split_path=getattr(args, 'known_class_split_path', None),
+        )
+    else:
+        datasets = get_dataset_class(args.dataset)(root=args.data_root, transform=preprocess)
     print(f"dataset includes environments: \n{datasets.environments}")
     artifacts = _revalidate_artifact_provenance(args, artifacts)
     reference_identity = (
@@ -632,18 +878,25 @@ def main(args):
             tta_method = method_class(model, datasets, args)
             stream_dataset = build_legacy_torch_iid_stream(datasets, args.seed)
         else:
-            stream_dataset = build_stream(
-                datasets,
-                mode=args.stream_mode,
-                seed=args.stream_seed,
-                domain_weights=args.stream_domain_weights,
-                block_size=args.stream_block_size,
-                gradual_sharpness=args.stream_gradual_sharpness,
-                sample_budget=args.stream_sample_budget,
-                novel_domain_idx=args.stream_novel_domain_idx,
-                novel_release_fraction=args.stream_novel_release_fraction,
-                correlation_strength=args.stream_correlation_strength,
-                burst_size=args.stream_burst_size,
+            build_kwargs = {
+                'mode': args.stream_mode,
+                'seed': args.stream_seed,
+                'domain_weights': args.stream_domain_weights,
+                'block_size': args.stream_block_size,
+                'gradual_sharpness': args.stream_gradual_sharpness,
+                'sample_budget': args.stream_sample_budget,
+                'novel_domain_idx': args.stream_novel_domain_idx,
+                'novel_release_fraction': args.stream_novel_release_fraction,
+                'correlation_strength': args.stream_correlation_strength,
+                'burst_size': args.stream_burst_size,
+            }
+            stream_dataset = (
+                build_open_set_stream(
+                    datasets, ood_ratio=getattr(args, 'ood_ratio', 0.0),
+                    per_domain_source_budget=args.open_set_per_domain_source_budget,
+                    **build_kwargs,
+                )
+                if open_set else build_stream(datasets, **build_kwargs)
             )
     elif args.tta_mode == 'single':
         stream_dataset, segments = build_single_domain_stream(datasets, args.stream_seed)
@@ -665,6 +918,9 @@ def main(args):
     manifest_args['oracle_domain_contexts'] = bool(
         getattr(method_class, 'requires_oracle_domain_context', False)
     )
+    manifest_args['oracle_ood_contexts'] = bool(
+        getattr(method_class, 'requires_oracle_ood_context', False)
+    )
     manifest_args['data_root'] = str(Path(args.data_root).expanduser().resolve())
     if manifest_args.get('config_path') is not None:
         manifest_args['config_path'] = str(Path(manifest_args['config_path']).expanduser().resolve())
@@ -678,6 +934,7 @@ def main(args):
             'name': args.dataset,
             'environments': list(datasets.environments),
             'original_domain_lengths': [len(dataset) for dataset in datasets],
+            'open_set': stream_dataset.metadata.get('open_set'),
         },
         stream=stream_dataset.metadata,
         artifacts=artifacts,
@@ -743,6 +1000,18 @@ def args_parser():
                         help='verify cached official CLIP and canonical dataset provenance before a run')
 
     parser.add_argument('--tta_mode', type=str, default='mixed', choices=['single', 'mixed'])
+    parser.add_argument(
+        '--open_set', action='store_true', default=False,
+        help='use a versioned CIFAR-100-C or DomainNet semantic open-set evaluator protocol',
+    )
+    parser.add_argument(
+        '--known_class_split', type=str, default='open-set-cifar100-split-v1',
+        help='versioned open-set split identifier for the selected dataset',
+    )
+    parser.add_argument(
+        '--ood_ratio', type=float, default=0.0,
+        help='exact per-domain OOD fraction for an open-set stream',
+    )
 
     parser.add_argument('--model', type=str, default='clip_vitbase32',
                         help='model name')
@@ -791,6 +1060,11 @@ def args_parser():
     parser.add_argument('--stream_block_size', type=int, default=64)
     parser.add_argument('--stream_gradual_sharpness', type=float, default=4.0)
     parser.add_argument('--stream_sample_budget', type=int, default=None)
+    parser.add_argument(
+        '--open_set_per_domain_source_budget', '--open-set-per-domain-source-budget',
+        dest='open_set_per_domain_source_budget', type=int, default=None,
+        help='exact source examples to select from each domain before open-set scheduling',
+    )
     parser.add_argument('--max_eval_samples', '--max-eval-samples', dest='max_eval_samples',
                         type=int, default=None,
                         help='deterministic stream-prefix budget for cost-limited evaluation')
@@ -809,6 +1083,32 @@ def args_parser():
     args = parser.parse_args()
 
     args.data_root = str(Path(args.data_root).expanduser().resolve())
+    if args.open_set:
+        if args.tta_mode != 'mixed':
+            parser.error('--open_set requires --tta_mode mixed')
+        if args.legacy_mixed_order:
+            parser.error('--open_set cannot use --legacy_mixed_order')
+        try:
+            _open_set_dataset_class(args.dataset, args.known_class_split)
+        except ValueError as exc:
+            parser.error(str(exc))
+        if not 0.0 <= args.ood_ratio <= 1.0:
+            parser.error('--ood_ratio must be between 0 and 1')
+        if (args.open_set_per_domain_source_budget is not None
+                and args.open_set_per_domain_source_budget <= 0):
+            parser.error('--open_set_per_domain_source_budget must be a positive integer')
+        args.known_class_split_path = str(
+            PROJECT_ROOT / 'cfg' / 'research'
+            / OPEN_SET_SPLIT_FILENAMES[(args.dataset, args.known_class_split)]
+        )
+    else:
+        if args.ood_ratio != 0.0:
+            parser.error('--ood_ratio requires --open_set')
+        if args.open_set_per_domain_source_budget is not None:
+            parser.error('--open_set_per_domain_source_budget requires --open_set')
+        args.known_class_split_path = None
+    if args.tta_algo in {'OracleIDGradientRamen', 'OracleDropOODRamen', 'OracleConsensusRamen'} and not args.open_set:
+        parser.error(f'--tta_algo {args.tta_algo} requires --open_set evaluator labels')
 
     if args.cuda and args.device_request not in ('auto', 'cuda'):
         parser.error('--cuda cannot be combined with a non-CUDA --device')
@@ -844,6 +1144,8 @@ def args_parser():
         stream_identity = (
             'legacy-torch-iid-replay' if args.legacy_mixed_order else args.stream_mode
         )
+        if args.open_set:
+            stream_identity = f'{stream_identity}-open-{args.known_class_split}-ood{args.ood_ratio:g}'
         block_identity = '' if args.stream_block_size == 64 else f'-blk-{args.stream_block_size}'
         args.run_id = f'{args.dataset}-{args.tta_algo}-{stream_identity}-s{args.seed}{block_identity}-{timestamp}'
     if args.metric_window_size <= 0 or args.metric_window_stride <= 0:

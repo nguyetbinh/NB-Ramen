@@ -1,0 +1,11 @@
+{
+  "version": "open-set-domainnet-name-rank-v1",
+  "dataset": "DomainNet",
+  "expected_class_count": 345,
+  "known_class_count": 276,
+  "unknown_class_count": 69,
+  "selection": {
+    "strategy": "sha256-name-rank-v1",
+    "salt": "NB-Ramen DomainNet semantic open-set protocol v1"
+  }
+}

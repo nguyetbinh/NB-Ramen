@@ -1,0 +1,13 @@
+max_capacity: 750
+topk: 5
+beta: 5.0
+
+optimizer: signsgd
+lr: 0.01
+
+# Preregistered held-out ablation of the minimum number of active class
+# memories.  The primary ConsensusRamen-v0 configuration remains C_min=3.
+consensus_threshold: 0.2
+min_consensus_classes: 4
+consensus_mode: hard_mask
+include_current: true

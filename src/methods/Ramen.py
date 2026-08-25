@@ -68,7 +68,14 @@ class PriorityCache:
         topk = min(topk, self.size)
 
         queries = queries.detach().to(device=self.device, dtype=self.dtype)
-        dist = torch.cdist(queries, self.keys[:self.size])  # torch.Tensor,
+        supports = self.keys[:self.size]
+        if queries.device.type == 'cpu' and queries.dtype == torch.float16:
+            # CPU cdist does not implement Half.  Keep the cache in Half so
+            # its storage behavior is unchanged, but calculate distances in
+            # float32 for CPU retrieval.
+            dist = torch.cdist(queries.float(), supports.float())
+        else:
+            dist = torch.cdist(queries, supports)  # torch.Tensor,
         sorted_dist, indices = torch.topk(dist, k=topk, dim=1, largest=False, sorted=True)
 
         values = self.values[indices]  # num_queries * topk * value_dim
@@ -76,6 +83,24 @@ class PriorityCache:
         entropies = self.entropies[indices]
 
         return values, priorities, entropies, sorted_dist
+
+    @property
+    def retained_bytes(self) -> int:
+        """Bytes in the entries currently retained by this cache.
+
+        ``PriorityCache`` allocates its backing tensors eagerly, but an entry
+        only becomes method state once it is admitted (``[:self.size]``).
+        This deliberately measures that retained support state rather than the
+        configured capacity or allocator-reserved memory, which are reported
+        separately by the runtime device-memory tracker.
+        """
+        retained_tensors = (
+            self.keys[:self.size],
+            self.values[:self.size],
+            self.priorities[:self.size],
+            self.entropies[:self.size],
+        )
+        return sum(tensor.numel() * tensor.element_size() for tensor in retained_tensors)
 
     def reset(self):
         self.size = 0  # lazy reset
@@ -107,12 +132,21 @@ class Ramen(TTABase):
                       for c in range(self.num_classes)]
 
         self.counter = 0
+        self.last_diagnostics = {}
+
+    @property
+    def memory_bytes(self) -> int:
+        """Bytes occupied by supports currently retained across class caches."""
+        return sum(cache.retained_bytes for cache in self.cache)
 
     def forward(self, x):
         B = x.shape[0]
 
         feats = self.model.featurize(x)
         logits = self.model.classify(feats)
+        self.last_diagnostics = {
+            'pre_adaptation_ood_score': -torch.logsumexp(logits.detach(), dim=1),
+        }
         init_preds = logits.argmax(-1)
 
         loss = self.loss_fn(logits)
@@ -131,6 +165,11 @@ class Ramen(TTABase):
                                   values=grads[b].unsqueeze(0),
                                   entropies=entropies[b].unsqueeze(0),
                                   priorities=priorities[b].unsqueeze(0))
+
+            # This is per-forward retained state, not the backing capacity or
+            # device allocator footprint.  The runtime expands this scalar to
+            # every sample in the just-processed batch for the evidence trace.
+            self.last_diagnostics['memory_bytes'] = self.memory_bytes
 
             # Retrieve from cache
             retrieved_grads_sum = torch.zeros_like(grads)
@@ -174,3 +213,7 @@ class Ramen(TTABase):
         self.counter = 0
         for cache in self.cache:
             cache.reset()
+        self.last_diagnostics = {}
+
+    def get_diagnostics(self):
+        return dict(self.last_diagnostics)

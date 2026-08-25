@@ -10,7 +10,8 @@ to Python directly.
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
+from fractions import Fraction
 import hashlib
 import json
 import math
@@ -42,10 +43,14 @@ try:
         SUMMARY_SCHEMA_VERSION,
         TRACE_REQUIRED_FIELDS,
         ADMISSION_TRACE_FIELDS,
+        CONSENSUS_TRACE_FIELDS,
+        OPEN_SET_TRACE_FIELDS,
+        ORACLE_GRADIENT_TRACE_FIELDS,
         RETRIEVAL_PROFILE_TRACE_FIELDS,
         TRACE_SCHEMA_VERSION,
         compare_trace_negative_adaptation,
     )
+    from ..evaluation.open_set_metrics import id_accuracy, open_set_metrics
     from ..evaluation.online_metrics import domain_shift_recovery_times
     from ..evaluation.routing_metrics import routing_diagnostics
 except ImportError:  # ``runtime`` top-level package or direct-file invocation.
@@ -56,10 +61,14 @@ except ImportError:  # ``runtime`` top-level package or direct-file invocation.
         SUMMARY_SCHEMA_VERSION,
         TRACE_REQUIRED_FIELDS,
         ADMISSION_TRACE_FIELDS,
+        CONSENSUS_TRACE_FIELDS,
+        OPEN_SET_TRACE_FIELDS,
+        ORACLE_GRADIENT_TRACE_FIELDS,
         RETRIEVAL_PROFILE_TRACE_FIELDS,
         TRACE_SCHEMA_VERSION,
         compare_trace_negative_adaptation,
     )
+    from evaluation.open_set_metrics import id_accuracy, open_set_metrics
     from evaluation.online_metrics import domain_shift_recovery_times
     from evaluation.routing_metrics import routing_diagnostics
 
@@ -80,7 +89,33 @@ DEFAULT_METHODS = (
     "OracleLatentRamen",
     "LatentRamen",
 )
-SUPPORTED_METHODS = DEFAULT_METHODS + ("EntropyGatedLatentRamen",)
+# These named ablations are selectable explicitly but deliberately absent from
+# the legacy/default grids and the locked seven-method canonical v0 matrix.
+SUPPORTED_METHODS = DEFAULT_METHODS + (
+    "EntropyGatedLatentRamen", "ConsensusRamenSoft", "ConsensusRamenNoSelf",
+    "ConsensusRamenTau060", "ConsensusRamenMin2", "ConsensusRamenMin4",
+)
+OPEN_SET_DATASET = "CIFAR100C"
+OPEN_SET_SPLIT = "open-set-cifar100-split-v1"
+OPEN_SET_STREAMS = ("iid_mixed", "block", "recurring")
+OPEN_SET_METHODS = (
+    "NoAdapt", "Ramen", "EntropyGatedLatentRamen", "OracleDropOODRamen",
+    "OracleIDGradientRamen", "ConsensusRamen", "OracleConsensusRamen",
+)
+OPEN_SET_OOD_RATIOS = (0.0, 0.1, 0.3, 0.5)
+OPEN_SET_SEEDS = (0, 1, 2)
+# All named oracles receive evaluator-only OOD context. Directional
+# diagnostics apply only when a method compares all-support and ID-only
+# directions; OracleConsensus filters admission before that aggregation.
+OPEN_SET_EVALUATOR_OOD_METHODS = frozenset({
+    "OracleDropOODRamen", "OracleIDGradientRamen", "OracleConsensusRamen",
+})
+OPEN_SET_DIRECTIONAL_ORACLE_METHODS = frozenset({
+    "OracleDropOODRamen", "OracleIDGradientRamen",
+})
+OPEN_SET_CONSENSUS_METHODS = frozenset({"ConsensusRamen", "OracleConsensusRamen"})
+# Common source exposure across OOD ratios: 400 is divisible by 1, 10, and 2.
+OPEN_SET_PER_DOMAIN_SOURCE_BUDGET = 400
 MODEL_BY_DATASET = {"CIFAR100C": "clip_vitbase16", "DomainNet": "clip_vitbase32"}
 BATCH_SIZE_BY_DATASET = {"CIFAR100C": 100, "DomainNet": 100}
 CONFIG_HASH_LENGTH = 12
@@ -125,6 +160,10 @@ class ExperimentRun:
     config_data: dict[str, object]
     artifact_provenance: str
     reference_trace: Path | None = None
+    open_set: bool = False
+    known_class_split: str | None = None
+    ood_ratio: float | None = None
+    open_set_per_domain_source_budget: int | None = None
 
     @property
     def run_dir(self) -> Path:
@@ -228,6 +267,8 @@ def make_run_id(
     config_hash: str = MISSING_CONFIG_HASH,
     artifact_provenance: str = "fast",
     data_root: str | Path = "~/data",
+    open_set_ood_ratio: float | None = None,
+    open_set_per_domain_source_budget: int | None = None,
 ) -> str:
     """Return a stable, conservative ID suitable for use as one path segment."""
     budget = "full" if max_eval_samples is None else f"n{max_eval_samples}"
@@ -235,8 +276,26 @@ def make_run_id(
     data_root_hash = hashlib.sha256(canonical_data_root.encode("utf-8")).hexdigest()[:CONFIG_HASH_LENGTH]
     if not isinstance(stream_block_size, int) or isinstance(stream_block_size, bool) or stream_block_size <= 0:
         raise ValueError("stream_block_size must be a positive integer")
-    tokens = (dataset, stream_mode, "seed", _seed_token(seed), method, "dev", device, budget,
+    if open_set_ood_ratio is not None and (
+        not isinstance(open_set_ood_ratio, (int, float)) or isinstance(open_set_ood_ratio, bool)
+        or not math.isfinite(open_set_ood_ratio) or not 0.0 <= open_set_ood_ratio <= 1.0
+    ):
+        raise ValueError("open_set_ood_ratio must be a finite value in [0, 1]")
+    if open_set_per_domain_source_budget is not None and (
+        not isinstance(open_set_per_domain_source_budget, int)
+        or isinstance(open_set_per_domain_source_budget, bool)
+        or open_set_per_domain_source_budget <= 0
+    ):
+        raise ValueError("open_set_per_domain_source_budget must be a positive integer")
+    # The public method identity remains in manifests/configs.  This compact,
+    # unambiguous token leaves room for the open-set ratio and source-budget
+    # identity fields within the portable path-segment limit.
+    method_token = {"EntropyGatedLatentRamen": "entropy-gated"}.get(method, method)
+    tokens = (dataset, stream_mode, "seed", _seed_token(seed), method_token, "dev", device, budget,
               *(("blk", stream_block_size) if stream_block_size != 64 else ()),
+              *(("open", "ood", f"{float(open_set_ood_ratio):g}") if open_set_ood_ratio is not None else ()),
+              *(("src", open_set_per_domain_source_budget)
+                if open_set_per_domain_source_budget is not None else ()),
               "cfg", config_hash, "prov", artifact_provenance, "data", data_root_hash)
     normalized = []
     for token in tokens:
@@ -265,6 +324,7 @@ def build_experiment_matrix(
     config_dir: str | Path = REPOSITORY_ROOT / "cfg",
     artifact_provenance: str = "fast",
     data_root: str | Path = "~/data",
+    _allowed_methods: Iterable[str] = SUPPORTED_METHODS,
 ) -> list[ExperimentRun]:
     """Build the grid in execution order, with NoAdapt first in each cell."""
     datasets = tuple(datasets)
@@ -273,7 +333,7 @@ def build_experiment_matrix(
     seeds = tuple(seeds)
     unknown_datasets = set(datasets).difference(MODEL_BY_DATASET)
     unknown_streams = set(streams).difference(SUPPORTED_STREAMS)
-    unknown_methods = set(selected_methods).difference(SUPPORTED_METHODS)
+    unknown_methods = set(selected_methods).difference(tuple(_allowed_methods))
     if unknown_datasets or unknown_streams or unknown_methods:
         raise ValueError(
             "unsupported matrix value(s): "
@@ -355,6 +415,81 @@ def build_experiment_matrix(
 plan_matrix = build_experiment_matrix
 
 
+def build_open_set_evidence_matrix(
+    *,
+    streams: Iterable[str] = OPEN_SET_STREAMS,
+    ood_ratios: Iterable[float] = OPEN_SET_OOD_RATIOS,
+    seeds: Iterable[int] = OPEN_SET_SEEDS,
+    evidence_dir: str | Path = REPOSITORY_ROOT / "evidence/open-set-cifar100c-canonical",
+    device: str = "cuda",
+    max_eval_samples: int | None = None,
+    stream_block_size: int = 64,
+    config_dir: str | Path = REPOSITORY_ROOT / "cfg",
+    artifact_provenance: str = "fast",
+    data_root: str | Path = "~/data",
+    per_domain_source_budget: int = OPEN_SET_PER_DOMAIN_SOURCE_BUDGET,
+) -> list[ExperimentRun]:
+    """Plan the preregistered CIFAR-100-C open-set oracle/Consensus matrix.
+
+    This intentionally has a separate entry point from the legacy latent-router
+    matrix: its named oracle controls receive evaluator OOD context, while
+    Ramen and ConsensusRamen never do.  Every ratio/stream/seed cell schedules
+    the same NoAdapt stream first and all adapted methods reference its trace.
+    """
+    streams = tuple(streams)
+    ratios = tuple(ood_ratios)
+    seeds = tuple(seeds)
+    if set(streams).difference(OPEN_SET_STREAMS):
+        raise ValueError("open-set matrix streams must be drawn from: " + ", ".join(OPEN_SET_STREAMS))
+    if not ratios:
+        raise ValueError("provide at least one open-set OOD ratio")
+    if any(
+        not isinstance(ratio, (int, float)) or isinstance(ratio, bool)
+        or not math.isfinite(ratio) or ratio not in OPEN_SET_OOD_RATIOS
+        for ratio in ratios
+    ):
+        raise ValueError("open-set OOD ratios must be one of 0, 0.1, 0.3, 0.5")
+    if device != "cuda":
+        raise ValueError("canonical open-set matrix requires device='cuda'; use an explicitly named pilot outside this planner")
+    if (not isinstance(per_domain_source_budget, int)
+            or isinstance(per_domain_source_budget, bool)
+            or per_domain_source_budget <= 0):
+        raise ValueError("canonical open-set matrix requires a positive per-domain source budget")
+    if any(per_domain_source_budget % Fraction(str(ratio)).denominator for ratio in ratios):
+        raise ValueError("canonical open-set per-domain source budget must support every OOD ratio")
+
+    planned: list[ExperimentRun] = []
+    for ratio in ratios:
+        base_runs = build_experiment_matrix(
+            datasets=(OPEN_SET_DATASET,), streams=streams, methods=OPEN_SET_METHODS,
+            seeds=seeds, evidence_dir=evidence_dir, device=device,
+            max_eval_samples=max_eval_samples, stream_block_size=stream_block_size,
+            config_dir=config_dir, artifact_provenance=artifact_provenance, data_root=data_root,
+            _allowed_methods=SUPPORTED_METHODS + tuple(method for method in OPEN_SET_METHODS if method not in SUPPORTED_METHODS),
+        )
+        baseline_by_cell: dict[tuple[str, int], Path] = {}
+        for base in base_runs:
+            run_id = make_run_id(
+                base.dataset, base.stream_mode, base.seed, base.method, device=base.device,
+                max_eval_samples=base.max_eval_samples, stream_block_size=base.stream_block_size,
+                config_hash=base.config_hash, artifact_provenance=base.artifact_provenance,
+                data_root=base.data_root, open_set_ood_ratio=float(ratio),
+                open_set_per_domain_source_budget=per_domain_source_budget,
+            )
+            run = replace(
+                base, run_id=run_id, reference_trace=None, open_set=True,
+                known_class_split=OPEN_SET_SPLIT, ood_ratio=float(ratio),
+                open_set_per_domain_source_budget=per_domain_source_budget,
+            )
+            cell = (run.stream_mode, run.seed)
+            if run.method == "NoAdapt":
+                baseline_by_cell[cell] = run.run_dir / "trace.jsonl"
+            else:
+                run = replace(run, reference_trace=baseline_by_cell[cell])
+            planned.append(run)
+    return planned
+
+
 def build_command(
     run: ExperimentRun,
     *,
@@ -403,6 +538,12 @@ def build_command(
         command.extend(("--max-eval-samples", str(run.max_eval_samples)))
     if run.stream_block_size != 64:
         command.extend(("--stream_block_size", str(run.stream_block_size)))
+    if run.open_set:
+        command.extend((
+            "--open_set", "--known_class_split", str(run.known_class_split),
+            "--ood_ratio", f"{run.ood_ratio:g}",
+            "--open-set-per-domain-source-budget", str(run.open_set_per_domain_source_budget),
+        ))
     if run.reference_trace is not None:
         command.extend(("--reference_trace", str(run.reference_trace)))
     return command
@@ -711,7 +852,7 @@ def _validate_summary(
         retained_memory = memory_timeline
         expected_method_memory = {
             "status": "computed",
-            "definition": "exact bytes retained by the method support memory after each causal sample update",
+            "definition": "exact bytes retained by the method support memory after each completed method forward; a batch snapshot is repeated for its samples",
             "unit": "bytes",
             "max_retained_bytes": max(retained_memory),
             "final_retained_bytes": retained_memory[-1],
@@ -843,6 +984,173 @@ def _validate_summary(
         raise IncompleteRunError(f"peak_device_memory_bytes is only valid for exact CUDA evidence: {run.run_id}")
 
 
+def _validate_open_set_evidence(
+    summary: dict[str, object], metadata: dict[str, object], rows: list[dict[str, object]], run: ExperimentRun,
+) -> None:
+    """Validate the evaluator-only labels and their derived open-set summaries."""
+    open_set_metadata = metadata.get("open_set")
+    if not isinstance(open_set_metadata, dict):
+        raise IncompleteRunError(f"open-set stream metadata missing: {run.run_id}")
+    _require_equal(open_set_metadata.get("split_version"), run.known_class_split,
+                   "stream.metadata.open_set.split_version", run)
+    _require_equal(open_set_metadata.get("requested_ood_ratio"), run.ood_ratio,
+                   "stream.metadata.open_set.requested_ood_ratio", run)
+    _require_equal(open_set_metadata.get("requested_per_domain_source_budget"),
+                   run.open_set_per_domain_source_budget,
+                   "stream.metadata.open_set.requested_per_domain_source_budget", run)
+    known_ids = open_set_metadata.get("known_class_ids")
+    unknown_ids = open_set_metadata.get("unknown_class_ids")
+    if (
+        not isinstance(known_ids, list) or not isinstance(unknown_ids, list)
+        or not known_ids or not unknown_ids
+        or any(not _is_int(label, minimum=0) for label in known_ids + unknown_ids)
+        or len(set(known_ids)) != len(known_ids) or len(set(unknown_ids)) != len(unknown_ids)
+        or set(known_ids).intersection(unknown_ids)
+    ):
+        raise IncompleteRunError(f"open-set stream split is malformed: {run.run_id}")
+    known_label_by_original = {label: index for index, label in enumerate(known_ids)}
+    all_labels = set(known_ids) | set(unknown_ids)
+
+    for line_number, row in enumerate(rows, 1):
+        _require_fields(row, OPEN_SET_TRACE_FIELDS, f"trace[{line_number}] open-set", run)
+        original = row["original_label"]
+        known_label = row["known_label_or_minus_one"]
+        if not _is_int(original, minimum=0) or original not in all_labels:
+            raise IncompleteRunError(f"trace[{line_number}].original_label disagrees with open-set split")
+        if not _is_int(known_label, minimum=-1):
+            raise IncompleteRunError(f"trace[{line_number}].known_label_or_minus_one is malformed")
+        expected_known_label = known_label_by_original.get(original, -1)
+        _require_equal(known_label, expected_known_label,
+                       f"trace[{line_number}].known_label_or_minus_one", run)
+        _require_equal(row["ground_truth_class"], original,
+                       f"trace[{line_number}].ground_truth_class", run)
+        _require_equal(row["is_ood"], known_label == -1, f"trace[{line_number}].is_ood", run)
+        _require_equal(row["open_set_split_version"], run.known_class_split,
+                       f"trace[{line_number}].open_set_split_version", run)
+        _require_equal(row["ood_ratio"], run.ood_ratio, f"trace[{line_number}].ood_ratio", run)
+        if not _is_finite_number(row["pre_adaptation_ood_score"]):
+            raise IncompleteRunError(f"trace[{line_number}].pre_adaptation_ood_score is malformed")
+        _require_equal(row["correct"], row["prediction"] == known_label,
+                       f"trace[{line_number}].correct", run)
+
+    flags = [row["is_ood"] for row in rows]
+    ood_count = sum(flags)
+    id_count = len(rows) - ood_count
+    realized_ratio = ood_count / len(rows)
+    _require_equal(open_set_metadata.get("realized_ood_count"), ood_count,
+                   "stream.metadata.open_set.realized_ood_count", run)
+    _require_equal(open_set_metadata.get("realized_known_count"), id_count,
+                   "stream.metadata.open_set.realized_known_count", run)
+    _require_equal(open_set_metadata.get("realized_ood_ratio"), realized_ratio,
+                   "stream.metadata.open_set.realized_ood_ratio", run)
+
+    predictions = [row["prediction"] for row in rows]
+    known_labels = [row["known_label_or_minus_one"] for row in rows]
+    scores = [row["pre_adaptation_ood_score"] for row in rows]
+    try:
+        metrics = open_set_metrics(predictions, known_labels, flags, scores)
+        detection = {
+            "status": "computed", "score": "negative_logsumexp_pre_adaptation_logits",
+            "id_accuracy": metrics.id_accuracy, "auroc": metrics.auroc,
+            "fpr95": metrics.fpr_at_95_tpr, "fpr95_threshold": metrics.fpr95_threshold,
+            "ood_recall_at_fpr95": metrics.ood_recall_at_fpr95, "h_score": metrics.h_score,
+            "id_count": metrics.id_count, "ood_count": metrics.ood_count,
+        }
+    except ValueError as exc:
+        detection = {
+            "status": "unavailable", "reason": str(exc),
+            "score": "negative_logsumexp_pre_adaptation_logits",
+            "id_accuracy": id_accuracy(predictions, known_labels, flags) if id_count else None,
+            "auroc": None, "fpr95": None, "fpr95_threshold": None,
+            "ood_recall_at_fpr95": None, "h_score": None,
+            "id_count": id_count, "ood_count": ood_count,
+        }
+    domains = metadata.get("domain_names")
+    if not isinstance(domains, list) or not all(isinstance(name, str) for name in domains):
+        raise IncompleteRunError(f"stream domain names are malformed: {run.run_id}")
+    id_domain_accuracies = {}
+    for index, name in enumerate(domains):
+        domain_rows = [row for row in rows if row["ground_truth_domain"] == index and not row["is_ood"]]
+        id_domain_accuracies[name] = (
+            sum(row["correct"] for row in domain_rows) / len(domain_rows) if domain_rows else None
+        )
+    valid_id_accuracies = [value for value in id_domain_accuracies.values() if value is not None]
+    expected_summary = {
+        **detection, "split_version": run.known_class_split, "requested_ood_ratio": run.ood_ratio,
+        "realized_ood_ratio": realized_ratio, "realized_ood_count": ood_count,
+        "realized_known_count": id_count, "id_domain_accuracies": id_domain_accuracies,
+        "worst_domain_id_accuracy": min(valid_id_accuracies) if valid_id_accuracies else None,
+    }
+    _require_equal(summary.get("open_set"), expected_summary, "summary.open_set", run)
+
+    oracle_present = [all(field in row for field in ORACLE_GRADIENT_TRACE_FIELDS) for row in rows]
+    consensus_present = [all(field in row for field in CONSENSUS_TRACE_FIELDS) for row in rows]
+    if run.method in OPEN_SET_DIRECTIONAL_ORACLE_METHODS:
+        if not all(oracle_present):
+            raise IncompleteRunError(f"oracle control lacks complete diagnostic trace evidence: {run.run_id}")
+        for line_number, row in enumerate(rows, 1):
+            for field in ORACLE_GRADIENT_TRACE_FIELDS[:2]:
+                if not _is_finite_number(row[field], minimum=0.0, maximum=1.0):
+                    raise IncompleteRunError(f"trace[{line_number}].{field} is malformed")
+            if row["ramen_vs_oracle_id_cosine"] is not None and not _is_finite_number(
+                row["ramen_vs_oracle_id_cosine"], minimum=-1.0, maximum=1.0
+            ):
+                raise IncompleteRunError(
+                    f"trace[{line_number}].ramen_vs_oracle_id_cosine is malformed"
+                )
+            if row["ramen_vs_oracle_id_sign_disagreement"] is not None and not _is_finite_number(
+                row["ramen_vs_oracle_id_sign_disagreement"], minimum=0.0, maximum=1.0
+            ):
+                raise IncompleteRunError(
+                    f"trace[{line_number}].ramen_vs_oracle_id_sign_disagreement is malformed"
+                )
+        def oracle_mean(field, transform=lambda value: value):
+            values = [transform(row[field]) for row in rows if row[field] is not None]
+            return sum(values) / len(values) if values else None
+        expected_oracle = {
+            "status": "computed",
+            "retrieved_ood_fraction_mean": oracle_mean("retrieved_ood_fraction"),
+            "retrieved_ood_weight_fraction_mean": oracle_mean("retrieved_ood_weight_fraction"),
+            "gradient_direction_corruption_mean": oracle_mean("ramen_vs_oracle_id_cosine", lambda value: 1.0 - value),
+            "sign_disagreement_mean": oracle_mean("ramen_vs_oracle_id_sign_disagreement"),
+            "defined_direction_count": sum(row["ramen_vs_oracle_id_cosine"] is not None for row in rows),
+        }
+        _require_equal(summary.get("oracle_gradient_diagnostics"), expected_oracle,
+                       "summary.oracle_gradient_diagnostics", run)
+    elif any(oracle_present) or "oracle_gradient_diagnostics" in summary:
+        raise IncompleteRunError(f"non-oracle run contains oracle diagnostics: {run.run_id}")
+    if run.method in OPEN_SET_CONSENSUS_METHODS:
+        if not all(consensus_present):
+            raise IncompleteRunError(f"consensus method lacks complete diagnostic trace evidence: {run.run_id}")
+        for line_number, row in enumerate(rows, 1):
+            for field in CONSENSUS_TRACE_FIELDS[:4]:
+                if not _is_finite_number(row[field], minimum=0.0, maximum=1.0):
+                    raise IncompleteRunError(f"trace[{line_number}].{field} is malformed")
+            if not _is_int(row["consensus_active_class_count"], minimum=0):
+                raise IncompleteRunError(
+                    f"trace[{line_number}].consensus_active_class_count is malformed"
+                )
+            if not isinstance(row["consensus_applied"], bool):
+                raise IncompleteRunError(f"trace[{line_number}].consensus_applied is malformed")
+        applied = [row for row in rows if row["consensus_applied"]]
+        def applied_mean(field):
+            return sum(row[field] for row in applied) / len(applied) if applied else None
+        expected_consensus = {
+            "status": "computed", "consensus_applied_sample_count": len(applied),
+            "consensus_applied_sample_fraction": len(applied) / len(rows),
+            "mean_agreement": applied_mean("consensus_mean_agreement"),
+            "p10_agreement": applied_mean("consensus_p10_agreement"),
+            "p50_agreement": applied_mean("consensus_p50_agreement"),
+            "mask_rate": applied_mean("consensus_mask_rate"),
+            "mean_active_class_count": applied_mean("consensus_active_class_count"),
+            "all_sample_mean_active_class_count": sum(row["consensus_active_class_count"] for row in rows) / len(rows),
+        }
+        _require_equal(summary.get("consensus_diagnostics"), expected_consensus,
+                       "summary.consensus_diagnostics", run)
+    elif any(consensus_present) or "consensus_diagnostics" in summary:
+        raise IncompleteRunError(f"non-consensus run contains consensus diagnostics: {run.run_id}")
+
+
 def validate_completed_run(run: ExperimentRun) -> dict[str, object]:
     """Strictly validate all evidence needed to regard a run as resumable."""
     if not run.run_dir.is_dir():
@@ -889,6 +1197,13 @@ def validate_completed_run(run: ExperimentRun) -> dict[str, object]:
         "artifact_provenance": run.artifact_provenance,
         "data_root": str(run.data_root),
     }
+    if run.open_set:
+        expected_args.update({
+            "open_set": True,
+            "known_class_split": run.known_class_split,
+            "ood_ratio": run.ood_ratio,
+            "open_set_per_domain_source_budget": run.open_set_per_domain_source_budget,
+        })
     for key, expected in expected_args.items():
         _require_equal(args.get(key), expected, f"manifest.args.{key}", run)
     _validate_artifact_evidence(manifest.get("artifacts"), run)
@@ -909,6 +1224,17 @@ def validate_completed_run(run: ExperimentRun) -> dict[str, object]:
     _require_equal(metadata.get("mode"), run.stream_mode, "stream.metadata.mode", run)
     _require_equal(metadata.get("seed"), run.seed, "stream.metadata.seed", run)
     _require_equal(metadata.get("block_size"), run.stream_block_size, "stream.metadata.block_size", run)
+    if run.open_set:
+        open_set_metadata = metadata.get("open_set")
+        if not isinstance(open_set_metadata, dict):
+            raise IncompleteRunError(f"open-set stream metadata missing: {run.run_id}")
+        _require_equal(open_set_metadata.get("split_version"), run.known_class_split,
+                       "stream.metadata.open_set.split_version", run)
+        _require_equal(open_set_metadata.get("requested_ood_ratio"), run.ood_ratio,
+                       "stream.metadata.open_set.requested_ood_ratio", run)
+        _require_equal(open_set_metadata.get("requested_per_domain_source_budget"),
+                       run.open_set_per_domain_source_budget,
+                       "stream.metadata.open_set.requested_per_domain_source_budget", run)
     _require_equal(manifest_stream, metadata, "manifest.stream", run)
     try:
         computed_fingerprint = _stream_fingerprint(stream)
@@ -974,7 +1300,8 @@ def validate_completed_run(run: ExperimentRun) -> dict[str, object]:
                 if not isinstance(row["correct"], bool):
                     raise IncompleteRunError(f"trace[{line_number}].correct must be a boolean")
                 expected_correct = row["prediction"] == row["ground_truth_class"]
-                _require_equal(row["correct"], expected_correct, f"trace[{line_number}].correct", run)
+                if not run.open_set:
+                    _require_equal(row["correct"], expected_correct, f"trace[{line_number}].correct", run)
                 if not _is_finite_number(row["predicted_entropy"], minimum=0.0):
                     raise IncompleteRunError(f"trace[{line_number}].predicted_entropy is malformed")
                 if not _is_int(row["memory_size"], minimum=0):
@@ -1016,10 +1343,34 @@ def validate_completed_run(run: ExperimentRun) -> dict[str, object]:
                     raise IncompleteRunError(
                         f"trace[{line_number}] retrieval profile fields must be all present or all absent"
                     )
+                open_set_present = [field in row for field in OPEN_SET_TRACE_FIELDS]
+                if run.open_set and not all(open_set_present):
+                    raise IncompleteRunError(
+                        f"trace[{line_number}] open-set fields must all be present"
+                    )
+                if not run.open_set and any(open_set_present):
+                    raise IncompleteRunError(
+                        f"non-open-set trace contains open-set evidence: {run.run_id}"
+                    )
+                if run.open_set:
+                    expected_correct = row["prediction"] == row["known_label_or_minus_one"]
+                    _require_equal(row["correct"], expected_correct, f"trace[{line_number}].correct", run)
+                oracle_present = [field in row for field in ORACLE_GRADIENT_TRACE_FIELDS]
+                if any(oracle_present) and not all(oracle_present):
+                    raise IncompleteRunError(
+                        f"trace[{line_number}] oracle diagnostic fields must be all present or all absent"
+                    )
+                consensus_present = [field in row for field in CONSENSUS_TRACE_FIELDS]
+                if any(consensus_present) and not all(consensus_present):
+                    raise IncompleteRunError(
+                        f"trace[{line_number}] consensus diagnostic fields must be all present or all absent"
+                    )
                 rows.append(row)
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
         raise IncompleteRunError(f"invalid trace: {trace_path}") from exc
     _require_equal(len(rows), num_samples, "trace row count", run)
+    if run.open_set:
+        _validate_open_set_evidence(summary, metadata, rows, run)
     _validate_summary(summary, manifest, rows, run)
     return {"manifest": manifest, "summary": summary, "stream": stream}
 
@@ -1076,7 +1427,8 @@ def execute_matrix(
             for field in (
                 "dataset", "stream_mode", "seed", "model", "batch_size", "device",
                 "max_eval_samples", "stream_block_size", "metric_window_size", "metric_window_stride", "config_dir",
-                "artifact_provenance",
+                "artifact_provenance", "open_set", "known_class_split", "ood_ratio",
+                "open_set_per_domain_source_budget",
                 "data_root",
             ):
                 _require_equal(getattr(baseline, field), getattr(run, field), f"paired baseline {field}", run)
@@ -1113,6 +1465,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-eval-samples", type=int)
     parser.add_argument("--stream-block-size", type=int, default=64)
     parser.add_argument("--artifact-provenance", choices=SUPPORTED_ARTIFACT_PROVENANCE, default="fast")
+    parser.add_argument(
+        "--open-set-consensus", action="store_true",
+        help="Plan or execute the fixed canonical open-set CIFAR-100-C Consensus/Oracle matrix.",
+    )
     parser.add_argument("--execute", action="store_true", help="Run commands; planning JSON is the default.")
     parser.add_argument("--resume", action="store_true", help="Skip only runs with manifest.json and summary.json.")
     return parser
@@ -1125,19 +1481,36 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(
             "--execute/--resume requires an explicit --device cpu, --device mps, or --device cuda"
         )
-    runs = build_experiment_matrix(
-        datasets=args.dataset or DEFAULT_DATASETS,
-        streams=args.stream or DEFAULT_STREAMS,
-        methods=args.method or DEFAULT_METHODS,
-        seeds=args.seed or (0,),
-        evidence_dir=args.evidence_dir,
-        device=args.device,
-        max_eval_samples=args.max_eval_samples,
-        stream_block_size=args.stream_block_size,
-        config_dir=args.config_dir,
-        artifact_provenance=args.artifact_provenance,
-        data_root=args.data_root,
-    )
+    if args.open_set_consensus:
+        if args.dataset or args.method:
+            parser.error("--open-set-consensus has a fixed CIFAR100C method set; do not pass --dataset or --method")
+        if args.device != "cuda":
+            parser.error("--open-set-consensus requires --device cuda")
+        runs = build_open_set_evidence_matrix(
+            streams=args.stream or OPEN_SET_STREAMS,
+            seeds=args.seed or OPEN_SET_SEEDS,
+            evidence_dir=args.evidence_dir,
+            device=args.device,
+            max_eval_samples=args.max_eval_samples,
+            stream_block_size=args.stream_block_size,
+            config_dir=args.config_dir,
+            artifact_provenance=args.artifact_provenance,
+            data_root=args.data_root,
+        )
+    else:
+        runs = build_experiment_matrix(
+            datasets=args.dataset or DEFAULT_DATASETS,
+            streams=args.stream or DEFAULT_STREAMS,
+            methods=args.method or DEFAULT_METHODS,
+            seeds=args.seed or (0,),
+            evidence_dir=args.evidence_dir,
+            device=args.device,
+            max_eval_samples=args.max_eval_samples,
+            stream_block_size=args.stream_block_size,
+            config_dir=args.config_dir,
+            artifact_provenance=args.artifact_provenance,
+            data_root=args.data_root,
+        )
     commands = [build_command(
         run, python_executable=args.python_executable, data_root=args.data_root,
     ) for run in runs]

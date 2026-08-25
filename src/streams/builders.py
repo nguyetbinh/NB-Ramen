@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+from fractions import Fraction
 
 from . import schedules
 
@@ -31,7 +32,7 @@ _MODES = {
 class StreamDataset:
     """Lazy dataset view over a deterministic, serializable schedule."""
 
-    def __init__(self, datasets, references, metadata):
+    def __init__(self, datasets, references, metadata, *, evaluator_metadata=None):
         self.datasets = tuple(datasets)
         self.references = tuple((int(domain), int(sample)) for domain, sample in references)
         self.metadata = dict(metadata)
@@ -41,6 +42,16 @@ class StreamDataset:
             "references": self.references,
         })
         self.metadata["fingerprint"] = self.fingerprint
+        if evaluator_metadata is None:
+            self._evaluator_metadata = None
+        else:
+            metadata_by_reference = {
+                (int(domain), int(sample)): dict(value)
+                for (domain, sample), value in evaluator_metadata.items()
+            }
+            if set(metadata_by_reference) != set(self.references):
+                raise ValueError("evaluator_metadata must contain exactly one mapping per stream reference")
+            self._evaluator_metadata = metadata_by_reference
 
     def __len__(self):
         return len(self.references)
@@ -49,8 +60,14 @@ class StreamDataset:
         domain_idx, sample_idx = self.references[index]
         item = self.datasets[domain_idx][sample_idx]
         if isinstance(item, tuple):
-            return (*item, domain_idx, sample_idx)
-        return item, domain_idx, sample_idx
+            result = (*item, domain_idx, sample_idx)
+        else:
+            result = (item, domain_idx, sample_idx)
+        if self._evaluator_metadata is not None:
+            # This mapping is a separate evaluator-only tail, never part of
+            # the source image/label contract consumed by a TTA method.
+            return (*result, dict(self._evaluator_metadata[(domain_idx, sample_idx)]))
+        return result
 
     def to_dict(self):
         """Return a JSON-serializable representation of the schedule."""
@@ -105,7 +122,228 @@ def truncate_stream(stream, max_samples):
         "retained_sample_count": max_samples,
         "dropped_sample_count": full_sample_count - max_samples,
     }
-    return StreamDataset(stream.datasets, stream.references[:max_samples], metadata)
+    evaluator_metadata = None
+    if stream._evaluator_metadata is not None:
+        retained = set(stream.references[:max_samples])
+        evaluator_metadata = {
+            reference: value for reference, value in stream._evaluator_metadata.items()
+            if reference in retained
+        }
+        _refresh_open_set_realized_counts(metadata, stream.references[:max_samples], evaluator_metadata)
+    return StreamDataset(stream.datasets, stream.references[:max_samples], metadata,
+                         evaluator_metadata=evaluator_metadata)
+
+
+def _refresh_open_set_realized_counts(metadata, references, evaluator_metadata):
+    """Bind reported OOD counts to the actual emitted (possibly truncated) stream."""
+    open_set = metadata.get("open_set")
+    if not isinstance(open_set, dict):
+        return
+    per_domain = {}
+    for domain_idx, sample_idx in references:
+        value = evaluator_metadata[(domain_idx, sample_idx)]
+        counts = per_domain.setdefault(domain_idx, {"known": 0, "ood": 0, "total": 0})
+        counts["ood" if value["is_ood"] else "known"] += 1
+        counts["total"] += 1
+    ordered = [per_domain.get(index, {"known": 0, "ood": 0, "total": 0})
+               for index in range(len(metadata.get("domain_lengths", [])))]
+    known = sum(item["known"] for item in ordered)
+    ood = sum(item["ood"] for item in ordered)
+    open_set["per_domain_counts"] = ordered
+    open_set["realized_ood_count"] = ood
+    open_set["realized_known_count"] = known
+    open_set["realized_ood_ratio"] = ood / (known + ood) if known + ood else None
+
+
+def _open_set_split_from(multi_datasets):
+    version = getattr(multi_datasets, "open_set_split_version", None)
+    known = getattr(multi_datasets, "known_class_ids", None)
+    unknown = getattr(multi_datasets, "unknown_class_ids", None)
+    if not isinstance(version, str) or not version:
+        raise ValueError("open-set stream requires a dataset with open_set_split_version")
+    if not isinstance(known, (list, tuple)) or not isinstance(unknown, (list, tuple)):
+        raise ValueError("open-set stream requires known_class_ids and unknown_class_ids")
+    known_ids, unknown_ids = tuple(int(value) for value in known), tuple(int(value) for value in unknown)
+    if not known_ids or not unknown_ids or set(known_ids).intersection(unknown_ids):
+        raise ValueError("open-set split must contain disjoint known and unknown IDs")
+    identifiers = {}
+    for attribute, metadata_key in (
+        ("open_set_split_fingerprint", "split_fingerprint"),
+        ("open_set_taxonomy_sha256", "taxonomy_sha256"),
+    ):
+        value = getattr(multi_datasets, attribute, None)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"open-set dataset {attribute} must be a non-empty string when provided")
+        identifiers[metadata_key] = value
+    return version, known_ids, unknown_ids, identifiers
+
+
+def _exact_open_set_selection(labels, known_ids, unknown_ids, ratio, rng):
+    """Select the largest exact-ratio subset without decoding source samples."""
+    known_set, unknown_set = set(known_ids), set(unknown_ids)
+    if any(label not in known_set.union(unknown_set) for label in labels):
+        raise ValueError("open-set stream labels must belong to the declared split")
+    known_indices = [index for index, label in enumerate(labels) if label in known_set]
+    unknown_indices = [index for index, label in enumerate(labels) if label in unknown_set]
+    numerator, denominator = ratio.numerator, ratio.denominator
+    if numerator == 0:
+        selected_known, selected_unknown = known_indices, []
+    elif numerator == denominator:
+        selected_known, selected_unknown = [], unknown_indices
+    else:
+        multiplier = min(len(unknown_indices) // numerator, len(known_indices) // (denominator - numerator))
+        if multiplier == 0:
+            raise ValueError("requested ood_ratio is infeasible for at least one domain")
+        unknown_count, known_count = numerator * multiplier, (denominator - numerator) * multiplier
+        rng.shuffle(known_indices)
+        rng.shuffle(unknown_indices)
+        selected_known, selected_unknown = known_indices[:known_count], unknown_indices[:unknown_count]
+    selected = selected_known + selected_unknown
+    rng.shuffle(selected)
+    return selected, len(selected_known), len(selected_unknown)
+
+
+def _balanced_open_set_selection(labels, class_ids, count, rng):
+    """Select a deterministic, as-even-as-possible prefix across classes.
+
+    Each class has one independently shuffled pool.  Round-robin selection
+    makes allocations differ by at most one when capacities allow it, and its
+    prefix property keeps smaller requested allocations nested in larger ones.
+    """
+    pools = {class_id: [] for class_id in sorted(class_ids)}
+    for index, label in enumerate(labels):
+        if label in pools:
+            pools[label].append(index)
+    for pool in pools.values():
+        rng.shuffle(pool)
+
+    selected, offsets = [], {class_id: 0 for class_id in pools}
+    while len(selected) < count:
+        progressed = False
+        for class_id in pools:
+            offset = offsets[class_id]
+            if offset >= len(pools[class_id]):
+                continue
+            selected.append(pools[class_id][offset])
+            offsets[class_id] = offset + 1
+            progressed = True
+            if len(selected) == count:
+                break
+        if not progressed:
+            raise ValueError("requested per_domain_source_budget is infeasible for at least one domain")
+    return selected
+
+
+def _budgeted_open_set_selection(labels, known_ids, unknown_ids, ratio, budget, rng):
+    """Select one exact, class-balanced source pool of ``budget`` examples."""
+    known_set, unknown_set = set(known_ids), set(unknown_ids)
+    if any(label not in known_set.union(unknown_set) for label in labels):
+        raise ValueError("open-set stream labels must belong to the declared split")
+    if budget % ratio.denominator:
+        raise ValueError(
+            "per_domain_source_budget must be divisible by the requested ood_ratio denominator"
+        )
+    unknown_count = budget * ratio.numerator // ratio.denominator
+    known_count = budget - unknown_count
+    known = _balanced_open_set_selection(labels, known_ids, known_count, rng)
+    unknown = _balanced_open_set_selection(labels, unknown_ids, unknown_count, rng)
+    selected = known + unknown
+    rng.shuffle(selected)
+    return selected, known_count, unknown_count
+
+
+def build_open_set_stream(multi_datasets, mode, seed, *, ood_ratio, domain_weights=None,
+                          block_size=64, gradual_sharpness=4.0, sample_budget=None,
+                          per_domain_source_budget=None,
+                          novel_domain_idx=None, novel_release_fraction=0.5,
+                          correlation_strength=0.9, burst_size=None):
+    """Build a deterministic open-set stream with an exact OOD ratio per domain.
+
+    The ratio is represented by the caller's decimal string and honored exactly
+    whenever each domain has enough known and unknown examples.  Selection is
+    metadata-only; images remain lazy until ``StreamDataset.__getitem__``.
+    """
+    if not isinstance(ood_ratio, (int, float)) or isinstance(ood_ratio, bool) or not 0.0 <= float(ood_ratio) <= 1.0:
+        raise ValueError("ood_ratio must be a finite value between 0 and 1")
+    ratio = Fraction(str(ood_ratio))
+    if per_domain_source_budget is not None:
+        if (not isinstance(per_domain_source_budget, int)
+                or isinstance(per_domain_source_budget, bool)
+                or per_domain_source_budget <= 0):
+            raise ValueError("per_domain_source_budget must be a positive integer")
+        if per_domain_source_budget % ratio.denominator:
+            raise ValueError(
+                "per_domain_source_budget must be divisible by the requested ood_ratio denominator"
+            )
+    version, known_ids, unknown_ids, split_identifiers = _open_set_split_from(multi_datasets)
+    datasets, _ = _datasets_from(multi_datasets)
+
+    selected_by_domain, selected_counts = [], []
+    for domain_idx, dataset in enumerate(datasets):
+        labels = _labels_from_metadata(dataset)
+        rng = random.Random(seed + domain_idx)
+        if per_domain_source_budget is None:
+            selected, known_count, unknown_count = _exact_open_set_selection(
+                labels, known_ids, unknown_ids, ratio, rng
+            )
+        else:
+            selected, known_count, unknown_count = _budgeted_open_set_selection(
+                labels, known_ids, unknown_ids, ratio, per_domain_source_budget, rng
+            )
+        selected_by_domain.append(selected)
+        selected_counts.append({"known": known_count, "ood": unknown_count, "total": len(selected)})
+
+    class _SelectedDataset:
+        def __init__(self, labels):
+            self.targets = labels
+
+        def __len__(self):
+            return len(self.targets)
+
+    class _SelectedDomains:
+        def __init__(self):
+            self.datasets = tuple(
+                _SelectedDataset([_labels_from_metadata(source)[sample] for sample in selected])
+                for source, selected in zip(datasets, selected_by_domain)
+            )
+            self.environments = getattr(multi_datasets, "environments", None)
+
+    scheduled = build_stream(
+        _SelectedDomains(), mode, seed, domain_weights, block_size,
+        gradual_sharpness=gradual_sharpness, sample_budget=sample_budget,
+        novel_domain_idx=novel_domain_idx, novel_release_fraction=novel_release_fraction,
+        correlation_strength=correlation_strength, burst_size=burst_size,
+    )
+    references = [
+        (domain_idx, selected_by_domain[domain_idx][selected_index])
+        for domain_idx, selected_index in scheduled.references
+    ]
+    known_label_by_original = {original: known for known, original in enumerate(known_ids)}
+    evaluator_metadata = {}
+    for domain_idx, sample_idx in references:
+        original_label = _labels_from_metadata(datasets[domain_idx])[sample_idx]
+        known_label = known_label_by_original.get(original_label, -1)
+        evaluator_metadata[(domain_idx, sample_idx)] = {
+            "original_label": original_label,
+            "known_label_or_minus_one": known_label,
+            "is_ood": known_label == -1,
+        }
+    metadata = dict(scheduled.metadata)
+    metadata["open_set"] = {
+        "split_version": version,
+        "known_class_ids": list(known_ids),
+        "unknown_class_ids": list(unknown_ids),
+        **split_identifiers,
+        "requested_ood_ratio": float(ood_ratio),
+        "requested_ood_ratio_fraction": f"{ratio.numerator}/{ratio.denominator}",
+        "requested_per_domain_source_budget": per_domain_source_budget,
+        "realized_per_domain_source_budget": [item["total"] for item in selected_counts],
+        "selected_pool_per_domain_counts": selected_counts,
+    }
+    _refresh_open_set_realized_counts(metadata, references, evaluator_metadata)
+    return StreamDataset(datasets, references, metadata, evaluator_metadata=evaluator_metadata)
 
 
 def _datasets_from(multi_datasets):
