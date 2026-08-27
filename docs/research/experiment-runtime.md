@@ -261,6 +261,45 @@ ablation. It selects `cfg/CIFAR100C/ConsensusRamenNoSelf.yaml`, which retrieves
 only supports from previous forwards before admitting the current batch. It is
 also outside the locked v0 matrix.
 
+### Preregistered Consensus ablation heldout-v1
+
+The separate Consensus ablation contract is exactly 72 plan-only runs:
+`iid_mixed`/`block`/`recurring` at OOD ratio `.3`, seeds `0/1/2`, one
+`NoAdapt` plus seven fixed adapted identities per cell. It fixes CUDA, full
+streams, block size 64, source budget 400, split
+`open-set-cifar100-split-v1`, and exact artifact provenance. The planner
+fail-closes unless the full SHA-256 and complete parsed semantic surface of
+`Ramen`, `ConsensusRamen`, and the five named ablation configs match its
+audited preregistration constants; config fallback is rejected.
+
+Create and archive the plan before any launch (this command never executes a
+run):
+
+```shell
+PYTHONPATH=src python -m runtime.consensus_ablation_matrix \
+  --data-root "$RAMEN_DATA_ROOT" \
+  --evidence-dir "$RAMEN_EVIDENCE_ROOT/open-set-consensus-ablation-heldout-v1" \
+  > consensus-ablation-heldout-v1-plan.json
+```
+
+The JSON identifies `heldout-v1`, contains 72 unique run records, emitted
+commands, and expected artifact directories. Each of the nine baseline traces
+is referenced by exactly seven adapted runs. Do not add flags selecting cells,
+device, prefixes, provenance, or source budget: those are rejected for the
+canonical contract. Review the resulting plan and create a clean reviewed
+commit before launching any emitted command; planning itself neither executes
+runs nor requires a commit.
+
+Development checks must opt into a separate name and are always marked
+noncanonical (they must never be reported as heldout-v1 evidence):
+
+```shell
+PYTHONPATH=src python -m runtime.consensus_ablation_matrix \
+  --noncanonical-pilot --pilot-name sanity-mps \
+  --stream iid_mixed --ood-ratio .1 --seed 12 --device mps \
+  --max-eval-samples 16 --data-root "$RAMEN_DATA_ROOT"
+```
+
 ## Canonical open-set Consensus matrix
 
 The current thesis matrix is intentionally separate from the legacy latent
@@ -273,8 +312,8 @@ PYTHONPATH=src python -m runtime.experiment_matrix \
   --data-root "$RAMEN_DATA_ROOT" --evidence-dir "$RAMEN_EVIDENCE_DIR"
 ```
 
-It fixes NoAdapt, Ramen, EntropyGatedLatentRamen (the preserved negative
-ablation), OracleDropOODRamen, OracleIDGradientRamen, ConsensusRamen, and
+It fixes NoAdapt, Ramen, EntropyGatedRamen, OracleDropOODRamen,
+OracleIDGradientRamen, ConsensusRamen, and
 OracleConsensusRamen
 across OOD ratios 0/0.1/0.3/0.5, `iid_mixed`/`block`/`recurring`, and seeds
 0/1/2. The planner schedules each NoAdapt trace before its exact
@@ -295,7 +334,7 @@ PYTHONPATH=src python -m evaluation.open_set_consensus_analysis \
 
 The runnable canonical plan is intentionally separate from the legacy
 LatentRamen matrix and its router gate. It plans 252 verified,
-fixed-source-exposure CUDA runs: `NoAdapt`, `Ramen`, `EntropyGatedLatentRamen`,
+fixed-source-exposure CUDA runs: `NoAdapt`, `Ramen`, `EntropyGatedRamen`,
 `OracleDropOODRamen`, `OracleIDGradientRamen`, `ConsensusRamen`, and `OracleConsensusRamen` across OOD ratios `0/0.1/0.3/0.5`,
 `iid_mixed/block/recurring`, and seeds `0/1/2`. Each adapted run references the
 ratio-bound `NoAdapt` trace from its own cell, and every run ID binds the OOD
@@ -308,9 +347,9 @@ directions are formed.
 ```shell
 PYTHONPATH=src python - <<'PY'
 import os
-from src.runtime.experiment_matrix import build_command, build_open_set_evidence_matrix
+from src.runtime.experiment_matrix import build_command, build_canonical_open_set_evidence_matrix
 
-runs = build_open_set_evidence_matrix(
+runs = build_canonical_open_set_evidence_matrix(
     evidence_dir=os.path.join(os.environ["RAMEN_EVIDENCE_ROOT"], "open-set-cifar100c-canonical"),
     data_root=os.environ["RAMEN_DATA_ROOT"],
 )
@@ -318,6 +357,54 @@ for run in runs:
     print(" ".join(build_command(run)))
 PY
 ```
+
+### Planned configuration locks
+
+Every emitted adapted-run command includes `--config-lock-path` and a full
+`--config-lock-sha256`. The launch process resolves its normal
+dataset-specific configuration (including its legacy fallback rule), then
+requires that resolved canonical path and the exact bytes parsed by YAML to
+match the planned lock. A missing, substituted fallback, or modified file
+therefore fails before model, dataset, manifest, or run-directory work begins.
+`NoAdapt` has no config lock, and direct legacy commands without both flags
+continue to use the normal configuration resolution behavior.
+
+`build_open_set_evidence_matrix` is the explicitly flexible, noncanonical
+library/pilot builder for partial development grids. Its output must not be
+labelled as the canonical matrix.
+
+### Preregistered split robustness (v2/v3)
+
+After the v1 primary matrix, the strict plan-only split-robustness contract is
+`split-robustness-v1`: exactly 96 CUDA, full-stream, block-64, exact-provenance
+runs over the two frozen name-ranked splits
+`open-set-cifar100-name-rank-v2` and `open-set-cifar100-name-rank-v3`. It fixes
+OOD ratios `.3/.5`, `block/recurring`, seeds `0/1/2`, source budget `400`, and
+`NoAdapt`, `Ramen`, `ConsensusRamen`, and `OracleIDGradientRamen`. There are 24
+same-cell baselines, each referenced by exactly three adapted runs.
+
+```shell
+PYTHONPATH=src python -m runtime.open_set_split_robustness_matrix \
+  --data-root "$RAMEN_DATA_ROOT" \
+  --evidence-dir "$RAMEN_EVIDENCE_ROOT/open-set-cifar100c-split-robustness-v1" \
+  > split-robustness-v1-plan.json
+```
+
+The plan never executes a run. It records the preregistration version, full
+SHA-256 bytes hashes and artifacts for both split JSON files, full hashes for
+all adapted method configs, commands, and artifact directories. Planning
+rejects substituted or edited split JSON, config drift, and dataset-config
+fallback. Commands carry both the generic config launch lock and the exact
+registered split JSON path plus its full byte-level SHA-256 lock. The parser
+requires the split path/hash flags together, verifies the registered path and
+current bytes, and the dataset loader hashes the same raw bytes that it parses.
+Manifest/resume validation rechecks both fields and the current file, so even
+semantically identical whitespace-only reformatting fails closed before
+evaluation. Split-bound run IDs include a split digest token,
+so v2/v3 artifact paths cannot collide; existing v1 identities remain
+unchanged. There are no custom-cell flags on this entry point: pilots belong
+to a separately named noncanonical workflow and must not be called
+`split-robustness-v1` evidence.
 
 Run commands in their emitted order (or pass the planned runs to
 `execute_matrix`); do not independently launch adapted methods before their

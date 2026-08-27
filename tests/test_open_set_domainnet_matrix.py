@@ -62,6 +62,8 @@ class DomainNetOpenSetMatrixTests(unittest.TestCase):
         self.assertEqual("evaluator_is_ood", sample.config_data["oracle_ood_source"])
         self.assertEqual("hard_mask", sample.config_data["consensus_mode"])
         self.assertEqual(.2, sample.config_data["consensus_threshold"])
+        clean = next(run for run in runs if run.method == "EntropyGatedRamen")
+        self.assertEqual(.5, clean.config_data["max_normalized_entropy"])
 
     def test_rejects_any_noncanonical_identity_or_cost_limited_request(self):
         base = {"evidence_dir": "/tmp/evidence", "data_root": "/tmp/data"}
@@ -69,6 +71,8 @@ class DomainNetOpenSetMatrixTests(unittest.TestCase):
             build_domainnet_open_set_evidence_matrix(**base, device="mps")
         with self.assertRaisesRegex(ValueError, "full streams"):
             build_domainnet_open_set_evidence_matrix(**base, max_eval_samples=32)
+        with self.assertRaisesRegex(ValueError, "stream_block_size=64"):
+            build_domainnet_open_set_evidence_matrix(**base, stream_block_size=32)
         with self.assertRaisesRegex(ValueError, "artifact_provenance"):
             build_domainnet_open_set_evidence_matrix(**base, artifact_provenance="off")
         with self.assertRaisesRegex(ValueError, "source budget is fixed"):
@@ -81,6 +85,20 @@ class DomainNetOpenSetMatrixTests(unittest.TestCase):
             build_domainnet_open_set_evidence_matrix(**base, seeds=(0,))
         with self.assertRaisesRegex(ValueError, "methods is fixed"):
             build_domainnet_open_set_evidence_matrix(**base, methods=("NoAdapt", "Ramen"))
+
+    def test_exact_provenance_plan_has_portable_unique_ids(self):
+        runs = build_domainnet_open_set_evidence_matrix(artifact_provenance="exact")
+        self.assertEqual(252, len(runs))
+        self.assertLessEqual(max(len(run.run_id) for run in runs), 128)
+        self.assertEqual(252, len({run.run_id for run in runs}))
+        self.assertTrue(all(run.artifact_provenance == "exact" for run in runs))
+        self.assertTrue(all("-prov-exact-" in run.run_id or "-prov-xact-" in run.run_id for run in runs))
+        self.assertTrue(any("-prov-exact-" in run.run_id for run in runs))
+        self.assertTrue(any("-prov-xact-" in run.run_id for run in runs))
+        self.assertTrue(all(
+            command[command.index("--artifact-provenance") + 1] == "exact"
+            for command in (build_command(run) for run in runs)
+        ))
 
     def test_cli_is_explicitly_planner_only(self):
         with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(io.StringIO()) as output:

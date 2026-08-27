@@ -6,6 +6,7 @@ from src.evaluation.open_set_metrics import (
     h_score,
     id_accuracy,
     open_set_metrics,
+    open_set_detection_summary,
     open_set_metrics_from_trace_rows,
 )
 
@@ -48,6 +49,11 @@ class OpenSetMetricsTests(unittest.TestCase):
             fpr_at_95_tpr([True, True], [0.1, 0.2])
         with self.assertRaises(ValueError):
             id_accuracy([0], [0], [True])
+        unavailable = open_set_detection_summary(
+            [0, 1], [0, 1], [False, False], [0.1, 0.2], score="test-score",
+        )
+        self.assertEqual("unavailable", unavailable["status"])
+        self.assertIsNone(unavailable["auroc"])
 
     def test_trace_builder_checks_known_split_and_inputs(self):
         rows = [

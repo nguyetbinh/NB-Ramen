@@ -11,3 +11,4 @@ lr: 0.01
 consensus_threshold: 0.2
 min_consensus_classes: 3
 consensus_mode: hard_mask
+include_current: true

@@ -6,7 +6,7 @@
 **Repository:** `nguyetbinh/NB-Ramen`  
 **Working branch:** `open-world-gradient-memory`  
 **Research direction:** Open-World / Open-Set Mixed-Domain Test-Time Adaptation  
-**Status:** active thesis implementation; mechanism is locally de-risked but canonical CUDA evidence is still pending  
+**Status (2026-08-26):** implementation and local mechanics validation complete; canonical CUDA effectiveness evidence is still pending. See [final evidence status](../../plans/20260825-open-world-gradient-memory-evidence/reports/final-evidence-status-20260826.md).
 
 ---
 
@@ -38,6 +38,14 @@ Working title:
 
 # 2. Current scientific status
 
+The frozen implementation contract is complete: F1--F4 diagnostics and safety
+fields, evaluator-only ID/OOD isolation, ID-only stability, the clean
+`EntropyGatedRamen` control, exact seven-method planner identity, v2/v3 split
+recipes, and ablation/config/split locks. This completion does **not** answer
+the research questions: canonical full-stream CUDA CIFAR-100-C, the actual
+96-run split study, actual 72-run ablation study, and real-data CUDA DomainNet
+study are pending.
+
 The active branch has already implemented the main infrastructure required by the thesis:
 
 ```text
@@ -55,7 +63,7 @@ Open-set dataset wrapper
 + DomainNet secondary matrix planner
 ```
 
-The implementation direction is correct. The next work should **not add another large adaptation architecture**. The immediate goal is to improve mechanism validation and evaluation cleanliness before the canonical CUDA run.
+The implementation direction is frozen. The next work should **not add another large adaptation architecture**; it is to run the prespecified canonical evidence program without retuning.
 
 ---
 
@@ -303,9 +311,11 @@ retrieved_ood_weight_fraction
 
 ---
 
-# 8. Existing noncanonical mechanism signal
+# 8. Historical noncanonical mechanism signal
 
-The current MPS pilot is **not canonical benchmark evidence**, but it is sufficient to justify continuing the method.
+The earlier MPS pilot is **not canonical benchmark evidence**. It remains
+historical motivation only; the current local smoke record is in the final
+evidence status and takes precedence for implementation completion.
 
 Observed directional signal in the three block seeds at OOD ratio 0.5:
 
@@ -523,7 +533,7 @@ The final thesis must report this heterogeneity rather than collapsing all strea
 
 ---
 
-# 12. Mechanism-validation gap that must be implemented next
+# 12. Implemented mechanism-validation diagnostic
 
 Current oracle diagnostics measure:
 
@@ -539,7 +549,9 @@ $$
 g^{Consensus}.
 $$
 
-We therefore need direct evidence that Consensus moves the realized update **toward the ID-only oracle direction**.
+The implementation now records direct evidence of whether Consensus moves the
+realized update **toward the ID-only oracle direction**. Its effectiveness
+still requires the pending canonical runs.
 
 Required metrics are:
 
@@ -701,7 +713,7 @@ The central mechanism claim is supported only if Consensus reduces oracle-direct
 
 ---
 
-# 15. Post-adaptation OOD safety must be measured
+# 15. Implemented post-adaptation OOD safety measurement
 
 The current evaluator mainly uses a pre-adaptation energy score:
 
@@ -713,7 +725,7 @@ $$
 
 Because methods begin each query from the same reset model, this score is primarily a property of the base model and sample. It does not measure whether the **adaptation step itself** makes OOD behavior safer or worse.
 
-Add a post-adaptation score from returned logits:
+The evaluator records a post-adaptation score from returned logits:
 
 $$
 \boxed{
@@ -786,7 +798,7 @@ The second one is the relevant safety result for this thesis.
 
 ---
 
-# 17. Clean entropy baseline is required
+# 17. Clean entropy baseline
 
 `EntropyGatedLatentRamen` is not a clean control for the thesis because it changes both:
 
@@ -796,7 +808,8 @@ memory admission
 latent-context routing/memory structure
 ```
 
-To compare prediction-level reliability with gradient-level compatibility, add:
+To compare prediction-level reliability with gradient-level compatibility, the
+implementation provides:
 
 > **EntropyGatedRamen**
 
@@ -1171,7 +1184,7 @@ ConsensusRamen-v0 should require no extra model forward or backward pass.
 
 # 25. ID-only stability implementation
 
-This is lower priority than the gradient mechanism diagnostics, but it must be fixed before final reporting.
+This is implemented and is required in the pending canonical reporting.
 
 Recommended implementation:
 
@@ -1245,7 +1258,13 @@ Use the separate ablation planner on selected held-out cells.
 
 ---
 
-# 28. Next implementation cycle
+# 28. Completed implementation cycle and remaining execution
+
+F1--F4 below are complete as of 2026-08-26 at the implementation/local
+validation level. Their exit criteria must not be read as canonical results.
+The remaining work is the frozen external execution program described in
+Phases G and H: full-stream CUDA CIFAR-100-C, then actual split, ablation, and
+DomainNet runs.
 
 The next implementation work should be done in this order.
 
@@ -1738,17 +1757,17 @@ Implementation invariants:
 
 ---
 
-# Appendix B — Immediate implementation checklist
+# Appendix B — Completion ledger (updated 2026-08-26)
 
-- [ ] Extend oracle aggregation to compute `g_ramen`, `g_consensus`, and `g_oracle_id` from the same retrieved supports.
-- [ ] Add Consensus-vs-OracleID cosine/sign diagnostics.
-- [ ] Add `post_adaptation_ood_score` to trace output.
-- [ ] Add pre/post OOD detection summary blocks.
-- [ ] Implement `EntropyGatedRamen` without latent routing.
-- [ ] Replace `EntropyGatedLatentRamen` with `EntropyGatedRamen` in both canonical planners.
-- [ ] Update tests for seven-method/252-run matrix identity.
-- [ ] Add ID-only stability semantics before final reporting.
-- [ ] Freeze code/config/report after these changes.
+- [x] Extend oracle aggregation to compute `g_ramen`, `g_consensus`, and `g_oracle_id` from the same retrieved supports.
+- [x] Add Consensus-vs-OracleID cosine/sign diagnostics.
+- [x] Add `post_adaptation_ood_score` to trace output.
+- [x] Add pre/post OOD detection summary blocks.
+- [x] Implement `EntropyGatedRamen` without latent routing.
+- [x] Replace `EntropyGatedLatentRamen` with `EntropyGatedRamen` in both canonical planners.
+- [x] Update tests for seven-method/252-run matrix identity.
+- [x] Add ID-only stability semantics before final reporting.
+- [x] Freeze implementation/config/split and planner contracts before external runs.
 - [ ] Run canonical CIFAR-100-C CUDA matrix.
 - [ ] Analyze OOD-ratio and stream-structure trends.
 - [ ] Run split robustness study.

@@ -233,3 +233,63 @@ def domain_shift_recovery_times(
                 break
         results.append(result)
     return results
+
+
+def id_only_domain_shift_recovery_times(
+    correctness: Iterable[bool],
+    domains: Iterable[Any],
+    is_ood: Iterable[bool],
+    *,
+    window_size: int = 50,
+) -> list[dict[str, Any]]:
+    """Measure recovery from ID rows while retaining original episode boundaries.
+
+    OOD observations are excluded from accuracy windows, but never removed
+    before domain episodes are found.  This prevents an OOD interlude from
+    joining two distinct persistent-domain episodes.
+    """
+    values = list(correctness)
+    domain_values = list(domains)
+    flags = list(is_ood)
+    if len(values) != len(domain_values) or len(values) != len(flags):
+        raise ValueError("correctness, domains, and is_ood must have equal length")
+    if window_size <= 0:
+        raise ValueError("window_size must be positive")
+    if any(not isinstance(value, bool) for value in values):
+        raise TypeError("correctness values must be booleans")
+    if any(not isinstance(flag, bool) for flag in flags):
+        raise TypeError("is_ood values must be booleans")
+
+    boundaries = [index for index in range(1, len(domain_values))
+                  if domain_values[index] != domain_values[index - 1]]
+    starts = [0, *boundaries]
+    ends = [*boundaries, len(domain_values)]
+    results = []
+    for episode_index in range(1, len(starts)):
+        shift = starts[episode_index]
+        previous_start = starts[episode_index - 1]
+        episode_end = ends[episode_index]
+        previous_id = [values[index] for index in range(previous_start, shift) if not flags[index]]
+        episode_id = [values[index] for index in range(shift, episode_end) if not flags[index]]
+        result = {
+            "shift_timestep": shift,
+            "from_domain": domain_values[shift - 1],
+            "to_domain": domain_values[shift],
+            "previous_episode_id_samples": len(previous_id),
+            "episode_id_samples": len(episode_id),
+            "recovery_samples": None,
+        }
+        if len(previous_id) < window_size or len(episode_id) < window_size:
+            result["status"] = "insufficient_id_episode"
+            results.append(result)
+            continue
+        baseline = sum(previous_id[-window_size:]) / window_size
+        result["baseline_accuracy"] = baseline
+        result["status"] = "not_recovered"
+        for start in range(0, len(episode_id) - window_size + 1):
+            if sum(episode_id[start:start + window_size]) / window_size >= baseline:
+                result["status"] = "recovered"
+                result["recovery_samples"] = start
+                break
+        results.append(result)
+    return results

@@ -48,10 +48,11 @@ try:
         ORACLE_GRADIENT_TRACE_FIELDS,
         RETRIEVAL_PROFILE_TRACE_FIELDS,
         TRACE_SCHEMA_VERSION,
+        compare_trace_id_negative_adaptation,
         compare_trace_negative_adaptation,
     )
-    from ..evaluation.open_set_metrics import id_accuracy, open_set_metrics
-    from ..evaluation.online_metrics import domain_shift_recovery_times
+    from ..evaluation.open_set_metrics import open_set_detection_summary
+    from ..evaluation.online_metrics import domain_shift_recovery_times, id_only_domain_shift_recovery_times
     from ..evaluation.routing_metrics import routing_diagnostics
 except ImportError:  # ``runtime`` top-level package or direct-file invocation.
     source_root = str(Path(__file__).resolve().parents[1])
@@ -66,10 +67,11 @@ except ImportError:  # ``runtime`` top-level package or direct-file invocation.
         ORACLE_GRADIENT_TRACE_FIELDS,
         RETRIEVAL_PROFILE_TRACE_FIELDS,
         TRACE_SCHEMA_VERSION,
+        compare_trace_id_negative_adaptation,
         compare_trace_negative_adaptation,
     )
-    from evaluation.open_set_metrics import id_accuracy, open_set_metrics
-    from evaluation.online_metrics import domain_shift_recovery_times
+    from evaluation.open_set_metrics import open_set_detection_summary
+    from evaluation.online_metrics import domain_shift_recovery_times, id_only_domain_shift_recovery_times
     from evaluation.routing_metrics import routing_diagnostics
 
 
@@ -92,14 +94,14 @@ DEFAULT_METHODS = (
 # These named ablations are selectable explicitly but deliberately absent from
 # the legacy/default grids and the locked seven-method canonical v0 matrix.
 SUPPORTED_METHODS = DEFAULT_METHODS + (
-    "EntropyGatedLatentRamen", "ConsensusRamenSoft", "ConsensusRamenNoSelf",
+    "EntropyGatedRamen", "EntropyGatedLatentRamen", "ConsensusRamenSoft", "ConsensusRamenNoSelf",
     "ConsensusRamenTau060", "ConsensusRamenMin2", "ConsensusRamenMin4",
 )
 OPEN_SET_DATASET = "CIFAR100C"
 OPEN_SET_SPLIT = "open-set-cifar100-split-v1"
 OPEN_SET_STREAMS = ("iid_mixed", "block", "recurring")
 OPEN_SET_METHODS = (
-    "NoAdapt", "Ramen", "EntropyGatedLatentRamen", "OracleDropOODRamen",
+    "NoAdapt", "Ramen", "EntropyGatedRamen", "OracleDropOODRamen",
     "OracleIDGradientRamen", "ConsensusRamen", "OracleConsensusRamen",
 )
 OPEN_SET_OOD_RATIOS = (0.0, 0.1, 0.3, 0.5)
@@ -157,13 +159,17 @@ class ExperimentRun:
     config_dir: Path
     config_path: Path | None
     config_hash: str
+    config_sha256: str | None
     config_data: dict[str, object]
     artifact_provenance: str
     reference_trace: Path | None = None
     open_set: bool = False
     known_class_split: str | None = None
+    known_class_split_path: Path | None = None
+    known_class_split_sha256: str | None = None
     ood_ratio: float | None = None
     open_set_per_domain_source_budget: int | None = None
+    require_config_lock: bool = False
 
     @property
     def run_dir(self) -> Path:
@@ -176,6 +182,9 @@ class ExperimentRun:
         result["run_dir"] = str(self.run_dir)
         result["config_dir"] = str(self.config_dir)
         result["config_path"] = str(self.config_path) if self.config_path else None
+        result["known_class_split_path"] = (
+            str(self.known_class_split_path) if self.known_class_split_path else None
+        )
         result["reference_trace"] = str(self.reference_trace) if self.reference_trace else None
         return result
 
@@ -242,13 +251,46 @@ def _parse_flat_yaml(raw: bytes, path: Path) -> dict[str, object]:
     return result
 
 
-def _selected_config(config_dir: Path, dataset: str, method: str) -> tuple[Path | None, str, dict[str, object]]:
+def _selected_config(config_dir: Path, dataset: str, method: str) -> tuple[Path | None, str, str | None, dict[str, object]]:
     candidates = (config_dir / dataset / f"{method}.yaml", config_dir / "default" / f"{method}.yaml")
     for path in candidates:
         if path.is_file():
             raw = path.read_bytes()
-            return path.resolve(), hashlib.sha256(raw).hexdigest()[:CONFIG_HASH_LENGTH], _parse_flat_yaml(raw, path)
-    return None, MISSING_CONFIG_HASH, {}
+            digest = hashlib.sha256(raw).hexdigest()
+            return path.resolve(), digest[:CONFIG_HASH_LENGTH], digest, _parse_flat_yaml(raw, path)
+    return None, MISSING_CONFIG_HASH, None, {}
+
+
+def _locked_config_digest(run: ExperimentRun) -> str:
+    """Return a full config digest only when the planned bytes still match."""
+    if run.config_path is None:
+        raise ValueError(f"planned config is missing: {run.dataset}/{run.method}")
+    try:
+        raw = run.config_path.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"effective config changed after planning: {run.dataset}/{run.method}") from exc
+    digest = hashlib.sha256(raw).hexdigest()
+    if (
+        digest != run.config_sha256
+        or digest[:CONFIG_HASH_LENGTH] != run.config_hash
+        or _parse_flat_yaml(raw, run.config_path) != run.config_data
+    ):
+        raise ValueError(f"effective config changed after planning: {run.dataset}/{run.method}")
+    return digest
+
+
+def _locked_split_digest(run: ExperimentRun) -> str:
+    """Return the full planned split digest only while the exact bytes match."""
+    if run.known_class_split_path is None or run.known_class_split_sha256 is None:
+        raise ValueError(f"planned split lock is incomplete: {run.run_id}")
+    try:
+        raw = run.known_class_split_path.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"effective split JSON changed after planning: {run.known_class_split}") from exc
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != run.known_class_split_sha256:
+        raise ValueError(f"effective split JSON changed after planning: {run.known_class_split}")
+    return digest
 
 
 def _seed_token(seed: int) -> str:
@@ -269,6 +311,7 @@ def make_run_id(
     data_root: str | Path = "~/data",
     open_set_ood_ratio: float | None = None,
     open_set_per_domain_source_budget: int | None = None,
+    open_set_split_fingerprint: str | None = None,
 ) -> str:
     """Return a stable, conservative ID suitable for use as one path segment."""
     budget = "full" if max_eval_samples is None else f"n{max_eval_samples}"
@@ -287,16 +330,40 @@ def make_run_id(
         or open_set_per_domain_source_budget <= 0
     ):
         raise ValueError("open_set_per_domain_source_budget must be a positive integer")
+    if open_set_split_fingerprint is not None and (
+        not isinstance(open_set_split_fingerprint, str)
+        or len(open_set_split_fingerprint) != 64
+        or any(character not in "0123456789abcdef" for character in open_set_split_fingerprint)
+    ):
+        raise ValueError("open_set_split_fingerprint must be a full lowercase SHA-256 digest")
     # The public method identity remains in manifests/configs.  This compact,
     # unambiguous token leaves room for the open-set ratio and source-budget
     # identity fields within the portable path-segment limit.
-    method_token = {"EntropyGatedLatentRamen": "entropy-gated"}.get(method, method)
+    method_token = {
+        "EntropyGatedRamen": "entropy-gated-ramen",
+        "EntropyGatedLatentRamen": "entropy-gated-latent",
+    }.get(method, method)
+    # New split-bound plans need room for an explicit split token while their
+    # legacy/v1 identities must remain byte-for-byte compatible.
+    if open_set_split_fingerprint is not None:
+        method_token = {
+            "OracleIDGradientRamen": "oid",
+            "ConsensusRamen": "consensus",
+        }.get(method, method_token)
+    # Assemble the historical spelling first.  Only an otherwise-invalid
+    # overlength exact open-set ID may use the compact overflow spelling.
+    provenance_token = artifact_provenance
     tokens = (dataset, stream_mode, "seed", _seed_token(seed), method_token, "dev", device, budget,
               *(("blk", stream_block_size) if stream_block_size != 64 else ()),
               *(("open", "ood", f"{float(open_set_ood_ratio):g}") if open_set_ood_ratio is not None else ()),
               *(("src", open_set_per_domain_source_budget)
                 if open_set_per_domain_source_budget is not None else ()),
-              "cfg", config_hash, "prov", artifact_provenance, "data", data_root_hash)
+              # Six digest nibbles plus the explicit marker fit the portable
+              # 128-character limit for the longest locked oracle identity.
+              # The full digest remains frozen in the plan payload.
+              *(("sp", open_set_split_fingerprint[:6])
+                if open_set_split_fingerprint is not None else ()),
+              "cfg", config_hash, "prov", provenance_token, "data", data_root_hash)
     normalized = []
     for token in tokens:
         value = "".join(character.lower() if character.isalnum() else "-" for character in str(token))
@@ -305,6 +372,13 @@ def make_run_id(
             raise ValueError("run ID component cannot be empty")
         normalized.append(value)
     run_id = "-".join(normalized)
+    if (len(run_id) > MAX_RUN_ID_LENGTH and artifact_provenance == "exact"
+            and open_set_ood_ratio is not None):
+        provenance_index = normalized.index("prov") + 1
+        if normalized[provenance_index] != "exact":
+            raise AssertionError("exact provenance token normalization drift")
+        normalized[provenance_index] = "xact"
+        run_id = "-".join(normalized)
     if len(run_id) > MAX_RUN_ID_LENGTH:
         raise ValueError(
             f"generated run ID is {len(run_id)} characters; maximum is {MAX_RUN_ID_LENGTH}"
@@ -368,7 +442,7 @@ def build_experiment_matrix(
     for dataset in datasets:
         for stream_mode in streams:
             for seed in seeds:
-                _, baseline_hash, _ = _selected_config(configs, dataset, "NoAdapt")
+                _, baseline_hash, _, _ = _selected_config(configs, dataset, "NoAdapt")
                 baseline_id = make_run_id(
                     dataset, stream_mode, seed, "NoAdapt", device=device,
                     max_eval_samples=max_eval_samples, config_hash=baseline_hash, artifact_provenance=artifact_provenance,
@@ -376,7 +450,7 @@ def build_experiment_matrix(
                 )
                 baseline_trace = root / baseline_id / "trace.jsonl"
                 for method in ordered_methods:
-                    config_path, config_hash, config_data = _selected_config(configs, dataset, method)
+                    config_path, config_hash, config_sha256, config_data = _selected_config(configs, dataset, method)
                     runs.append(ExperimentRun(
                         dataset=dataset,
                         stream_mode=stream_mode,
@@ -400,9 +474,16 @@ def build_experiment_matrix(
                         config_dir=configs,
                         config_path=config_path,
                         config_hash=config_hash,
+                        # Baseline configs retain their short run-ID hash but
+                        # deliberately carry no launch lock.
+                        config_sha256=None if method == "NoAdapt" else config_sha256,
                         config_data=config_data,
                         artifact_provenance=artifact_provenance,
                         reference_trace=None if method == "NoAdapt" else baseline_trace,
+                        # Every newly planned adapted launch carries a full
+                        # config lock.  The default remains false only for
+                        # manually reconstructed legacy evidence records.
+                        require_config_lock=True,
                     ))
     run_ids = [run.run_id for run in runs]
     if len(run_ids) != len(set(run_ids)):
@@ -420,6 +501,7 @@ def build_open_set_evidence_matrix(
     streams: Iterable[str] = OPEN_SET_STREAMS,
     ood_ratios: Iterable[float] = OPEN_SET_OOD_RATIOS,
     seeds: Iterable[int] = OPEN_SET_SEEDS,
+    methods: Iterable[str] = OPEN_SET_METHODS,
     evidence_dir: str | Path = REPOSITORY_ROOT / "evidence/open-set-cifar100c-canonical",
     device: str = "cuda",
     max_eval_samples: int | None = None,
@@ -439,8 +521,11 @@ def build_open_set_evidence_matrix(
     streams = tuple(streams)
     ratios = tuple(ood_ratios)
     seeds = tuple(seeds)
+    methods = tuple(methods)
     if set(streams).difference(OPEN_SET_STREAMS):
         raise ValueError("open-set matrix streams must be drawn from: " + ", ".join(OPEN_SET_STREAMS))
+    if set(methods).difference(OPEN_SET_METHODS):
+        raise ValueError("open-set matrix methods must be drawn from: " + ", ".join(OPEN_SET_METHODS))
     if not ratios:
         raise ValueError("provide at least one open-set OOD ratio")
     if any(
@@ -461,7 +546,7 @@ def build_open_set_evidence_matrix(
     planned: list[ExperimentRun] = []
     for ratio in ratios:
         base_runs = build_experiment_matrix(
-            datasets=(OPEN_SET_DATASET,), streams=streams, methods=OPEN_SET_METHODS,
+            datasets=(OPEN_SET_DATASET,), streams=streams, methods=methods,
             seeds=seeds, evidence_dir=evidence_dir, device=device,
             max_eval_samples=max_eval_samples, stream_block_size=stream_block_size,
             config_dir=config_dir, artifact_provenance=artifact_provenance, data_root=data_root,
@@ -490,6 +575,108 @@ def build_open_set_evidence_matrix(
     return planned
 
 
+def _validate_canonical_open_set_configs(runs: Iterable[ExperimentRun]) -> None:
+    """Fail closed on config fallback or any unlocked canonical method config."""
+    required = set(OPEN_SET_METHODS) - {"NoAdapt"}
+    seen: set[str] = set()
+    for run in runs:
+        if run.method not in required:
+            continue
+        seen.add(run.method)
+        if run.config_path is None or run.config_hash == MISSING_CONFIG_HASH or run.config_sha256 is None:
+            raise ValueError(f"missing fixed CIFAR-100-C open-set config: {run.method}")
+        if run.config_path.parent.name != OPEN_SET_DATASET:
+            raise ValueError(f"CIFAR-100-C open-set method resolved a fallback config: {run.method}")
+        required_keys = {"max_capacity", "topk", "beta", "optimizer", "lr"}
+        if missing := sorted(required_keys.difference(run.config_data)):
+            raise ValueError(f"CIFAR-100-C open-set config is incomplete for {run.method}: " + ", ".join(missing))
+        if run.method == "EntropyGatedRamen" and run.config_data.get("max_normalized_entropy") != 0.5:
+            raise ValueError("canonical EntropyGatedRamen config must set max_normalized_entropy: 0.50")
+        if run.method.startswith("Oracle") and run.config_data.get("oracle_ood_source") != "evaluator_is_ood":
+            raise ValueError(f"CIFAR-100-C oracle config must declare evaluator_is_ood: {run.method}")
+        if run.method in OPEN_SET_CONSENSUS_METHODS:
+            locked = {
+                "consensus_threshold": 0.2,
+                "min_consensus_classes": 3,
+                "consensus_mode": "hard_mask",
+                "include_current": True,
+            }
+            if any(run.config_data.get(key) != value for key, value in locked.items()):
+                raise ValueError(f"CIFAR-100-C ConsensusRamen-v0 config is not locked: {run.method}")
+    if missing_methods := required.difference(seen):
+        raise AssertionError("planner did not resolve config(s): " + ", ".join(sorted(missing_methods)))
+
+
+def build_canonical_open_set_evidence_matrix(
+    *,
+    streams: Iterable[str] = OPEN_SET_STREAMS,
+    ood_ratios: Iterable[float] = OPEN_SET_OOD_RATIOS,
+    seeds: Iterable[int] = OPEN_SET_SEEDS,
+    methods: Iterable[str] = OPEN_SET_METHODS,
+    evidence_dir: str | Path = REPOSITORY_ROOT / "evidence/open-set-cifar100c-canonical",
+    device: str = "cuda",
+    max_eval_samples: int | None = None,
+    stream_block_size: int = 64,
+    config_dir: str | Path = REPOSITORY_ROOT / "cfg",
+    artifact_provenance: str = "fast",
+    data_root: str | Path = "~/data",
+    per_domain_source_budget: int = OPEN_SET_PER_DOMAIN_SOURCE_BUDGET,
+) -> list[ExperimentRun]:
+    """Plan the locked 252-run CIFAR-100-C canonical evidence matrix.
+
+    ``build_open_set_evidence_matrix`` remains the explicitly noncanonical
+    library/pilot builder: it intentionally permits partial grids.  This
+    entry point is the only CIFAR planner suitable for a canonical claim.
+    """
+    def exact(value: Iterable[object], expected: tuple[object, ...], label: str) -> None:
+        if tuple(value) != expected:
+            raise ValueError("canonical CIFAR-100-C open-set " + label + " is fixed to: " + ", ".join(map(str, expected)))
+
+    streams, ratios, seeds, methods = tuple(streams), tuple(ood_ratios), tuple(seeds), tuple(methods)
+    exact(streams, OPEN_SET_STREAMS, "streams")
+    exact(ratios, OPEN_SET_OOD_RATIOS, "OOD ratios")
+    exact(seeds, OPEN_SET_SEEDS, "seeds")
+    exact(methods, OPEN_SET_METHODS, "methods")
+    if device != "cuda":
+        raise ValueError("canonical CIFAR-100-C open-set matrix requires device='cuda'")
+    if max_eval_samples is not None:
+        raise ValueError("canonical CIFAR-100-C open-set matrix requires full streams (max_eval_samples=None)")
+    if stream_block_size != 64:
+        raise ValueError("canonical CIFAR-100-C open-set matrix requires stream_block_size=64")
+    if artifact_provenance not in {"fast", "exact"}:
+        raise ValueError("canonical CIFAR-100-C open-set matrix requires artifact_provenance='fast' or 'exact'")
+    if per_domain_source_budget != OPEN_SET_PER_DOMAIN_SOURCE_BUDGET:
+        raise ValueError("canonical CIFAR-100-C open-set per-domain source budget is fixed to 400")
+
+    planned = build_open_set_evidence_matrix(
+        streams=streams, ood_ratios=ratios, seeds=seeds, methods=methods,
+        evidence_dir=evidence_dir, device=device, max_eval_samples=max_eval_samples,
+        stream_block_size=stream_block_size, config_dir=config_dir,
+        artifact_provenance=artifact_provenance, data_root=data_root,
+        per_domain_source_budget=per_domain_source_budget,
+    )
+    _validate_canonical_open_set_configs(planned)
+    if len(planned) != 252:
+        raise AssertionError(f"locked CIFAR-100-C matrix must contain 252 runs, got {len(planned)}")
+    baselines = {
+        (run.ood_ratio, run.stream_mode, run.seed): run.run_dir / "trace.jsonl"
+        for run in planned if run.method == "NoAdapt"
+    }
+    adapted_by_cell: dict[tuple[float | None, str, int], int] = {}
+    for run in planned:
+        if run.method == "NoAdapt":
+            continue
+        cell = (run.ood_ratio, run.stream_mode, run.seed)
+        if run.reference_trace != baselines.get(cell):
+            raise AssertionError("locked CIFAR-100-C matrix must pair adapted runs to their cell baseline")
+        adapted_by_cell[cell] = adapted_by_cell.get(cell, 0) + 1
+    if len(baselines) != 36 or set(adapted_by_cell) != set(baselines) or any(
+        count != 6 for count in adapted_by_cell.values()
+    ):
+        raise AssertionError("locked CIFAR-100-C matrix must pair six adapted runs to one baseline per cell")
+    return planned
+
+
 def build_command(
     run: ExperimentRun,
     *,
@@ -511,7 +698,7 @@ def build_command(
         raise ValueError("stream_block_size override contradicts planned identity")
     if data_root is not None and _absolute(data_root) != run.data_root:
         raise ValueError("data_root override contradicts planned identity")
-    current_path, current_hash, current_data = _selected_config(run.config_dir, run.dataset, run.method)
+    current_path, current_hash, _, current_data = _selected_config(run.config_dir, run.dataset, run.method)
     if (current_path, current_hash, current_data) != (run.config_path, run.config_hash, run.config_data):
         raise ValueError(f"effective config changed after planning: {run.dataset}/{run.method}")
     command = [
@@ -536,6 +723,13 @@ def build_command(
     ]
     if run.max_eval_samples is not None:
         command.extend(("--max-eval-samples", str(run.max_eval_samples)))
+    if run.method != "NoAdapt" and run.config_path is not None:
+        # Keep the compact digest in run IDs, but carry a full digest to make
+        # the independently launched process fail closed on config drift.
+        command.extend((
+            "--config-lock-path", str(run.config_path),
+            "--config-lock-sha256", _locked_config_digest(run),
+        ))
     if run.stream_block_size != 64:
         command.extend(("--stream_block_size", str(run.stream_block_size)))
     if run.open_set:
@@ -544,6 +738,14 @@ def build_command(
             "--ood_ratio", f"{run.ood_ratio:g}",
             "--open-set-per-domain-source-budget", str(run.open_set_per_domain_source_budget),
         ))
+        if run.known_class_split_path is not None or run.known_class_split_sha256 is not None:
+            digest = _locked_split_digest(run)
+            command.extend((
+                "--known_class_split_path",
+                str(run.known_class_split_path),
+                "--known_class_split_sha256",
+                digest,
+            ))
     if run.reference_trace is not None:
         command.extend(("--reference_trace", str(run.reference_trace)))
     return command
@@ -602,12 +804,16 @@ def _is_finite_number(value: object, *, minimum: float | None = None, maximum: f
 
 def _entropy_gate_threshold(run: ExperimentRun) -> float | None:
     """Return the configured gate threshold, validating the gated run contract."""
-    if run.method != "EntropyGatedLatentRamen":
+    if run.method not in {"EntropyGatedRamen", "EntropyGatedLatentRamen"}:
         return None
     value = run.config_data.get("max_normalized_entropy")
     if not _is_finite_number(value, minimum=0.0, maximum=1.0):
         raise IncompleteRunError(
-            f"EntropyGatedLatentRamen requires max_normalized_entropy in [0, 1]: {run.run_id}"
+            f"{run.method} requires max_normalized_entropy in [0, 1]: {run.run_id}"
+        )
+    if run.method == "EntropyGatedRamen" and float(value) != 0.5:
+        raise IncompleteRunError(
+            f"EntropyGatedRamen requires max_normalized_entropy exactly 0.50: {run.run_id}"
         )
     return float(value)
 
@@ -1030,6 +1236,8 @@ def _validate_open_set_evidence(
         _require_equal(row["ood_ratio"], run.ood_ratio, f"trace[{line_number}].ood_ratio", run)
         if not _is_finite_number(row["pre_adaptation_ood_score"]):
             raise IncompleteRunError(f"trace[{line_number}].pre_adaptation_ood_score is malformed")
+        if not _is_finite_number(row["post_adaptation_ood_score"]):
+            raise IncompleteRunError(f"trace[{line_number}].post_adaptation_ood_score is malformed")
         _require_equal(row["correct"], row["prediction"] == known_label,
                        f"trace[{line_number}].correct", run)
 
@@ -1046,25 +1254,16 @@ def _validate_open_set_evidence(
 
     predictions = [row["prediction"] for row in rows]
     known_labels = [row["known_label_or_minus_one"] for row in rows]
-    scores = [row["pre_adaptation_ood_score"] for row in rows]
-    try:
-        metrics = open_set_metrics(predictions, known_labels, flags, scores)
-        detection = {
-            "status": "computed", "score": "negative_logsumexp_pre_adaptation_logits",
-            "id_accuracy": metrics.id_accuracy, "auroc": metrics.auroc,
-            "fpr95": metrics.fpr_at_95_tpr, "fpr95_threshold": metrics.fpr95_threshold,
-            "ood_recall_at_fpr95": metrics.ood_recall_at_fpr95, "h_score": metrics.h_score,
-            "id_count": metrics.id_count, "ood_count": metrics.ood_count,
-        }
-    except ValueError as exc:
-        detection = {
-            "status": "unavailable", "reason": str(exc),
-            "score": "negative_logsumexp_pre_adaptation_logits",
-            "id_accuracy": id_accuracy(predictions, known_labels, flags) if id_count else None,
-            "auroc": None, "fpr95": None, "fpr95_threshold": None,
-            "ood_recall_at_fpr95": None, "h_score": None,
-            "id_count": id_count, "ood_count": ood_count,
-        }
+    pre_detection = open_set_detection_summary(
+        predictions, known_labels, flags,
+        [row["pre_adaptation_ood_score"] for row in rows],
+        score="negative_logsumexp_pre_adaptation_logits",
+    )
+    post_detection = open_set_detection_summary(
+        predictions, known_labels, flags,
+        [row["post_adaptation_ood_score"] for row in rows],
+        score="negative_logsumexp_post_adaptation_logits",
+    )
     domains = metadata.get("domain_names")
     if not isinstance(domains, list) or not all(isinstance(name, str) for name in domains):
         raise IncompleteRunError(f"stream domain names are malformed: {run.run_id}")
@@ -1076,12 +1275,54 @@ def _validate_open_set_evidence(
         )
     valid_id_accuracies = [value for value in id_domain_accuracies.values() if value is not None]
     expected_summary = {
-        **detection, "split_version": run.known_class_split, "requested_ood_ratio": run.ood_ratio,
+        **pre_detection, "pre_adaptation_detection": pre_detection,
+        "post_adaptation_detection": post_detection,
+        "split_version": run.known_class_split, "requested_ood_ratio": run.ood_ratio,
         "realized_ood_ratio": realized_ratio, "realized_ood_count": ood_count,
         "realized_known_count": id_count, "id_domain_accuracies": id_domain_accuracies,
         "worst_domain_id_accuracy": min(valid_id_accuracies) if valid_id_accuracies else None,
     }
     _require_equal(summary.get("open_set"), expected_summary, "summary.open_set", run)
+
+    id_recovery = summary.get("id_only_post_shift_recovery_time")
+    if run.stream_mode in {"block", "recurring", "bursty"}:
+        try:
+            id_shifts = id_only_domain_shift_recovery_times(
+                [row["correct"] for row in rows],
+                [row["ground_truth_domain"] for row in rows],
+                [row["is_ood"] for row in rows],
+                window_size=run.metric_window_size,
+            )
+        except (TypeError, ValueError) as exc:
+            raise IncompleteRunError(f"cannot recompute ID-only post-shift recovery: {run.run_id}") from exc
+        expected_id_recovery = {
+            "status": "computed",
+            "definition": "ID-only full-window recovery within each original persistent-domain episode",
+            "window_size": run.metric_window_size,
+            "shifts": id_shifts,
+        }
+    else:
+        expected_id_recovery = {
+            "status": "not_applicable",
+            "reason": "stream does not define discrete persistent-domain episodes",
+        }
+    _require_equal(id_recovery, expected_id_recovery, "summary.id_only_post_shift_recovery_time", run)
+
+    id_negative = summary.get("id_only_negative_adaptation_rate")
+    if run.reference_trace is None:
+        expected_id_negative = {
+            "status": "reference_required",
+            "reason": "pass --reference_trace from NoAdapt on the identical stream",
+        }
+    else:
+        try:
+            expected_id_negative = compare_trace_id_negative_adaptation(
+                run.run_dir / "trace.jsonl", run.reference_trace,
+                window_size=run.metric_window_size, stride=run.metric_window_stride,
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise IncompleteRunError(f"cannot recompute ID-only negative adaptation: {run.run_id}") from exc
+    _require_equal(id_negative, expected_id_negative, "summary.id_only_negative_adaptation_rate", run)
 
     oracle_present = [all(field in row for field in ORACLE_GRADIENT_TRACE_FIELDS) for row in rows]
     consensus_present = [all(field in row for field in CONSENSUS_TRACE_FIELDS) for row in rows]
@@ -1104,8 +1345,28 @@ def _validate_open_set_evidence(
                 raise IncompleteRunError(
                     f"trace[{line_number}].ramen_vs_oracle_id_sign_disagreement is malformed"
                 )
+            for field in ("consensus_vs_oracle_id_cosine", "consensus_vs_ramen_cosine"):
+                if row[field] is not None and not _is_finite_number(row[field], minimum=-1.0, maximum=1.0):
+                    raise IncompleteRunError(f"trace[{line_number}].{field} is malformed")
+            if row["consensus_vs_oracle_id_sign_disagreement"] is not None and not _is_finite_number(
+                row["consensus_vs_oracle_id_sign_disagreement"], minimum=0.0, maximum=1.0
+            ):
+                raise IncompleteRunError(
+                    f"trace[{line_number}].consensus_vs_oracle_id_sign_disagreement is malformed"
+                )
+            if not _is_finite_number(row["consensus_diagnostic_mask_rate"], minimum=0.0, maximum=1.0):
+                raise IncompleteRunError(f"trace[{line_number}].consensus_diagnostic_mask_rate is malformed")
+            if not isinstance(row["consensus_diagnostic_applied"], bool):
+                raise IncompleteRunError(f"trace[{line_number}].consensus_diagnostic_applied is malformed")
         def oracle_mean(field, transform=lambda value: value):
             values = [transform(row[field]) for row in rows if row[field] is not None]
+            return sum(values) / len(values) if values else None
+        def paired_oracle_mean(ramen_field, consensus_field, transform=lambda value: value):
+            values = [
+                transform(row[ramen_field]) - transform(row[consensus_field])
+                for row in rows
+                if row[ramen_field] is not None and row[consensus_field] is not None
+            ]
             return sum(values) / len(values) if values else None
         expected_oracle = {
             "status": "computed",
@@ -1113,6 +1374,16 @@ def _validate_open_set_evidence(
             "retrieved_ood_weight_fraction_mean": oracle_mean("retrieved_ood_weight_fraction"),
             "gradient_direction_corruption_mean": oracle_mean("ramen_vs_oracle_id_cosine", lambda value: 1.0 - value),
             "sign_disagreement_mean": oracle_mean("ramen_vs_oracle_id_sign_disagreement"),
+            "ramen_gdc_mean": oracle_mean("ramen_vs_oracle_id_cosine", lambda value: 1.0 - value),
+            "consensus_gdc_mean": oracle_mean("consensus_vs_oracle_id_cosine", lambda value: 1.0 - value),
+            "ramen_sdr_mean": oracle_mean("ramen_vs_oracle_id_sign_disagreement"),
+            "consensus_sdr_mean": oracle_mean("consensus_vs_oracle_id_sign_disagreement"),
+            "gdc_reduction_mean": paired_oracle_mean(
+                "ramen_vs_oracle_id_cosine", "consensus_vs_oracle_id_cosine", lambda value: 1.0 - value,
+            ),
+            "sdr_reduction_mean": paired_oracle_mean(
+                "ramen_vs_oracle_id_sign_disagreement", "consensus_vs_oracle_id_sign_disagreement",
+            ),
             "defined_direction_count": sum(row["ramen_vs_oracle_id_cosine"] is not None for row in rows),
         }
         _require_equal(summary.get("oracle_gradient_diagnostics"), expected_oracle,
@@ -1155,10 +1426,17 @@ def validate_completed_run(run: ExperimentRun) -> dict[str, object]:
     """Strictly validate all evidence needed to regard a run as resumable."""
     if not run.run_dir.is_dir():
         raise IncompleteRunError(f"missing evidence directory: {run.run_dir}")
-    current_path, current_hash, current_data = _selected_config(run.config_dir, run.dataset, run.method)
+    current_path, current_hash, current_sha256, current_data = _selected_config(run.config_dir, run.dataset, run.method)
     _require_equal(current_path, run.config_path, "current config path", run)
     _require_equal(current_hash, run.config_hash, "current config hash", run)
+    if run.config_sha256 is not None:
+        _require_equal(current_sha256, run.config_sha256, "current config SHA-256", run)
     _require_equal(current_data, run.config_data, "current config data", run)
+    if run.known_class_split_path is not None or run.known_class_split_sha256 is not None:
+        try:
+            _locked_split_digest(run)
+        except ValueError as exc:
+            raise IncompleteRunError(str(exc)) from exc
     entropy_gate_threshold = _entropy_gate_threshold(run)
 
     manifest = _read_json(run.run_dir / "manifest.json", "manifest")
@@ -1203,6 +1481,16 @@ def validate_completed_run(run: ExperimentRun) -> dict[str, object]:
             "known_class_split": run.known_class_split,
             "ood_ratio": run.ood_ratio,
             "open_set_per_domain_source_budget": run.open_set_per_domain_source_budget,
+        })
+        if run.known_class_split_sha256 is not None:
+            expected_args.update({
+                "known_class_split_path": str(run.known_class_split_path),
+                "known_class_split_sha256": run.known_class_split_sha256,
+            })
+    if run.require_config_lock:
+        expected_args.update({
+            "config_lock_path": str(run.config_path) if run.method != "NoAdapt" and run.config_path else None,
+            "config_lock_sha256": run.config_sha256 if run.method != "NoAdapt" else None,
         })
     for key, expected in expected_args.items():
         _require_equal(args.get(key), expected, f"manifest.args.{key}", run)
@@ -1336,7 +1624,7 @@ def validate_completed_run(run: ExperimentRun) -> dict[str, object]:
                             )
                 elif entropy_gate_threshold is not None:
                     raise IncompleteRunError(
-                        f"EntropyGatedLatentRamen trace lacks complete admission evidence: {run.run_id}"
+                        f"{run.method} trace lacks complete admission evidence: {run.run_id}"
                     )
                 profile_present = [field in row for field in RETRIEVAL_PROFILE_TRACE_FIELDS]
                 if any(profile_present) and not all(profile_present):
@@ -1428,6 +1716,7 @@ def execute_matrix(
                 "dataset", "stream_mode", "seed", "model", "batch_size", "device",
                 "max_eval_samples", "stream_block_size", "metric_window_size", "metric_window_stride", "config_dir",
                 "artifact_provenance", "open_set", "known_class_split", "ood_ratio",
+                "known_class_split_path", "known_class_split_sha256",
                 "open_set_per_domain_source_budget",
                 "data_root",
             ):
@@ -1486,7 +1775,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error("--open-set-consensus has a fixed CIFAR100C method set; do not pass --dataset or --method")
         if args.device != "cuda":
             parser.error("--open-set-consensus requires --device cuda")
-        runs = build_open_set_evidence_matrix(
+        runs = build_canonical_open_set_evidence_matrix(
             streams=args.stream or OPEN_SET_STREAMS,
             seeds=args.seed or OPEN_SET_SEEDS,
             evidence_dir=args.evidence_dir,

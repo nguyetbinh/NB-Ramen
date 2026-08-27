@@ -2,6 +2,7 @@ import torch
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 import argparse
+import hashlib
 import os
 import numpy as np
 import random
@@ -26,10 +27,11 @@ from streams.legacy import build_legacy_torch_iid_stream
 from evaluation import (
     JsonlTraceWriter,
     SUMMARY_SCHEMA_VERSION,
+    compare_trace_id_negative_adaptation,
     compare_trace_negative_adaptation,
     domain_shift_recovery_times,
-    id_accuracy,
-    open_set_metrics,
+    id_only_domain_shift_recovery_times,
+    open_set_detection_summary,
     routing_diagnostics,
     write_run_manifest,
     write_summary,
@@ -48,10 +50,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUN_ID_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')
 OPEN_SET_DATASET_CLASSES = {
     ('CIFAR100C', 'open-set-cifar100-split-v1'): OpenSetCIFAR100C,
+    ('CIFAR100C', 'open-set-cifar100-name-rank-v2'): OpenSetCIFAR100C,
+    ('CIFAR100C', 'open-set-cifar100-name-rank-v3'): OpenSetCIFAR100C,
     ('DomainNet', 'open-set-domainnet-name-rank-v1'): OpenSetDomainNet,
 }
 OPEN_SET_SPLIT_FILENAMES = {
     ('CIFAR100C', 'open-set-cifar100-split-v1'): 'open-set-cifar100-split-v1.json',
+    ('CIFAR100C', 'open-set-cifar100-name-rank-v2'): 'open-set-cifar100-split-v2.json',
+    ('CIFAR100C', 'open-set-cifar100-name-rank-v3'): 'open-set-cifar100-split-v3.json',
     ('DomainNet', 'open-set-domainnet-name-rank-v1'): 'open-set-domainnet-split-v1.json',
 }
 
@@ -183,12 +189,56 @@ def _method_diagnostics(tta_model, batch_size):
         'retrieved_ood_weight_fraction': expand('retrieved_ood_weight_fraction'),
         'ramen_vs_oracle_id_cosine': expand('ramen_vs_oracle_id_cosine'),
         'ramen_vs_oracle_id_sign_disagreement': expand('ramen_vs_oracle_id_sign_disagreement'),
+        'consensus_vs_oracle_id_cosine': expand('consensus_vs_oracle_id_cosine'),
+        'consensus_vs_oracle_id_sign_disagreement': expand('consensus_vs_oracle_id_sign_disagreement'),
+        'consensus_vs_ramen_cosine': expand('consensus_vs_ramen_cosine'),
+        'consensus_diagnostic_mask_rate': expand('consensus_diagnostic_mask_rate'),
+        'consensus_diagnostic_applied': expand('consensus_diagnostic_applied'),
         'consensus_mean_agreement': expand('consensus_mean_agreement'),
         'consensus_p10_agreement': expand('consensus_p10_agreement'),
         'consensus_p50_agreement': expand('consensus_p50_agreement'),
         'consensus_mask_rate': expand('consensus_mask_rate'),
         'consensus_active_class_count': expand('consensus_active_class_count'),
         'consensus_applied': expand('consensus_applied'),
+    }
+
+
+def _oracle_gradient_summary(rows):
+    """Recompute the strict F1 summary block from emitted trace rows."""
+    def mean(field, transform=lambda value: value):
+        values = [transform(row[field]) for row in rows if row[field] is not None]
+        return sum(values) / len(values) if values else None
+
+    ramen_gdc_mean = mean('ramen_vs_oracle_id_cosine', lambda value: 1.0 - value)
+    consensus_gdc_mean = mean('consensus_vs_oracle_id_cosine', lambda value: 1.0 - value)
+    ramen_sdr_mean = mean('ramen_vs_oracle_id_sign_disagreement')
+    consensus_sdr_mean = mean('consensus_vs_oracle_id_sign_disagreement')
+    def paired_mean(ramen_field, consensus_field, transform=lambda value: value):
+        values = [
+            transform(row[ramen_field]) - transform(row[consensus_field])
+            for row in rows
+            if row[ramen_field] is not None and row[consensus_field] is not None
+        ]
+        return sum(values) / len(values) if values else None
+    return {
+        'status': 'computed',
+        'retrieved_ood_fraction_mean': mean('retrieved_ood_fraction'),
+        'retrieved_ood_weight_fraction_mean': mean('retrieved_ood_weight_fraction'),
+        'gradient_direction_corruption_mean': ramen_gdc_mean,
+        'sign_disagreement_mean': ramen_sdr_mean,
+        'ramen_gdc_mean': ramen_gdc_mean,
+        'consensus_gdc_mean': consensus_gdc_mean,
+        'ramen_sdr_mean': ramen_sdr_mean,
+        'consensus_sdr_mean': consensus_sdr_mean,
+        'gdc_reduction_mean': paired_mean(
+            'ramen_vs_oracle_id_cosine', 'consensus_vs_oracle_id_cosine', lambda value: 1.0 - value,
+        ),
+        'sdr_reduction_mean': paired_mean(
+            'ramen_vs_oracle_id_sign_disagreement', 'consensus_vs_oracle_id_sign_disagreement',
+        ),
+        'defined_direction_count': sum(
+            row['ramen_vs_oracle_id_cosine'] is not None for row in rows
+        ),
     }
 
 
@@ -377,6 +427,10 @@ def ordered_stream_test(
                 _sync_device(args.device)
                 batch_latency_ms = (time.perf_counter() - started) * 1000.0
 
+                # ``logits`` are the method's returned, post-adaptation logits;
+                # this deliberately adds no second model forward.
+                post_adaptation_ood_scores = -torch.logsumexp(logits.detach(), dim=1)
+
                 with torch.no_grad():
                     pred = torch.argmax(logits, dim=1)
                     entropy = -(logits.softmax(dim=1) * logits.log_softmax(dim=1)).sum(dim=1)
@@ -456,6 +510,9 @@ def ordered_stream_test(
                 oracle_fields = (
                     'retrieved_ood_fraction', 'retrieved_ood_weight_fraction',
                     'ramen_vs_oracle_id_cosine', 'ramen_vs_oracle_id_sign_disagreement',
+                    'consensus_vs_oracle_id_cosine', 'consensus_vs_oracle_id_sign_disagreement',
+                    'consensus_vs_ramen_cosine', 'consensus_diagnostic_mask_rate',
+                    'consensus_diagnostic_applied',
                 )
                 if oracle_gradient_available and any(
                     diagnostics[field][offset] is None
@@ -518,6 +575,7 @@ def ordered_stream_test(
                             'open_set_split_version': open_set_stream['split_version'],
                             'ood_ratio': float(open_set_stream['requested_ood_ratio']),
                             'pre_adaptation_ood_score': float(ood_scores[offset]),
+                            'post_adaptation_ood_score': float(post_adaptation_ood_scores[offset]),
                         })
                         open_set_rows.append(row)
                     if oracle_gradient_available:
@@ -628,42 +686,21 @@ def ordered_stream_test(
             'predictions': [row['prediction'] for row in open_set_rows],
             'ground_truth_classes': [row['known_label_or_minus_one'] for row in open_set_rows],
             'is_ood': [row['is_ood'] for row in open_set_rows],
-            'ood_scores': [row['pre_adaptation_ood_score'] for row in open_set_rows],
         }
-        try:
-            metrics = open_set_metrics(**metric_kwargs)
-            detection = {
-                'status': 'computed',
-                'score': 'negative_logsumexp_pre_adaptation_logits',
-                'id_accuracy': metrics.id_accuracy,
-                'auroc': metrics.auroc,
-                'fpr95': metrics.fpr_at_95_tpr,
-                'fpr95_threshold': metrics.fpr95_threshold,
-                'ood_recall_at_fpr95': metrics.ood_recall_at_fpr95,
-                'h_score': metrics.h_score,
-                'id_count': metrics.id_count,
-                'ood_count': metrics.ood_count,
-            }
-        except ValueError as exc:
-            id_flags = metric_kwargs['is_ood']
-            detection = {
-                'status': 'unavailable',
-                'reason': str(exc),
-                'score': 'negative_logsumexp_pre_adaptation_logits',
-                'id_accuracy': id_accuracy(
-                    metric_kwargs['predictions'], metric_kwargs['ground_truth_classes'], id_flags,
-                ) if any(not flag for flag in id_flags) else None,
-                'auroc': None,
-                'fpr95': None,
-                'fpr95_threshold': None,
-                'ood_recall_at_fpr95': None,
-                'h_score': None,
-                'id_count': sum(not flag for flag in id_flags),
-                'ood_count': sum(id_flags),
-            }
+        pre_detection = open_set_detection_summary(
+            **metric_kwargs, ood_scores=[row['pre_adaptation_ood_score'] for row in open_set_rows],
+            score='negative_logsumexp_pre_adaptation_logits',
+        )
+        post_detection = open_set_detection_summary(
+            **metric_kwargs, ood_scores=[row['post_adaptation_ood_score'] for row in open_set_rows],
+            score='negative_logsumexp_post_adaptation_logits',
+        )
         valid_id_accs = id_accuracies[~np.isnan(id_accuracies)]
         open_set_summary = {
-            **detection,
+            # Legacy top-level fields remain an exact pre-adaptation view.
+            **pre_detection,
+            'pre_adaptation_detection': pre_detection,
+            'post_adaptation_detection': post_detection,
             'split_version': open_set_stream['split_version'],
             'requested_ood_ratio': open_set_stream['requested_ood_ratio'],
             'realized_ood_ratio': open_set_stream['realized_ood_ratio'],
@@ -698,6 +735,30 @@ def ordered_stream_test(
             'status': 'not_applicable',
             'reason': 'stream does not define discrete persistent-domain episodes',
         }
+    id_only_recovery = None
+    if open_set_stream is not None:
+        if segments is not None:
+            id_only_recovery = {
+                'status': 'not_applicable',
+                'reason': 'single-domain evaluation resets adaptation state at every domain boundary',
+            }
+        elif args.stream_mode in {'block', 'recurring', 'bursty'}:
+            id_only_recovery = {
+                'status': 'computed',
+                'definition': 'ID-only full-window recovery within each original persistent-domain episode',
+                'window_size': args.metric_window_size,
+                'shifts': id_only_domain_shift_recovery_times(
+                    [bool(value) for value in correctness_history],
+                    domain_history,
+                    [row['is_ood'] for row in open_set_rows],
+                    window_size=args.metric_window_size,
+                ),
+            }
+        else:
+            id_only_recovery = {
+                'status': 'not_applicable',
+                'reason': 'stream does not define discrete persistent-domain episodes',
+            }
     if args.reference_trace is not None:
         negative_adaptation = compare_trace_negative_adaptation(
             evidence_paths['trace'],
@@ -711,6 +772,19 @@ def ordered_stream_test(
             'status': 'reference_required',
             'reason': 'pass --reference_trace from NoAdapt on the identical stream',
         }
+    id_only_negative_adaptation = None
+    if open_set_stream is not None:
+        if args.reference_trace is not None:
+            id_only_negative_adaptation = compare_trace_id_negative_adaptation(
+                evidence_paths['trace'], args.reference_trace,
+                window_size=args.metric_window_size, stride=args.metric_window_stride,
+                _expected_reference_sha256=reference_sha256,
+            )
+        else:
+            id_only_negative_adaptation = {
+                'status': 'reference_required',
+                'reason': 'pass --reference_trace from NoAdapt on the identical stream',
+            }
     profile_rows = retrieval_profile_rows
     summary = {
         'schema_version': SUMMARY_SCHEMA_VERSION,
@@ -749,22 +823,10 @@ def ordered_stream_test(
     }
     if open_set_summary is not None:
         summary['open_set'] = open_set_summary
+        summary['id_only_post_shift_recovery_time'] = id_only_recovery
+        summary['id_only_negative_adaptation_rate'] = id_only_negative_adaptation
     if oracle_gradient_rows:
-        def oracle_mean(field, transform=lambda value: value):
-            values = [transform(row[field]) for row in oracle_gradient_rows if row[field] is not None]
-            return sum(values) / len(values) if values else None
-        summary['oracle_gradient_diagnostics'] = {
-            'status': 'computed',
-            'retrieved_ood_fraction_mean': oracle_mean('retrieved_ood_fraction'),
-            'retrieved_ood_weight_fraction_mean': oracle_mean('retrieved_ood_weight_fraction'),
-            'gradient_direction_corruption_mean': oracle_mean(
-                'ramen_vs_oracle_id_cosine', lambda value: 1.0 - value,
-            ),
-            'sign_disagreement_mean': oracle_mean('ramen_vs_oracle_id_sign_disagreement'),
-            'defined_direction_count': sum(
-                row['ramen_vs_oracle_id_cosine'] is not None for row in oracle_gradient_rows
-            ),
-        }
+        summary['oracle_gradient_diagnostics'] = _oracle_gradient_summary(oracle_gradient_rows)
     if consensus_rows:
         def consensus_mean(field):
             return sum(row[field] for row in consensus_rows) / len(consensus_rows)
@@ -853,9 +915,12 @@ def main(args):
     print("Loading datasets...")
     if open_set:
         dataset_class = _open_set_dataset_class(args.dataset, args.known_class_split)
+        split_kwargs = {'split_path': getattr(args, 'known_class_split_path', None)}
+        if args.dataset == 'CIFAR100C':
+            split_kwargs['split_sha256'] = getattr(args, 'known_class_split_sha256', None)
         datasets = dataset_class(
             root=args.data_root, transform=preprocess,
-            split_path=getattr(args, 'known_class_split_path', None),
+            **split_kwargs,
         )
     else:
         datasets = get_dataset_class(args.dataset)(root=args.data_root, transform=preprocess)
@@ -1009,6 +1074,15 @@ def args_parser():
         help='versioned open-set split identifier for the selected dataset',
     )
     parser.add_argument(
+        '--known_class_split_path', '--known-class-split-path', dest='known_class_split_path', type=str, default=None,
+        help='optional exact registered split JSON path; mismatches are rejected',
+    )
+    parser.add_argument(
+        '--known_class_split_sha256', '--known-class-split-sha256',
+        dest='known_class_split_sha256', type=str, default=None,
+        help='full SHA-256 lock for the exact split JSON bytes; requires an explicit split path',
+    )
+    parser.add_argument(
         '--ood_ratio', type=float, default=0.0,
         help='exact per-domain OOD fraction for an open-set stream',
     )
@@ -1040,6 +1114,14 @@ def args_parser():
                         help='Number of threads')
 
     parser.add_argument('--config', type=str, default=str(PROJECT_ROOT / 'cfg'))
+    parser.add_argument(
+        '--config-lock-path', type=str, default=None,
+        help='canonical config file selected when this run was planned',
+    )
+    parser.add_argument(
+        '--config-lock-sha256', type=str, default=None,
+        help='full SHA-256 of the exact config bytes selected when this run was planned',
+    )
 
     parser.add_argument('--save_to', type=str, default=str(PROJECT_ROOT / 'log' / 'default.csv'))
 
@@ -1083,6 +1165,10 @@ def args_parser():
     args = parser.parse_args()
 
     args.data_root = str(Path(args.data_root).expanduser().resolve())
+    split_lock_values = (args.known_class_split_path, args.known_class_split_sha256)
+    if any(value is not None for value in split_lock_values) and not all(
+            value is not None for value in split_lock_values):
+        parser.error('--known-class-split-path and --known-class-split-sha256 must be provided together')
     if args.open_set:
         if args.tta_mode != 'mixed':
             parser.error('--open_set requires --tta_mode mixed')
@@ -1097,16 +1183,33 @@ def args_parser():
         if (args.open_set_per_domain_source_budget is not None
                 and args.open_set_per_domain_source_budget <= 0):
             parser.error('--open_set_per_domain_source_budget must be a positive integer')
-        args.known_class_split_path = str(
+        expected_split_path = (
             PROJECT_ROOT / 'cfg' / 'research'
             / OPEN_SET_SPLIT_FILENAMES[(args.dataset, args.known_class_split)]
-        )
+        ).resolve()
+        if args.known_class_split_path is not None and (
+                Path(args.known_class_split_path).expanduser().resolve() != expected_split_path):
+            parser.error('--known_class_split_path does not match the registered split JSON')
+        if args.known_class_split_sha256 is not None:
+            args.known_class_split_sha256 = args.known_class_split_sha256.lower()
+            if re.fullmatch(r'[0-9a-f]{64}', args.known_class_split_sha256) is None:
+                parser.error('--known-class-split-sha256 must be a full 64-character SHA-256 hexadecimal digest')
+            try:
+                actual_split_sha256 = hashlib.sha256(expected_split_path.read_bytes()).hexdigest()
+            except OSError as exc:
+                parser.error(f'cannot read registered split JSON: {expected_split_path}: {exc}')
+            if actual_split_sha256 != args.known_class_split_sha256:
+                parser.error('--known-class-split-sha256 does not match the registered split JSON bytes')
+        args.known_class_split_path = str(expected_split_path)
     else:
+        if all(value is not None for value in split_lock_values):
+            parser.error('--known-class-split-path/sha256 require --open_set')
         if args.ood_ratio != 0.0:
             parser.error('--ood_ratio requires --open_set')
         if args.open_set_per_domain_source_budget is not None:
             parser.error('--open_set_per_domain_source_budget requires --open_set')
         args.known_class_split_path = None
+        args.known_class_split_sha256 = None
     if args.tta_algo in {'OracleIDGradientRamen', 'OracleDropOODRamen', 'OracleConsensusRamen'} and not args.open_set:
         parser.error(f'--tta_algo {args.tta_algo} requires --open_set evaluator labels')
 
@@ -1156,6 +1259,14 @@ def args_parser():
         parser.error('--legacy_mixed_order requires --tta_mode mixed --stream_mode iid_mixed')
 
     args.config_dir = str(Path(args.config).expanduser().resolve())
+    lock_values = (args.config_lock_path, args.config_lock_sha256)
+    if any(value is not None for value in lock_values) and not all(value is not None for value in lock_values):
+        parser.error('--config-lock-path and --config-lock-sha256 must be provided together')
+    if args.config_lock_sha256 is not None:
+        args.config_lock_sha256 = args.config_lock_sha256.lower()
+        if re.fullmatch(r'[0-9a-f]{64}', args.config_lock_sha256) is None:
+            parser.error('--config-lock-sha256 must be a full 64-character SHA-256 hexadecimal digest')
+        args.config_lock_path = str(Path(args.config_lock_path).expanduser().resolve())
     filepaths = [
         os.path.join(args.config_dir, args.dataset, args.tta_algo + '.yaml'),
         os.path.join(args.config_dir, 'default', args.tta_algo + '.yaml'),
@@ -1166,15 +1277,32 @@ def args_parser():
     args.config_path = None
     for filepath in filepaths:
         if os.path.exists(filepath):
-            print('Loading config from {}'.format(filepath))
-            with open(filepath, 'r') as f:
-                args.config = yaml.safe_load(f)
-            args.config_path = filepath
+            selected_path = Path(filepath).resolve()
+            # Read exactly once: the digest checked by a planned launch is the
+            # same byte sequence handed to YAML, closing hash/parse TOCTOU.
+            try:
+                raw_config = selected_path.read_bytes()
+            except OSError as exc:
+                parser.error(f'cannot read resolved config: {selected_path}: {exc}')
+            if args.config_lock_path is not None:
+                if str(selected_path) != args.config_lock_path:
+                    parser.error(
+                        '--config-lock-path does not match the resolved dataset/method config: '
+                        f'{selected_path}'
+                    )
+                actual_digest = hashlib.sha256(raw_config).hexdigest()
+                if actual_digest != args.config_lock_sha256:
+                    parser.error('--config-lock-sha256 does not match the resolved config bytes')
+            print('Loading config from {}'.format(selected_path))
+            args.config = yaml.safe_load(raw_config)
+            args.config_path = str(selected_path)
 
             found_yaml = True
             break
 
     if not found_yaml:
+        if args.config_lock_path is not None:
+            parser.error('--config lock requires the resolved dataset/method config to exist')
         args.config = {}
 
     args.max_batch_size = args.batch_size

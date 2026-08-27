@@ -19,8 +19,10 @@ from evaluation.evidence import (  # noqa: E402
     TRACE_REQUIRED_FIELDS,
     TRACE_SCHEMA_VERSION,
 )
-from main import ordered_stream_test  # noqa: E402
+from main import _oracle_gradient_summary, ordered_stream_test  # noqa: E402
+from methods.NoAdapt import NoAdapt  # noqa: E402
 from streams import (  # noqa: E402
+    build_open_set_stream,
     build_single_domain_stream,
     build_stream,
     verify_stream_fingerprint,
@@ -53,6 +55,9 @@ class TensorMultiDomainDataset:
             TensorDomainDataset(1, [1, 0]),
         )
         self.environments = ("clear", "shifted")
+        self.open_set_split_version = "ordered-stream-test-split-v1"
+        self.known_class_ids = (0,)
+        self.unknown_class_ids = (1,)
 
     def __len__(self):
         return len(self.datasets)
@@ -94,9 +99,123 @@ class MixedMemoryAvailabilityMethod(DiagnosticMethod):
         return logits
 
 
+def _base_open_set_logits(images):
+    """Give ID and OOD rows distinct, deterministic base-model energies."""
+    is_unknown = images[:, 0].to(torch.bool)
+    logits = torch.empty((len(images), 2), device=images.device)
+    logits[~is_unknown] = torch.tensor([3.0, -3.0], device=images.device)
+    logits[is_unknown] = torch.tensor([-1.0, -1.0], device=images.device)
+    return logits
+
+
+class CountingLogitModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.forward_calls = 0
+
+    def forward(self, images):
+        self.forward_calls += 1
+        return _base_open_set_logits(images)
+
+
+class AdaptedReturnedLogitsMethod:
+    """Expose base energy as pre-adaptation evidence, then return changed logits."""
+
+    def __init__(self):
+        self.forward_calls = 0
+        self._diagnostics = {}
+
+    def __call__(self, images):
+        self.forward_calls += 1
+        pre_logits = _base_open_set_logits(images)
+        self._diagnostics = {
+            "pre_adaptation_ood_score": -torch.logsumexp(pre_logits.detach(), dim=1),
+        }
+        # A sample-dependent common logit shift preserves predictions while
+        # deliberately changing the returned-logit energy on OOD rows.
+        return pre_logits + images[:, :1] * 4.0
+
+    def get_diagnostics(self):
+        return self._diagnostics
+
+    def reset(self):
+        pass
+
+
 class OrderedStreamEvidenceTests(unittest.TestCase):
     def setUp(self):
         self.datasets = TensorMultiDomainDataset()
+
+    def test_oracle_reductions_use_only_paired_defined_rows(self):
+        rows = [
+            {"ramen_vs_oracle_id_cosine": 0.0, "consensus_vs_oracle_id_cosine": 0.3,
+             "ramen_vs_oracle_id_sign_disagreement": 0.8,
+             "consensus_vs_oracle_id_sign_disagreement": 0.5,
+             "retrieved_ood_fraction": 0.0, "retrieved_ood_weight_fraction": 0.0},
+            {"ramen_vs_oracle_id_cosine": 0.0, "consensus_vs_oracle_id_cosine": None,
+             "ramen_vs_oracle_id_sign_disagreement": 0.8,
+             "consensus_vs_oracle_id_sign_disagreement": None,
+             "retrieved_ood_fraction": 0.0, "retrieved_ood_weight_fraction": 0.0},
+        ]
+        summary = _oracle_gradient_summary(rows)
+        self.assertAlmostEqual(0.3, summary["gdc_reduction_mean"])
+        self.assertAlmostEqual(0.3, summary["sdr_reduction_mean"])
+
+    def _open_set_stream(self):
+        return build_open_set_stream(
+            self.datasets, "iid_mixed", seed=7, ood_ratio=0.5,
+        )
+
+    @staticmethod
+    def _trace_rows(paths):
+        return [json.loads(line) for line in paths["trace"].read_text().splitlines()]
+
+    def test_noadapt_pre_and_post_scores_are_equal_without_an_extra_forward(self):
+        stream = self._open_set_stream()
+        method = object.__new__(NoAdapt)
+        torch.nn.Module.__init__(method)
+        method.model = CountingLogitModel()
+        method.last_diagnostics = {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self._paths(directory)
+            ordered_stream_test(
+                self.datasets, method, self._args("iid_mixed"), paths, stream,
+            )
+            rows = self._trace_rows(paths)
+            summary = json.loads(paths["summary"].read_text())
+
+        expected_calls = math.ceil(len(stream) / self._args("iid_mixed").batch_size)
+        self.assertEqual(expected_calls, method.model.forward_calls)
+        for row in rows:
+            self.assertEqual(
+                row["pre_adaptation_ood_score"], row["post_adaptation_ood_score"],
+            )
+        pre = summary["open_set"]["pre_adaptation_detection"]
+        post = summary["open_set"]["post_adaptation_detection"]
+        for field in ("auroc", "fpr95", "fpr95_threshold", "ood_recall_at_fpr95", "h_score"):
+            self.assertEqual(pre[field], post[field])
+
+    def test_post_score_uses_adapted_returned_logits_and_remains_single_call(self):
+        stream = self._open_set_stream()
+        method = AdaptedReturnedLogitsMethod()
+
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self._paths(directory)
+            ordered_stream_test(
+                self.datasets, method, self._args("iid_mixed"), paths, stream,
+            )
+            rows = self._trace_rows(paths)
+            summary = json.loads(paths["summary"].read_text())
+
+        expected_calls = math.ceil(len(stream) / self._args("iid_mixed").batch_size)
+        self.assertEqual(expected_calls, method.forward_calls)
+        id_rows = [row for row in rows if not row["is_ood"]]
+        ood_rows = [row for row in rows if row["is_ood"]]
+        self.assertTrue(all(row["pre_adaptation_ood_score"] == row["post_adaptation_ood_score"] for row in id_rows))
+        self.assertTrue(all(row["pre_adaptation_ood_score"] != row["post_adaptation_ood_score"] for row in ood_rows))
+        self.assertEqual(1.0, summary["open_set"]["pre_adaptation_detection"]["auroc"])
+        self.assertEqual(0.0, summary["open_set"]["post_adaptation_detection"]["auroc"])
 
     @staticmethod
     def _args(stream_mode):

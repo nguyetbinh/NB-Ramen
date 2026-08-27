@@ -12,9 +12,24 @@ def _evidence(run, *, fingerprint="paired"):
         "open_set": {
             "status": "computed", "id_accuracy": 0.5, "auroc": 0.7, "fpr95": 0.2,
             "h_score": 0.4, "worst_domain_id_accuracy": 0.3,
+            "pre_adaptation_detection": {
+                "status": "computed", "auroc": 0.7, "fpr95": 0.2, "h_score": 0.4,
+                "ood_recall_at_fpr95": 0.95,
+            },
+            "post_adaptation_detection": {
+                "status": "computed", "auroc": 0.6, "fpr95": 0.3, "h_score": 0.35,
+                "ood_recall_at_fpr95": 1.0,
+            },
         },
         "negative_adaptation_rate": {"status": "computed", "value": 0.25},
+        "id_only_negative_adaptation_rate": {
+            "status": "computed", "value": 0.25, "retained_id_samples": 50,
+            "negative_windows": 1, "total_windows": 4, "window_size": 10, "stride": 10,
+        },
         "post_shift_recovery_time": {
+            "status": "computed", "shifts": [{"status": "recovered", "recovery_samples": 4}],
+        },
+        "id_only_post_shift_recovery_time": {
             "status": "computed", "shifts": [{"status": "recovered", "recovery_samples": 4}],
         },
         "forward_latency": {
@@ -29,6 +44,9 @@ def _evidence(run, *, fingerprint="paired"):
     if run.method in {"OracleDropOODRamen", "OracleIDGradientRamen"}:
         summary["oracle_gradient_diagnostics"] = {
             "gradient_direction_corruption_mean": 0.1, "sign_disagreement_mean": 0.2,
+            "ramen_gdc_mean": 0.1, "consensus_gdc_mean": 0.05,
+            "ramen_sdr_mean": 0.2, "consensus_sdr_mean": 0.1,
+            "gdc_reduction_mean": 0.05, "sdr_reduction_mean": 0.1,
         }
     if run.method in {"ConsensusRamen", "OracleConsensusRamen"}:
         summary["consensus_diagnostics"] = {
@@ -54,11 +72,17 @@ class OpenSetConsensusAnalysisTests(unittest.TestCase):
         report = analyse_open_set_completed_runs([(run, _evidence(run)) for run in runs])
         ramen = report["comparisons"][0]["methods"]["Ramen"]
         self.assertEqual(0.3, ramen["worst_domain_id_accuracy"])
-        self.assertEqual({"status": "computed", "rate": 0.25}, ramen["stability"]["negative_adaptation"])
+        self.assertEqual({
+            "status": "computed", "rate": 0.25, "retained_id_samples": 50,
+            "negative_windows": 1, "total_windows": 4,
+        }, ramen["stability"]["negative_adaptation"])
         self.assertEqual("computed", ramen["stability"]["post_shift_recovery"]["status"])
         self.assertEqual(100.0, ramen["cost"]["synchronized_forward_latency"]["total_ms"])
         self.assertEqual(1024, ramen["cost"]["retained_memory"]["max_retained_bytes"])
         self.assertEqual(500.0, ramen["cost"]["throughput"]["samples_per_second"])
+        self.assertEqual(0.95, ramen["ood_recall_at_fpr95"])
+        self.assertEqual(1.0, ramen["post_adaptation_ood_recall_at_fpr95"])
+        self.assertEqual(1.0, ramen["post_adaptation_detection"]["ood_recall_at_fpr95"])
 
     def test_accepts_ratio_zero_explicitly_unavailable_detection_metrics(self):
         runs = build_open_set_evidence_matrix(streams=("block",), ood_ratios=(0.0,), seeds=(0,))
@@ -69,9 +93,18 @@ class OpenSetConsensusAnalysisTests(unittest.TestCase):
                 "status": "unavailable", "reason": "OOD metrics require at least one OOD sample",
                 "auroc": None, "fpr95": None, "h_score": None,
             })
+            for phase, score in (("pre_adaptation_detection", "negative_logsumexp_pre_adaptation_logits"),
+                                 ("post_adaptation_detection", "negative_logsumexp_post_adaptation_logits")):
+                block[phase] = {
+                    "status": "unavailable", "reason": "OOD metrics require at least one OOD sample",
+                    "score": score, "auroc": None, "fpr95": None, "h_score": None,
+                    "ood_recall_at_fpr95": None,
+                }
         metrics = analyse_open_set_completed_runs(completed)["comparisons"][0]["methods"]
         self.assertIsNone(metrics["Ramen"]["auroc"])
         self.assertIsNone(metrics["ConsensusRamen"]["fpr95"])
+        self.assertIsNone(metrics["Ramen"]["ood_recall_at_fpr95"])
+        self.assertIsNone(metrics["Ramen"]["post_adaptation_ood_recall_at_fpr95"])
 
     def test_reports_paired_consensus_overhead_without_claiming_isolated_time(self):
         runs = build_open_set_evidence_matrix(streams=("block",), ood_ratios=(0.5,), seeds=(0,))
@@ -93,6 +126,33 @@ class OpenSetConsensusAnalysisTests(unittest.TestCase):
         completed = [(run, _evidence(run)) for run in runs]
         completed[0][1]["summary"].pop("method_memory")
         with self.assertRaisesRegex(ValueError, "summary method_memory missing"):
+            analyse_open_set_completed_runs(completed)
+
+    def test_rejects_malformed_computed_id_stability_counts(self):
+        runs = build_open_set_evidence_matrix(streams=("block",), ood_ratios=(0.5,), seeds=(0,))
+        for field, value in (("retained_id_samples", True), ("total_windows", 0),
+                             ("negative_windows", 5)):
+            with self.subTest(field=field):
+                completed = [(run, _evidence(run)) for run in runs]
+                completed[0][1]["summary"]["id_only_negative_adaptation_rate"][field] = value
+                with self.assertRaisesRegex(ValueError, "counts are invalid"):
+                    analyse_open_set_completed_runs(completed)
+
+    def test_preserves_and_validates_insufficient_id_stability_counts(self):
+        runs = build_open_set_evidence_matrix(streams=("block",), ood_ratios=(0.5,), seeds=(0,))
+        completed = [(run, _evidence(run)) for run in runs]
+        for _, evidence in completed:
+            evidence["summary"]["id_only_negative_adaptation_rate"] = {
+                "status": "insufficient_id_samples", "value": None,
+                "retained_id_samples": 7, "total_windows": 0, "negative_windows": 0,
+            }
+        stability = analyse_open_set_completed_runs(completed)["comparisons"][0]["methods"]["Ramen"]["stability"]
+        self.assertEqual({
+            "status": "insufficient_id_samples", "rate": None,
+            "retained_id_samples": 7, "total_windows": 0, "negative_windows": 0,
+        }, stability["negative_adaptation"])
+        completed[0][1]["summary"]["id_only_negative_adaptation_rate"]["negative_windows"] = True
+        with self.assertRaisesRegex(ValueError, "counts are invalid"):
             analyse_open_set_completed_runs(completed)
 
     def test_rejects_evaluator_context_on_consensus(self):

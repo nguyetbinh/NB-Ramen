@@ -43,7 +43,7 @@ DOMAINNET_OPEN_SET_SEEDS = (0, 1, 2)
 DOMAINNET_OPEN_SET_METHODS = (
     "NoAdapt",
     "Ramen",
-    "EntropyGatedLatentRamen",
+    "EntropyGatedRamen",
     "OracleDropOODRamen",
     "OracleIDGradientRamen",
     "ConsensusRamen",
@@ -68,7 +68,7 @@ def _exact(value: Iterable[object], expected: tuple[object, ...], label: str) ->
 def _validate_inputs(
     *, streams: Iterable[str], ood_ratios: Iterable[float], seeds: Iterable[int],
     methods: Iterable[str], device: str, max_eval_samples: int | None,
-    artifact_provenance: str, per_domain_source_budget: int,
+    stream_block_size: int, artifact_provenance: str, per_domain_source_budget: int,
 ) -> None:
     _exact(streams, DOMAINNET_OPEN_SET_STREAMS, "streams")
     _exact(ood_ratios, DOMAINNET_OPEN_SET_OOD_RATIOS, "OOD ratios")
@@ -78,6 +78,8 @@ def _validate_inputs(
         raise ValueError("canonical DomainNet open-set matrix requires device='cuda'")
     if max_eval_samples is not None:
         raise ValueError("canonical DomainNet open-set matrix requires full streams (max_eval_samples=None)")
+    if stream_block_size != 64:
+        raise ValueError("canonical DomainNet open-set matrix requires stream_block_size=64")
     if artifact_provenance not in {"fast", "exact"}:
         raise ValueError("canonical DomainNet open-set matrix requires artifact_provenance='fast' or 'exact'")
     if per_domain_source_budget != DOMAINNET_OPEN_SET_PER_DOMAIN_SOURCE_BUDGET:
@@ -104,6 +106,8 @@ def _validate_configs(runs: Iterable[ExperimentRun]) -> None:
         required_keys = {"max_capacity", "topk", "beta", "optimizer", "lr"}
         if missing := sorted(required_keys.difference(run.config_data)):
             raise ValueError(f"DomainNet open-set config is incomplete for {run.method}: " + ", ".join(missing))
+        if run.method == "EntropyGatedRamen" and run.config_data.get("max_normalized_entropy") != 0.5:
+            raise ValueError("canonical DomainNet EntropyGatedRamen config must set max_normalized_entropy: 0.50")
         if run.method.startswith("Oracle") and run.config_data.get("oracle_ood_source") != "evaluator_is_ood":
             raise ValueError(f"DomainNet oracle config must declare evaluator_is_ood: {run.method}")
         if run.method in {"ConsensusRamen", "OracleConsensusRamen"}:
@@ -149,6 +153,7 @@ def build_domainnet_open_set_evidence_matrix(
     _validate_inputs(
         streams=streams, ood_ratios=ratios, seeds=seeds, methods=methods,
         device=device, max_eval_samples=max_eval_samples,
+        stream_block_size=stream_block_size,
         artifact_provenance=artifact_provenance,
         per_domain_source_budget=per_domain_source_budget,
     )
