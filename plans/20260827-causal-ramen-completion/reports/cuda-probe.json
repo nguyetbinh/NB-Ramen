@@ -1,0 +1,1 @@
+{"cuda_device_count": 0, "cuda_is_available": false, "mps_is_available": true, "platform": "macOS-15.7.7-arm64-arm-64bit", "torch_cuda_version": null, "torch_version": "2.4.1"}

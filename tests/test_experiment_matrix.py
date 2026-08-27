@@ -327,7 +327,10 @@ class ExperimentMatrixTests(unittest.TestCase):
                 "number_of_discovered_contexts": 1, "assignment_churn_rate": 0.0,
             }
             summary["method_memory"] = {
-                "status": "computed", "definition": "exact bytes retained by the method support memory after each causal sample update",
+                "status": "computed", "definition": (
+                    "exact bytes retained by the method support memory at the state exposed for each emitted sample; "
+                    "batch-atomic methods repeat the post-admission batch state"
+                ),
                 "unit": "bytes", "max_retained_bytes": 32, "final_retained_bytes": 32,
             }
             summary_path.write_text(json.dumps(summary))
@@ -350,7 +353,7 @@ class ExperimentMatrixTests(unittest.TestCase):
                 seeds=(0,), evidence_dir=directory, data_root=directory, device="cpu", max_eval_samples=1,
             )
         self.assertEqual(["NoAdapt", "EntropyGatedLatentRamen"], [run.method for run in runs])
-        self.assertEqual(300, len(build_experiment_matrix(seeds=(0, 1, 2), max_eval_samples=1)))
+        self.assertEqual(330, len(build_experiment_matrix(seeds=(0, 1, 2), max_eval_samples=1)))
 
     def test_admission_evidence_summary_is_recomputed_and_tamper_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -439,11 +442,11 @@ class ExperimentMatrixTests(unittest.TestCase):
     def test_full_grid_cardinality_order_and_baseline_pairing(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             runs = build_experiment_matrix(seeds=(1, 7), evidence_dir=temporary_directory)
-        self.assertEqual(2 * 5 * 2 * 10, len(runs))
-        first_cell = runs[:10]
+        self.assertEqual(2 * 5 * 2 * 11, len(runs))
+        first_cell = runs[:11]
         self.assertEqual(
             [
-                "NoAdapt", "Tent", "Ramen", "CausalRamen", "RandomMemoryRamen",
+                "NoAdapt", "Tent", "Ramen", "CausalRamen", "StructuredAtomicRamen", "RandomMemoryRamen",
                 "SameClassRamen", "GlobalNearestRamen", "ContextOnlyRamen",
                 "OracleLatentRamen", "LatentRamen",
             ],
@@ -453,6 +456,58 @@ class ExperimentMatrixTests(unittest.TestCase):
         self.assertTrue(all(run.reference_trace == baseline_trace for run in first_cell[1:]))
         self.assertTrue(all(run.device == "auto" and run.max_eval_samples is None for run in first_cell))
         self.assertTrue(all(run.stream_block_size == 64 for run in first_cell))
+
+    def test_default_batch_size_preserves_identity_and_command(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            default = build_experiment_matrix(
+                datasets=("CIFAR100C",), streams=("block",), methods=("NoAdapt",), seeds=(3,),
+                evidence_dir=temporary_directory,
+            )[0]
+            explicit = build_experiment_matrix(
+                datasets=("CIFAR100C",), streams=("block",), methods=("NoAdapt",), seeds=(3,),
+                evidence_dir=temporary_directory, batch_size=100,
+            )[0]
+        self.assertEqual(100, default.batch_size)
+        self.assertEqual(default.run_id, explicit.run_id)
+        self.assertNotIn("-bs-", default.run_id)
+        self.assertEqual("100", build_command(default)[build_command(default).index("--batch_size") + 1])
+
+    def test_nondefault_batch_size_binds_identity_command_and_resume_validation(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            default = build_experiment_matrix(
+                datasets=("CIFAR100C",), streams=("block",), methods=("NoAdapt",), seeds=(3,),
+                evidence_dir=temporary_directory, data_root=temporary_directory, device="cpu",
+            )[0]
+            atomic = build_experiment_matrix(
+                datasets=("CIFAR100C",), streams=("block",), methods=("NoAdapt",), seeds=(3,),
+                evidence_dir=temporary_directory, data_root=temporary_directory, device="cpu", batch_size=1,
+            )[0]
+            self.assertNotEqual(default.run_id, atomic.run_id)
+            self.assertIn("-bs-1-", atomic.run_id)
+            command = build_command(atomic)
+            self.assertEqual("1", command[command.index("--batch_size") + 1])
+            with self.assertRaisesRegex(ValueError, "batch_size override"):
+                build_command(atomic, batch_size=100)
+            _write_valid_evidence(atomic)
+            validate_completed_run(atomic)
+            manifest_path = atomic.run_dir / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["args"]["batch_size"] = 100
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(IncompleteRunError, "manifest.args.batch_size"):
+                validate_completed_run(atomic)
+
+    def test_matrix_cli_plans_nondefault_batch_size(self):
+        with tempfile.TemporaryDirectory() as temporary_directory, contextlib.redirect_stdout(io.StringIO()) as output:
+            result = matrix_main([
+                "--dataset", "CIFAR100C", "--stream", "block", "--method", "NoAdapt", "--seed", "3",
+                "--evidence-dir", temporary_directory, "--batch-size", "1",
+            ])
+        self.assertEqual(0, result)
+        payload = json.loads(output.getvalue())
+        self.assertIn("-bs-1-", payload["runs"][0]["run_id"])
+        command = payload["commands"][0]
+        self.assertEqual("1", command[command.index("--batch_size") + 1])
 
     def test_default_block_size_preserves_canonical_identity_and_command(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -968,7 +1023,10 @@ class ExperimentMatrixTests(unittest.TestCase):
             _mutate_trace(run, lambda row: row.__setitem__("memory_bytes", 64))
             expected = {
                 "status": "computed",
-                "definition": "exact bytes retained by the method support memory after each causal sample update",
+                "definition": (
+                    "exact bytes retained by the method support memory at the state exposed for each emitted sample; "
+                    "batch-atomic methods repeat the post-admission batch state"
+                ),
                 "unit": "bytes",
                 "max_retained_bytes": 64,
                 "final_retained_bytes": 64,

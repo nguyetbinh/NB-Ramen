@@ -92,6 +92,21 @@ through a path-safe `blk-N` token. Strict resume requires the manifest argument
 and exported stream `metadata.block_size` to equal the planned block size.
 Negative-adaptation references require the same block size as the current run.
 
+## Evaluator batch-size identity
+
+The matrix accepts `--batch-size` and otherwise preserves each dataset's
+default evaluator batch size (currently 100). The default is canonical and
+keeps established run IDs unchanged. A nondefault value binds the run identity
+through a `bs-N` token, is forwarded to `src/main.py` as `--batch_size`, and is
+required to match the persisted manifest during strict resume and paired
+baseline validation. Consequently, runs such as `B=1` and `B=100` cannot share
+an evidence directory or resume one another.
+
+Retained support-memory bytes use a schedule-neutral trace definition. Strictly
+causal methods expose the state after each sample update. Batch-atomic methods
+repeat the post-admission batch state for every sample emitted from that batch;
+the repeated values are not a claim that admission happened sample by sample.
+
 For verified runs, the same fast/exact checks run immediately before loading
 and again after model and dataset construction; the reports must be identical
 before the manifest is created. The model loader receives the exact verified

@@ -73,6 +73,7 @@ DEFAULT_METHODS = (
     "Tent",
     "Ramen",
     "CausalRamen",
+    "StructuredAtomicRamen",
     "RandomMemoryRamen",
     "SameClassRamen",
     "GlobalNearestRamen",
@@ -228,6 +229,7 @@ def make_run_id(
     config_hash: str = MISSING_CONFIG_HASH,
     artifact_provenance: str = "fast",
     data_root: str | Path = "~/data",
+    batch_size: int | None = None,
 ) -> str:
     """Return a stable, conservative ID suitable for use as one path segment."""
     budget = "full" if max_eval_samples is None else f"n{max_eval_samples}"
@@ -235,7 +237,13 @@ def make_run_id(
     data_root_hash = hashlib.sha256(canonical_data_root.encode("utf-8")).hexdigest()[:CONFIG_HASH_LENGTH]
     if not isinstance(stream_block_size, int) or isinstance(stream_block_size, bool) or stream_block_size <= 0:
         raise ValueError("stream_block_size must be a positive integer")
+    if batch_size is not None and (
+        not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size <= 0
+    ):
+        raise ValueError("batch_size must be a positive integer")
+    default_batch_size = BATCH_SIZE_BY_DATASET.get(dataset)
     tokens = (dataset, stream_mode, "seed", _seed_token(seed), method, "dev", device, budget,
+              *(("bs", batch_size) if batch_size is not None and batch_size != default_batch_size else ()),
               *(("blk", stream_block_size) if stream_block_size != 64 else ()),
               "cfg", config_hash, "prov", artifact_provenance, "data", data_root_hash)
     normalized = []
@@ -261,6 +269,7 @@ def build_experiment_matrix(
     evidence_dir: str | Path = REPOSITORY_ROOT / "evidence",
     device: str = "auto",
     max_eval_samples: int | None = None,
+    batch_size: int | None = None,
     stream_block_size: int = 64,
     config_dir: str | Path = REPOSITORY_ROOT / "cfg",
     artifact_provenance: str = "fast",
@@ -290,6 +299,10 @@ def build_experiment_matrix(
         not isinstance(max_eval_samples, int) or isinstance(max_eval_samples, bool) or max_eval_samples <= 0
     ):
         raise ValueError("max_eval_samples must be a positive integer")
+    if batch_size is not None and (
+        not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size <= 0
+    ):
+        raise ValueError("batch_size must be a positive integer")
     if not isinstance(stream_block_size, int) or isinstance(stream_block_size, bool) or stream_block_size <= 0:
         raise ValueError("stream_block_size must be a positive integer")
     if stream_block_size != 64 and max_eval_samples is None:
@@ -306,6 +319,7 @@ def build_experiment_matrix(
     metric_window = min(50, max_eval_samples) if max_eval_samples is not None else 50
     runs: list[ExperimentRun] = []
     for dataset in datasets:
+        dataset_batch_size = BATCH_SIZE_BY_DATASET[dataset] if batch_size is None else batch_size
         for stream_mode in streams:
             for seed in seeds:
                 _, baseline_hash, _ = _selected_config(configs, dataset, "NoAdapt")
@@ -313,6 +327,7 @@ def build_experiment_matrix(
                     dataset, stream_mode, seed, "NoAdapt", device=device,
                     max_eval_samples=max_eval_samples, config_hash=baseline_hash, artifact_provenance=artifact_provenance,
                     data_root=canonical_data_root, stream_block_size=stream_block_size,
+                    batch_size=dataset_batch_size,
                 )
                 baseline_trace = root / baseline_id / "trace.jsonl"
                 for method in ordered_methods:
@@ -327,9 +342,10 @@ def build_experiment_matrix(
                             max_eval_samples=max_eval_samples, config_hash=config_hash,
                             artifact_provenance=artifact_provenance,
                             data_root=canonical_data_root, stream_block_size=stream_block_size,
+                            batch_size=dataset_batch_size,
                         ),
                         model=MODEL_BY_DATASET[dataset],
-                        batch_size=BATCH_SIZE_BY_DATASET[dataset],
+                        batch_size=dataset_batch_size,
                         evidence_dir=root,
                         data_root=canonical_data_root,
                         device=device,
@@ -363,6 +379,7 @@ def build_command(
     device: str | None = None,
     config_dir: str | Path | None = None,
     max_eval_samples: object = _UNSET,
+    batch_size: object = _UNSET,
     stream_block_size: object = _UNSET,
 ) -> list[str]:
     """Build an argv list for one run; callers may pass it to subprocess safely."""
@@ -372,6 +389,8 @@ def build_command(
         raise ValueError("config_dir override contradicts planned identity")
     if max_eval_samples is not _UNSET and max_eval_samples != run.max_eval_samples:
         raise ValueError("max_eval_samples override contradicts planned identity")
+    if batch_size is not _UNSET and batch_size != run.batch_size:
+        raise ValueError("batch_size override contradicts planned identity")
     if stream_block_size is not _UNSET and stream_block_size != run.stream_block_size:
         raise ValueError("stream_block_size override contradicts planned identity")
     if data_root is not None and _absolute(data_root) != run.data_root:
@@ -711,7 +730,10 @@ def _validate_summary(
         retained_memory = memory_timeline
         expected_method_memory = {
             "status": "computed",
-            "definition": "exact bytes retained by the method support memory after each causal sample update",
+            "definition": (
+                "exact bytes retained by the method support memory at the state exposed for each emitted sample; "
+                "batch-atomic methods repeat the post-admission batch state"
+            ),
             "unit": "bytes",
             "max_retained_bytes": max(retained_memory),
             "final_retained_bytes": retained_memory[-1],
@@ -1111,6 +1133,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--config-dir", default=REPOSITORY_ROOT / "cfg")
     parser.add_argument("--python", dest="python_executable", default=sys.executable)
     parser.add_argument("--max-eval-samples", type=int)
+    parser.add_argument("--batch-size", type=int,
+                        help="Evaluator batch size; omit to use the per-dataset default.")
     parser.add_argument("--stream-block-size", type=int, default=64)
     parser.add_argument("--artifact-provenance", choices=SUPPORTED_ARTIFACT_PROVENANCE, default="fast")
     parser.add_argument("--execute", action="store_true", help="Run commands; planning JSON is the default.")
@@ -1133,6 +1157,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         evidence_dir=args.evidence_dir,
         device=args.device,
         max_eval_samples=args.max_eval_samples,
+        batch_size=args.batch_size,
         stream_block_size=args.stream_block_size,
         config_dir=args.config_dir,
         artifact_provenance=args.artifact_provenance,

@@ -14,8 +14,11 @@ from methods.SupportAblations import (
     GlobalNearestRamen,
     RandomMemoryRamen,
     SameClassRamen,
+    StructuredAtomicRamen,
     aggregate_unbalanced_gradients,
     causal_active_context_counts,
+    update_and_retrieve_support_atomic_batch,
+    update_and_retrieve_support_batch,
     update_and_retrieve_support_causal_batch,
     validate_support_ablation_config,
 )
@@ -60,6 +63,74 @@ class SupportAblationTests(unittest.TestCase):
         self.assertEqual([0, 1], counts.tolist())
         self.assertEqual([1, 2], sizes.tolist())
         self.assertEqual([32, 64], memory_bytes.tolist())
+
+    def test_atomic_update_can_read_later_batch_items_and_reports_post_batch_state(self):
+        memory = StructuredGradientMemory(1, 4, 1, 1, device="cpu", capacity_scope="per_class")
+        retrieved, counts, sizes, memory_bytes = update_and_retrieve_support_atomic_batch(
+            memory, torch.tensor([[0.], [10.]]), torch.tensor([[1.], [2.]]), torch.tensor([0, 0]),
+            torch.tensor([0, 0]), torch.tensor([0., 0.]), torch.tensor([0, 1]), topk=1,
+            include_current=False, beta=0., selection="global_nearest",
+        )
+        self.assertEqual([[2.], [1.]], retrieved.tolist())
+        self.assertEqual([1, 1], counts.tolist())
+        self.assertEqual([2, 2], sizes.tolist())
+        self.assertEqual([64, 64], memory_bytes.tolist())
+
+    def test_atomic_excludes_only_the_current_item_id(self):
+        memory = StructuredGradientMemory(1, 4, 1, 1, device="cpu", capacity_scope="per_class")
+        retrieved, counts, _, _ = update_and_retrieve_support_atomic_batch(
+            memory, torch.tensor([[0.], [1.]]), torch.tensor([[10.], [20.]]), torch.tensor([0, 0]),
+            torch.tensor([0, 0]), torch.zeros(2), torch.tensor([3, 7]), topk=2,
+            include_current=False, beta=0., selection="class_balanced",
+        )
+        self.assertEqual([[20.], [10.]], retrieved.tolist())
+        self.assertEqual([1, 1], counts.tolist())
+
+    def test_atomic_include_current_retains_each_query_self_support(self):
+        memory = StructuredGradientMemory(1, 4, 1, 1, device="cpu", capacity_scope="per_class")
+        retrieved, counts, _, _ = update_and_retrieve_support_atomic_batch(
+            memory, torch.tensor([[0.], [10.]]), torch.tensor([[1.], [2.]]), torch.tensor([0, 0]),
+            torch.tensor([0, 0]), torch.zeros(2), torch.tensor([0, 1]), topk=1,
+            include_current=True, beta=0., selection="class_balanced",
+        )
+        self.assertEqual([[1.], [2.]], retrieved.tolist())
+        self.assertEqual([1, 1], counts.tolist())
+
+    def test_atomic_schedule_is_exactly_causal_for_single_item_batches(self):
+        inputs = dict(
+            features=torch.tensor([[0.]]), gradients=torch.tensor([[10.]]),
+            predicted_classes=torch.tensor([0]), contexts=torch.tensor([0]), entropies=torch.tensor([0.]),
+            item_ids=torch.tensor([4]), topk=1, include_current=True, beta=0., selection="class_balanced",
+        )
+        causal_memory = StructuredGradientMemory(1, 1, 1, 1, device="cpu", capacity_scope="per_class")
+        atomic_memory = StructuredGradientMemory(1, 1, 1, 1, device="cpu", capacity_scope="per_class")
+        for memory in (causal_memory, atomic_memory):
+            memory.add(torch.tensor([[2.]]), torch.tensor([[20.]]), 0, 0, 0., item_ids=2)
+        causal = update_and_retrieve_support_causal_batch(causal_memory, **inputs)
+        atomic = update_and_retrieve_support_atomic_batch(atomic_memory, **inputs)
+        for causal_value, atomic_value in zip(causal, atomic):
+            self.assertTrue(torch.equal(causal_value, atomic_value))
+        self.assertEqual(atomic_memory.diagnostics(), causal_memory.diagnostics())
+        retained = atomic_memory.query_flat(torch.tensor([[0.]]), 1, selection="global_nearest")
+        self.assertEqual([4], retained.item_ids[0, retained.valid_mask[0]].tolist())
+
+    def test_atomic_historical_only_singleton_can_differ_after_full_capacity_eviction(self):
+        inputs = dict(
+            features=torch.tensor([[0.]]), gradients=torch.tensor([[10.]]),
+            predicted_classes=torch.tensor([0]), contexts=torch.tensor([0]), entropies=torch.tensor([0.]),
+            item_ids=torch.tensor([4]), topk=1, include_current=False, beta=0., selection="class_balanced",
+        )
+        causal_memory = StructuredGradientMemory(1, 1, 1, 1, device="cpu", capacity_scope="per_class")
+        atomic_memory = StructuredGradientMemory(1, 1, 1, 1, device="cpu", capacity_scope="per_class")
+        for memory in (causal_memory, atomic_memory):
+            memory.add(torch.tensor([[2.]]), torch.tensor([[20.]]), 0, 0, 0., item_ids=2)
+        causal, causal_counts, _, _ = update_and_retrieve_support_causal_batch(causal_memory, **inputs)
+        atomic, atomic_counts, _, _ = update_and_retrieve_support_atomic_batch(atomic_memory, **inputs)
+        self.assertEqual([[20.]], causal.tolist())
+        self.assertEqual([[0.]], atomic.tolist())
+        self.assertEqual([1], causal_counts.tolist())
+        self.assertEqual([0], atomic_counts.tolist())
+        self.assertEqual(atomic_memory.diagnostics(), causal_memory.diagnostics())
 
     def test_historical_only_queries_before_capacity_eviction_for_every_selection(self):
         selections = ("random", "same_class", "global_nearest", "context_nearest", "class_balanced")
@@ -157,6 +228,9 @@ class SupportAblationTests(unittest.TestCase):
         self.assertEqual("global_nearest", GlobalNearestRamen.support_selection)
         self.assertEqual("context_nearest", ContextOnlyRamen.support_selection)
         self.assertEqual("class_balanced", CausalRamen.support_selection)
+        self.assertEqual("class_balanced", StructuredAtomicRamen.support_selection)
+        self.assertEqual("causal", CausalRamen.retrieval_schedule)
+        self.assertEqual("batch_atomic", StructuredAtomicRamen.retrieval_schedule)
         # This test intentionally records the study mapping instead of adding
         # a copy of the original Ramen implementation to the ablation module.
         from methods import SupportAblations
@@ -169,6 +243,7 @@ class SupportAblationTests(unittest.TestCase):
             "RandomMemoryRamen": "random", "SameClassRamen": "same_class",
             "GlobalNearestRamen": "global_nearest", "ContextOnlyRamen": "context_nearest",
             "CausalRamen": "class_balanced",
+            "StructuredAtomicRamen": "class_balanced",
         }
         for path in root.glob("cfg/*/*.yaml"):
             if path.stem not in methods:
@@ -180,6 +255,15 @@ class SupportAblationTests(unittest.TestCase):
             path = root / "cfg" / "smoke" / "CIFAR100C" / f"{name}.yaml"
             with path.open() as config_file:
                 validate_support_ablation_config(yaml.safe_load(config_file), selection=selection)
+
+    def test_atomic_configs_match_causal_values(self):
+        root = Path(__file__).resolve().parents[1]
+        for dataset in ("CIFAR100C", "DomainNet", "CIFAR10C", "ImageNetC5K", "smoke/CIFAR100C"):
+            with (root / "cfg" / dataset / "CausalRamen.yaml").open() as source:
+                causal = yaml.safe_load(source)
+            with (root / "cfg" / dataset / "StructuredAtomicRamen.yaml").open() as source:
+                atomic = yaml.safe_load(source)
+            self.assertEqual(causal, atomic, dataset)
 
 
 if __name__ == "__main__":

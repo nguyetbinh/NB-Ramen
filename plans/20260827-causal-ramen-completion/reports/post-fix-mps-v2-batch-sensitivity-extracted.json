@@ -1,0 +1,302 @@
+{
+  "decision": {
+    "mean_micro_gain": {
+      "count": 7,
+      "mean": -0.011160714285714286,
+      "std": 0.011811389781538352
+    },
+    "reason": "complete paired pilot evidence does not meet completion coverage",
+    "requirements": {
+      "batch_size_one_diagnostic": {
+        "observed": [
+          1,
+          2,
+          5,
+          10,
+          20,
+          50,
+          100
+        ],
+        "passed": true
+      },
+      "batch_size_sensitivity": {
+        "minimum_distinct_batch_sizes": 2,
+        "observed": [
+          1,
+          2,
+          5,
+          10,
+          20,
+          50,
+          100
+        ],
+        "passed": true
+      },
+      "fixed_seeds": {
+        "minimum": 3,
+        "observed": 1,
+        "passed": false
+      },
+      "full_cifar100c": {
+        "passed": false,
+        "required": true
+      },
+      "natural_domain_dataset": {
+        "passed": false,
+        "required": true
+      },
+      "non_iid_streams": {
+        "minimum": 2,
+        "observed": [
+          "block"
+        ],
+        "passed": false
+      }
+    },
+    "stability_passed": true,
+    "status": "PILOT",
+    "weak_go_improvements": {
+      "negative_adaptation_reduction": {
+        "mean_reduction": -0.0,
+        "minimum": 0.01,
+        "passed": false
+      },
+      "recovery_reduction": {
+        "mean_reduction_samples": null,
+        "minimum": 1.0,
+        "passed": false
+      },
+      "worst_domain_gain": {
+        "mean_gain": -0.05357142857142857,
+        "minimum": 0.005,
+        "passed": false
+      }
+    }
+  },
+  "comparisons": [
+    {
+      "batch_size": 1,
+      "causal_run_id": "cifar100c-block-seed-0-causalramen-dev-mps-n64-bs-1-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad",
+      "config_equivalent_except_method_identity": true,
+      "dataset": "CIFAR100C",
+      "deltas_causal_minus_atomic": {
+        "device_memory_bytes": null,
+        "forward_total_ms": -512.7313825068995,
+        "macro_domain_accuracy": 0.0,
+        "method_memory_bytes": 0.0,
+        "micro_accuracy": 0.0,
+        "negative_adaptation_rate": 0.0,
+        "recovery_samples": null,
+        "retrieval_total_ms": null,
+        "worst_domain_accuracy": 0.0
+      },
+      "deltas_causal_minus_legacy": {
+        "device_memory_bytes": null,
+        "forward_total_ms": -2425.684747286141,
+        "macro_domain_accuracy": 0.0,
+        "method_memory_bytes": 1280.0,
+        "micro_accuracy": 0.0,
+        "negative_adaptation_rate": 0.0,
+        "recovery_samples": null,
+        "retrieval_total_ms": null,
+        "worst_domain_accuracy": 0.0
+      },
+      "legacy_run_id": "cifar100c-block-seed-0-ramen-dev-mps-n64-bs-1-blk-8-cfg-54c124be79a3-prov-fast-data-6dbea801cbad",
+      "seed": 0,
+      "stream_mode": "block",
+      "structured_atomic_run_id": "cifar100c-block-seed-0-structuredatomicramen-dev-mps-n64-bs-1-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad"
+    },
+    {
+      "batch_size": 2,
+      "causal_run_id": "cifar100c-block-seed-0-causalramen-dev-mps-n64-bs-2-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad",
+      "config_equivalent_except_method_identity": true,
+      "dataset": "CIFAR100C",
+      "deltas_causal_minus_atomic": {
+        "device_memory_bytes": null,
+        "forward_total_ms": -32.336541917175055,
+        "macro_domain_accuracy": 0.0,
+        "method_memory_bytes": 0.0,
+        "micro_accuracy": 0.0,
+        "negative_adaptation_rate": 0.0,
+        "recovery_samples": null,
+        "retrieval_total_ms": null,
+        "worst_domain_accuracy": 0.0
+      },
+      "deltas_causal_minus_legacy": {
+        "device_memory_bytes": null,
+        "forward_total_ms": -1536.0648753121495,
+        "macro_domain_accuracy": 0.0,
+        "method_memory_bytes": 1280.0,
+        "micro_accuracy": 0.0,
+        "negative_adaptation_rate": 0.0,
+        "recovery_samples": null,
+        "retrieval_total_ms": null,
+        "worst_domain_accuracy": 0.0
+      },
+      "legacy_run_id": "cifar100c-block-seed-0-ramen-dev-mps-n64-bs-2-blk-8-cfg-54c124be79a3-prov-fast-data-6dbea801cbad",
+      "seed": 0,
+      "stream_mode": "block",
+      "structured_atomic_run_id": "cifar100c-block-seed-0-structuredatomicramen-dev-mps-n64-bs-2-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad"
+    },
+    {
+      "batch_size": 5,
+      "causal_run_id": "cifar100c-block-seed-0-causalramen-dev-mps-n64-bs-5-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad",
+      "config_equivalent_except_method_identity": true,
+      "dataset": "CIFAR100C",
+      "deltas_causal_minus_atomic": {
+        "device_memory_bytes": null,
+        "forward_total_ms": -266.79100084584206,
+        "macro_domain_accuracy": -0.020833333333333315,
+        "method_memory_bytes": 0.0,
+        "micro_accuracy": -0.015625,
+        "negative_adaptation_rate": 0.0,
+        "recovery_samples": null,
+        "retrieval_total_ms": null,
+        "worst_domain_accuracy": -0.125
+      },
+      "deltas_causal_minus_legacy": {
+        "device_memory_bytes": null,
+        "forward_total_ms": -1238.793709082529,
+        "macro_domain_accuracy": -0.020833333333333315,
+        "method_memory_bytes": 1280.0,
+        "micro_accuracy": -0.015625,
+        "negative_adaptation_rate": 0.0,
+        "recovery_samples": null,
+        "retrieval_total_ms": null,
+        "worst_domain_accuracy": -0.125
+      },
+      "legacy_run_id": "cifar100c-block-seed-0-ramen-dev-mps-n64-bs-5-blk-8-cfg-54c124be79a3-prov-fast-data-6dbea801cbad",
+      "seed": 0,
+      "stream_mode": "block",
+      "structured_atomic_run_id": "cifar100c-block-seed-0-structuredatomicramen-dev-mps-n64-bs-5-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad"
+    },
+    {
+      "batch_size": 10,
+      "causal_run_id": "cifar100c-block-seed-0-causalramen-dev-mps-n64-bs-10-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad",
+      "config_equivalent_except_method_identity": true,
+      "dataset": "CIFAR100C",
+      "deltas_causal_minus_atomic": {
+        "device_memory_bytes": null,
+        "forward_total_ms": -358.7814981583506,
+        "macro_domain_accuracy": -0.020833333333333315,
+        "method_memory_bytes": 0.0,
+        "micro_accuracy": -0.015625,
+        "negative_adaptation_rate": 0.0,
+        "recovery_samples": null,
+        "retrieval_total_ms": null,
+        "worst_domain_accuracy": -0.125
+      },
+      "deltas_causal_minus_legacy": {
+        "device_memory_bytes": null,
+        "forward_total_ms": -3159.0182073414326,
+        "macro_domain_accuracy": -0.020833333333333315,
+        "method_memory_bytes": 1280.0,
+        "micro_accuracy": -0.015625,
+        "negative_adaptation_rate": 0.0,
+        "recovery_samples": null,
+        "retrieval_total_ms": null,
+        "worst_domain_accuracy": -0.125
+      },
+      "legacy_run_id": "cifar100c-block-seed-0-ramen-dev-mps-n64-bs-10-blk-8-cfg-54c124be79a3-prov-fast-data-6dbea801cbad",
+      "seed": 0,
+      "stream_mode": "block",
+      "structured_atomic_run_id": "cifar100c-block-seed-0-structuredatomicramen-dev-mps-n64-bs-10-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad"
+    },
+    {
+      "batch_size": 20,
+      "causal_run_id": "cifar100c-block-seed-0-causalramen-dev-mps-n64-bs-20-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad",
+      "config_equivalent_except_method_identity": true,
+      "dataset": "CIFAR100C",
+      "deltas_causal_minus_atomic": {
+        "device_memory_bytes": null,
+        "forward_total_ms": 464.2057920573279,
+        "macro_domain_accuracy": -0.020833333333333315,
+        "method_memory_bytes": 0.0,
+        "micro_accuracy": -0.015625,
+        "negative_adaptation_rate": 0.0,
+        "recovery_samples": null,
+        "retrieval_total_ms": null,
+        "worst_domain_accuracy": -0.125
+      },
+      "deltas_causal_minus_legacy": {
+        "device_memory_bytes": null,
+        "forward_total_ms": -43.76366501674056,
+        "macro_domain_accuracy": -0.020833333333333315,
+        "method_memory_bytes": 1280.0,
+        "micro_accuracy": -0.015625,
+        "negative_adaptation_rate": 0.0,
+        "recovery_samples": null,
+        "retrieval_total_ms": null,
+        "worst_domain_accuracy": -0.125
+      },
+      "legacy_run_id": "cifar100c-block-seed-0-ramen-dev-mps-n64-bs-20-blk-8-cfg-54c124be79a3-prov-fast-data-6dbea801cbad",
+      "seed": 0,
+      "stream_mode": "block",
+      "structured_atomic_run_id": "cifar100c-block-seed-0-structuredatomicramen-dev-mps-n64-bs-20-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad"
+    },
+    {
+      "batch_size": 50,
+      "causal_run_id": "cifar100c-block-seed-0-causalramen-dev-mps-n64-bs-50-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad",
+      "config_equivalent_except_method_identity": true,
+      "dataset": "CIFAR100C",
+      "deltas_causal_minus_atomic": {
+        "device_memory_bytes": null,
+        "forward_total_ms": -5700.901248957944,
+        "macro_domain_accuracy": -0.020833333333333315,
+        "method_memory_bytes": 0.0,
+        "micro_accuracy": -0.03125,
+        "negative_adaptation_rate": 0.0,
+        "recovery_samples": null,
+        "retrieval_total_ms": null,
+        "worst_domain_accuracy": 0.0
+      },
+      "deltas_causal_minus_legacy": {
+        "device_memory_bytes": null,
+        "forward_total_ms": -37478.68116595782,
+        "macro_domain_accuracy": -0.020833333333333315,
+        "method_memory_bytes": 1280.0,
+        "micro_accuracy": -0.03125,
+        "negative_adaptation_rate": 0.0,
+        "recovery_samples": null,
+        "retrieval_total_ms": null,
+        "worst_domain_accuracy": 0.0
+      },
+      "legacy_run_id": "cifar100c-block-seed-0-ramen-dev-mps-n64-bs-50-blk-8-cfg-54c124be79a3-prov-fast-data-6dbea801cbad",
+      "seed": 0,
+      "stream_mode": "block",
+      "structured_atomic_run_id": "cifar100c-block-seed-0-structuredatomicramen-dev-mps-n64-bs-50-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad"
+    },
+    {
+      "batch_size": 100,
+      "causal_run_id": "cifar100c-block-seed-0-causalramen-dev-mps-n64-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad",
+      "config_equivalent_except_method_identity": true,
+      "dataset": "CIFAR100C",
+      "deltas_causal_minus_atomic": {
+        "device_memory_bytes": null,
+        "forward_total_ms": -14938.429000088945,
+        "macro_domain_accuracy": 0.010416666666666657,
+        "method_memory_bytes": 0.0,
+        "micro_accuracy": 0.0,
+        "negative_adaptation_rate": 0.0,
+        "recovery_samples": null,
+        "retrieval_total_ms": null,
+        "worst_domain_accuracy": 0.0
+      },
+      "deltas_causal_minus_legacy": {
+        "device_memory_bytes": null,
+        "forward_total_ms": -50128.9833340561,
+        "macro_domain_accuracy": 0.010416666666666657,
+        "method_memory_bytes": 1280.0,
+        "micro_accuracy": 0.0,
+        "negative_adaptation_rate": 0.0,
+        "recovery_samples": null,
+        "retrieval_total_ms": null,
+        "worst_domain_accuracy": 0.0
+      },
+      "legacy_run_id": "cifar100c-block-seed-0-ramen-dev-mps-n64-blk-8-cfg-54c124be79a3-prov-fast-data-6dbea801cbad",
+      "seed": 0,
+      "stream_mode": "block",
+      "structured_atomic_run_id": "cifar100c-block-seed-0-structuredatomicramen-dev-mps-n64-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad"
+    }
+  ]
+}

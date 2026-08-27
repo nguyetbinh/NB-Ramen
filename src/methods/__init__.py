@@ -10,6 +10,7 @@ from .SupportAblations import (
     GlobalNearestRamen,
     RandomMemoryRamen,
     SameClassRamen,
+    StructuredAtomicRamen,
 )
 
 

@@ -194,11 +194,42 @@ Thus:
 
 Again, CausalRamen and LatentRamen match.
 
+### 4.3 2026-08-27 scheduling-isolation pilot (CPU/MPS)
+
+The results above are historical bounded pilots. The strictly validated
+completion runtime pass on 2026-08-27 added the same-memory scheduling
+control, `StructuredAtomicRamen`, plus CPU and Apple-MPS checks. The complete
+execution record is in the [local runtime and causal pilot report](../../plans/20260827-causal-ramen-completion/reports/local-runtime-and-causal-pilot.md); the canonical sensitivity result is [post-fix-mps-v2-batch-sensitivity.json](../../plans/20260827-causal-ramen-completion/reports/post-fix-mps-v2-batch-sensitivity.json).
+
+CPU B=1 and B=4 mechanics evidence completed and validated after the reviewed
+CPU half-precision fix. The strictly paired accuracy deltas between
+`StructuredAtomicRamen` and `CausalRamen` were zero for both cells. Those
+four-sample CPU cells establish local mechanics only, not a scientific effect.
+
+The informative bounded scheduling test was CIFAR-100-C, block stream,
+`n=64`, seed 0, block size 8, on Apple MPS. Every cell in the canonical
+sensitivity set was strictly validated. `CausalRamen - StructuredAtomicRamen`
+micro-accuracy deltas were:
+
+| Evaluator batch size | 1 | 2 | 5 | 10 | 20 | 50 | 100 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Micro delta | 0 | 0 | -0.015625 | -0.015625 | -0.015625 | -0.03125 | 0 |
+
+Across those seven cells, the mean micro delta was `-0.0111607` (standard
+deviation `0.0118114`) and the mean worst-domain delta was `-0.0535714`.
+There was no negative-adaptation-rate difference in any cell. At B=1, the
+Legacy-Ramen-versus-CausalRamen micro-accuracy delta was also `0` in this
+bounded cell.
+
+This is a seed-0, single-stream, 64-sample PILOT. Its Apple-MPS latency values
+are descriptive only and do not support CUDA efficiency conclusions. CUDA and
+DomainNet were unavailable for this pass.
+
 ---
 
 ## 5. What has been established
 
-The current evidence supports the limited claim:
+The historical pilots support the limited claim:
 
 > **The strict-causal structured implementation matches or exceeds legacy batch-atomic Ramen on the tested bounded CIFAR-100-C prefixes.**
 
@@ -213,6 +244,13 @@ It also establishes, on these tested cells:
 because the router discovers one context and the projected behavior matches CausalRamen.
 
 This is an important scientific correction to the original latent-routing direction.
+
+The 2026-08-27 completion pass additionally establishes the implementation
+control and a bounded B=1 diagnostic: `StructuredAtomicRamen` and
+`CausalRamen` have an observed zero micro-accuracy difference at B=1, and the
+same-memory scheduling comparison was completed across B=1, 2, 5, 10, 20, 50,
+and 100 for seed 0/block/n=64. It does **not** establish a positive scheduling
+gain: that signal did not survive this batch-size sensitivity check.
 
 ---
 
@@ -259,7 +297,10 @@ currently measures a combination of:
 \text{numerical/ranking effects}.
 \]
 
-The next stage must isolate these effects.
+The Legacy-versus-Causal comparison therefore remains confounded. The
+same-memory `StructuredAtomicRamen` control now isolates scheduling on the
+bounded pilot; its result is reported in Section 4.3 and did not show a
+positive scheduling gain.
 
 ---
 
@@ -344,9 +385,8 @@ This should be performed before an expensive DomainNet experiment.
 
 ## Experiment B — StructuredAtomicRamen
 
-This is the most important implementation control.
-
-Create:
+This is the same-memory implementation control used in the 2026-08-27 pilot.
+Its original required design was:
 
 ```text
 StructuredAtomicRamen
@@ -710,20 +750,18 @@ Otherwise a future sample could participate in the consensus vote for an earlier
 
 ---
 
-# 17. Immediate implementation plan
+# 17. Completion sequence and current gate
 
-Execute the next work in this order:
+The implementation/control work listed below is complete. The dated
+scheduling-isolation evidence now gates, rather than automatically triggers,
+the expensive stages:
 
-1. Run `Ramen vs CausalRamen` with `batch_size=1` on a cost-limited identical stream.
-2. Implement `StructuredAtomicRamen`.
-3. Add tests proving `StructuredAtomicRamen` and `CausalRamen` differ only in scheduling.
-4. Run a paired n=64 or n=128 test.
-5. If the scheduling-only difference survives, run three seeds.
-6. Run batch-size sensitivity.
-7. Move to full CIFAR-100-C on CUDA.
-8. Run a bounded natural-domain pilot.
-9. Run DomainNet only after the positive signal remains.
-10. Freeze the causal conclusion before building ConsensusRamen.
+1. [x] Run the bounded `Ramen`/`CausalRamen` B=1 diagnostic.
+2. [x] Implement `StructuredAtomicRamen` and its configuration-equivalence controls.
+3. [x] Run the paired n=64 seed-0 block pilot and batch-size sensitivity.
+4. [ ] Escalate to three seeds and full CIFAR-100-C/CUDA only if a revised or independently justified gate warrants it.
+5. [ ] Run a bounded natural-domain pilot and DomainNet only after that escalation decision and a verified NVIDIA/DomainNet environment.
+6. [ ] Freeze a publication-level causal conclusion after the required coverage exists.
 
 ---
 
@@ -761,9 +799,10 @@ include_current
 
 between StructuredAtomicRamen and CausalRamen.
 
-### B=1 equivalence
+### B=1 equivalence under the declared paired configuration
 
-On a deterministic synthetic fixture:
+On a deterministic synthetic fixture using the preregistered
+`include_current=true` configuration:
 
 ```text
 StructuredAtomicRamen(B=1)
@@ -783,6 +822,10 @@ predictions
 up to the defined numerical tolerance.
 
 This is one of the strongest correctness tests for the causal experiment.
+With historical-only retrieval (`include_current=false`), inserting before
+querying can evict history at full capacity even when `B=1`; that scheduling
+edge case is expected to differ and must be tested separately rather than
+silently treated as equivalent.
 
 ---
 
@@ -791,9 +834,9 @@ This is one of the strongest correctness tests for the causal experiment.
 The CausalRamen investigation is complete when all of the following are answered:
 
 ```text
-[ ] Does B=1 remove the legacy-vs-causal difference?
+[x] Does B=1 remove the legacy-vs-causal difference on the bounded seed-0 cell? (Observed micro delta: 0.)
 
-[ ] Does a same-memory atomic control isolate a scheduling effect?
+[x] Does a same-memory atomic control isolate a scheduling effect on the bounded seed-0 pilot? (It isolates the comparison; no positive scheduling gain survived sensitivity.)
 
 [ ] Does the effect repeat across >=3 seeds?
 
@@ -801,58 +844,56 @@ The CausalRamen investigation is complete when all of the following are answered
 
 [ ] Does it generalize to at least one natural-domain dataset?
 
-[ ] Does strict causality improve accuracy, stability, or both?
+[x] Does strict causality improve accuracy, stability, or both on the bounded scheduling pilot? (No positive accuracy or negative-adaptation effect was observed.)
 
-[ ] Is the effect sufficiently large to be a contribution?
+[x] Is the bounded scheduling effect sufficiently large to be a contribution? (No; this does not decide the publication-level question.)
 
-[ ] Can later methods use CausalRamen as the canonical strict-online baseline?
+[x] Can later methods use CausalRamen as the canonical strict-online baseline? (As an implementation/control baseline, not a promoted causal-gain result.)
 ```
 
 Until these are answered, describe CausalRamen as:
 
-> **a promising strict-online control with positive bounded pilot evidence, not yet a standalone method contribution.**
+> **a strict-online implementation/control baseline with historical positive pilots but no positive scheduling-only gain in the dated bounded sensitivity pilot; not yet a standalone method contribution.**
 
 ---
 
 # 20. Current decision
 
-Based on existing evidence:
+Based on the historical pilots and the strictly validated 2026-08-27
+implementation/control pass:
 
 \[
 \boxed{
-\text{CausalRamen is worth completing}
+\text{CausalRamen is a usable strict-online control; its causal-gain claim is gated}
 }
 \]
 
 because:
 
 1. it explains the apparent gain previously attributed to LatentRamen;
-2. it produces repeatable positive micro/macro signals on bounded pilots;
-3. it reduces observed negative adaptation in the existing comparisons;
+2. historical bounded pilots contain positive micro/macro signals;
+3. the same-memory atomic control and B=1 diagnostic are now implemented and validated;
 4. it establishes a cleaner strict-online protocol for future memory research.
 
 However:
 
 \[
 \boxed{
-\text{the causal effect itself is not yet isolated}
+\text{the scheduling comparison is isolated, but no positive bounded scheduling effect was observed}
 }
 \]
 
-because legacy and causal implementations differ in memory/numerical behavior.
+because the same-memory control isolates scheduling, while the remaining
+evidence is only a seed-0, n=64, single-stream MPS pilot.
 
-Therefore the highest-priority experiment is not another large benchmark and not ConsensusRamen yet.
+The current bounded scheduling gate does not justify escalating to three seeds,
+full CUDA, or DomainNet now: the positive scheduling gain did not survive the
+seed-0 batch-size sensitivity analysis, the mean micro and worst-domain deltas
+are negative, and no negative-adaptation advantage was observed. This is a
+bounded `PILOT`/gate decision, **not** a final publication-level `NO_GO`.
 
-It is:
-
-\[
-\boxed{
-\text{StructuredAtomicRamen}
-\quad vs \quad
-\text{CausalRamen}
-}
-\]
-
-with a quick `batch_size=1` diagnostic performed first.
-
-Once this attribution is resolved, CausalRamen can either become a research finding of its own or serve as the strict-online experimental foundation for the subsequent gradient-consensus thesis.
+CUDA and DomainNet remain unavailable, and MPS latency remains descriptive
+only. CausalRamen can serve now as the strict-online experimental foundation
+for later work; promotion as a causal-improvement contribution requires a
+separate, justified decision to reopen and satisfy the remaining full-coverage
+criteria.

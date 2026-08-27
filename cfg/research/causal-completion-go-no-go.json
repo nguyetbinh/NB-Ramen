@@ -1,0 +1,13 @@
+{
+  "allow_weak_go": true,
+  "maximum_micro_std": 0.02,
+  "minimum_fixed_seeds": 3,
+  "minimum_mean_micro_gain_for_go": 0.01,
+  "minimum_mean_micro_gain_for_weak_go": 0.0,
+  "minimum_mean_negative_adaptation_reduction_for_weak_go": 0.01,
+  "minimum_mean_recovery_reduction_for_weak_go": 1.0,
+  "minimum_mean_worst_domain_gain_for_weak_go": 0.005,
+  "minimum_non_iid_streams": 2,
+  "require_full_cifar100c": true,
+  "require_natural_domain_dataset": true
+}

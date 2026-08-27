@@ -1,0 +1,132 @@
+{
+  "decision": {
+    "mean_micro_gain": {
+      "count": 2,
+      "mean": 0.0,
+      "std": 0.0
+    },
+    "reason": "complete paired pilot evidence does not meet completion coverage",
+    "requirements": {
+      "batch_size_one_diagnostic": {
+        "observed": [
+          1,
+          4
+        ],
+        "passed": true
+      },
+      "batch_size_sensitivity": {
+        "minimum_distinct_batch_sizes": 2,
+        "observed": [
+          1,
+          4
+        ],
+        "passed": true
+      },
+      "fixed_seeds": {
+        "minimum": 3,
+        "observed": 1,
+        "passed": false
+      },
+      "full_cifar100c": {
+        "passed": false,
+        "required": true
+      },
+      "natural_domain_dataset": {
+        "passed": false,
+        "required": true
+      },
+      "non_iid_streams": {
+        "minimum": 2,
+        "observed": [
+          "block"
+        ],
+        "passed": false
+      }
+    },
+    "stability_passed": true,
+    "status": "PILOT",
+    "weak_go_improvements": {
+      "negative_adaptation_reduction": {
+        "mean_reduction": -0.0,
+        "minimum": 0.01,
+        "passed": false
+      },
+      "recovery_reduction": {
+        "mean_reduction_samples": null,
+        "minimum": 1.0,
+        "passed": false
+      },
+      "worst_domain_gain": {
+        "mean_gain": 0.0,
+        "minimum": 0.005,
+        "passed": false
+      }
+    }
+  },
+  "comparisons": [
+    {
+      "batch_size": 1,
+      "causal_run_id": "cifar100c-block-seed-0-causalramen-dev-cpu-n4-bs-1-blk-4-cfg-e238b33d10cb-prov-fast-data-6dbea801cbad",
+      "config_equivalent_except_method_identity": true,
+      "dataset": "CIFAR100C",
+      "deltas_causal_minus_atomic": {
+        "device_memory_bytes": null,
+        "forward_total_ms": 36.883208085782826,
+        "macro_domain_accuracy": 0.0,
+        "method_memory_bytes": 0.0,
+        "micro_accuracy": 0.0,
+        "negative_adaptation_rate": 0.0,
+        "recovery_samples": null,
+        "retrieval_total_ms": null,
+        "worst_domain_accuracy": 0.0
+      },
+      "deltas_causal_minus_legacy": {
+        "device_memory_bytes": null,
+        "forward_total_ms": 53.687667241320014,
+        "macro_domain_accuracy": 0.0,
+        "method_memory_bytes": 323664.0,
+        "micro_accuracy": 0.0,
+        "negative_adaptation_rate": 0.0,
+        "recovery_samples": null,
+        "retrieval_total_ms": null,
+        "worst_domain_accuracy": 0.0
+      },
+      "legacy_run_id": "cifar100c-block-seed-0-ramen-dev-cpu-n4-bs-1-blk-4-cfg-7098bd868b96-prov-fast-data-6dbea801cbad",
+      "seed": 0,
+      "stream_mode": "block",
+      "structured_atomic_run_id": "cifar100c-block-seed-0-structuredatomicramen-dev-cpu-n4-bs-1-blk-4-cfg-e238b33d10cb-prov-fast-data-6dbea801cbad"
+    },
+    {
+      "batch_size": 4,
+      "causal_run_id": "cifar100c-block-seed-0-causalramen-dev-cpu-n4-bs-4-blk-4-cfg-e238b33d10cb-prov-fast-data-6dbea801cbad",
+      "config_equivalent_except_method_identity": true,
+      "dataset": "CIFAR100C",
+      "deltas_causal_minus_atomic": {
+        "device_memory_bytes": null,
+        "forward_total_ms": 56.91241705790162,
+        "macro_domain_accuracy": 0.0,
+        "method_memory_bytes": 0.0,
+        "micro_accuracy": 0.0,
+        "negative_adaptation_rate": 0.0,
+        "recovery_samples": null,
+        "retrieval_total_ms": null,
+        "worst_domain_accuracy": 0.0
+      },
+      "deltas_causal_minus_legacy": {
+        "device_memory_bytes": null,
+        "forward_total_ms": 100.32462608069181,
+        "macro_domain_accuracy": 0.0,
+        "method_memory_bytes": 323664.0,
+        "micro_accuracy": 0.0,
+        "negative_adaptation_rate": 0.0,
+        "recovery_samples": null,
+        "retrieval_total_ms": null,
+        "worst_domain_accuracy": 0.0
+      },
+      "legacy_run_id": "cifar100c-block-seed-0-ramen-dev-cpu-n4-bs-4-blk-4-cfg-7098bd868b96-prov-fast-data-6dbea801cbad",
+      "seed": 0,
+      "stream_mode": "block",
+      "structured_atomic_run_id": "cifar100c-block-seed-0-structuredatomicramen-dev-cpu-n4-bs-4-blk-4-cfg-e238b33d10cb-prov-fast-data-6dbea801cbad"
+    }
+  ]
+}

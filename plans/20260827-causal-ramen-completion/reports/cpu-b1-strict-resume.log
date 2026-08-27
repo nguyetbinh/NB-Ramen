@@ -1,0 +1,33 @@
+Traceback (most recent call last):
+  File "/Users/admin/Documents/NB-Ramen/src/runtime/experiment_matrix.py", line 440, in _read_json
+    value = json.loads(path.read_text(encoding="utf-8"))
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/admin/miniconda3/envs/nb-ramen/lib/python3.11/pathlib.py", line 1058, in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/admin/miniconda3/envs/nb-ramen/lib/python3.11/pathlib.py", line 1044, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-cpu-smoke/cifar100c-block-seed-0-ramen-dev-cpu-n4-bs-1-blk-4-cfg-7098bd868b96-prov-fast-data-6dbea801cbad/summary.json'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/admin/Documents/NB-Ramen/src/runtime/experiment_matrix.py", line 1183, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/Users/admin/Documents/NB-Ramen/src/runtime/experiment_matrix.py", line 1175, in main
+    payload["outcomes"] = execute_matrix(
+                          ^^^^^^^^^^^^^^^
+  File "/Users/admin/Documents/NB-Ramen/src/runtime/experiment_matrix.py", line 1107, in execute_matrix
+    evidence = validate_completed_run(run)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/admin/Documents/NB-Ramen/src/runtime/experiment_matrix.py", line 879, in validate_completed_run
+    summary = _read_json(run.run_dir / "summary.json", "summary")
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/admin/Documents/NB-Ramen/src/runtime/experiment_matrix.py", line 442, in _read_json
+    raise IncompleteRunError(f"invalid {label}: {path}") from exc
+IncompleteRunError: invalid summary: /Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-cpu-smoke/cifar100c-block-seed-0-ramen-dev-cpu-n4-bs-1-blk-4-cfg-7098bd868b96-prov-fast-data-6dbea801cbad/summary.json
+strict_resume_exit=1
