@@ -9,6 +9,8 @@ update while retaining Ramen's entropy and feature-distance weighting:
 * ``ContextOnlyRamen`` uses nearest neighbours in the inferred context,
   without balancing predicted classes.
 * ``CausalRamen`` uses class-balanced nearest neighbours at fixed context 0.
+* ``StructuredAtomicRamen`` is CausalRamen with only its batch schedule
+  changed: all evaluator-batch items are admitted before any item is queried.
 
 The original :class:`methods.Ramen.Ramen` remains the legacy batch-atomic
 reference: for ``B > 1`` it inserts a whole batch before any query.  The
@@ -34,6 +36,7 @@ from .losses import softmax_entropy
 
 _SELECTIONS = frozenset(("random", "same_class", "global_nearest", "context_nearest", "class_balanced"))
 _CONTEXT_SELECTION = "context_nearest"
+_RETRIEVAL_SCHEDULES = frozenset(("causal", "batch_atomic"))
 
 
 def validate_support_ablation_config(config: Mapping[str, Any], *, selection: str) -> dict[str, Any]:
@@ -141,10 +144,95 @@ def update_and_retrieve_support_causal_batch(
     )
 
 
+def update_and_retrieve_support_atomic_batch(
+    memory: StructuredGradientMemory,
+    features: torch.Tensor,
+    gradients: torch.Tensor,
+    predicted_classes: torch.Tensor,
+    contexts: torch.Tensor,
+    entropies: torch.Tensor,
+    item_ids: torch.Tensor,
+    *,
+    topk: int,
+    include_current: bool,
+    beta: float,
+    selection: str,
+    random_seed: int = 0,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Admit an evaluator batch before querying any of its items.
+
+    This is intentionally a scheduling-only counterpart to the causal helper:
+    storage, selection, ranking, aggregation, and exclusion-by-stable-ID are
+    all shared.  Consequently, when ``include_current=False`` each query
+    excludes only itself and may still use the other (including later) items
+    admitted from the same evaluator batch.
+    """
+    memory.add(features, gradients, predicted_classes, contexts, entropies, item_ids=item_ids)
+    kwargs: dict[str, Any] = {}
+    if selection == "same_class":
+        kwargs["predicted_classes"] = predicted_classes
+    elif selection == _CONTEXT_SELECTION:
+        kwargs["contexts"] = contexts
+    if selection == "class_balanced":
+        support = memory.query(
+            features, contexts, topk, include_current=include_current, current_item_ids=item_ids,
+        )
+        retrieved, support_counts = aggregate_class_balanced_gradients(support, beta)
+    else:
+        support = memory.query_flat(
+            features, topk, selection=selection, include_current=include_current,
+            current_item_ids=item_ids, random_seed=random_seed, **kwargs,
+        )
+        retrieved, support_counts = aggregate_unbalanced_gradients(support, beta)
+    batch_size = features.shape[0]
+    return (
+        retrieved,
+        support_counts,
+        torch.full((batch_size,), memory.size, device=features.device, dtype=torch.long),
+        torch.full((batch_size,), memory.retained_bytes, device=features.device, dtype=torch.long),
+    )
+
+
+def update_and_retrieve_support_batch(
+    memory: StructuredGradientMemory,
+    features: torch.Tensor,
+    gradients: torch.Tensor,
+    predicted_classes: torch.Tensor,
+    contexts: torch.Tensor,
+    entropies: torch.Tensor,
+    item_ids: torch.Tensor,
+    *,
+    topk: int,
+    include_current: bool,
+    beta: float,
+    selection: str,
+    schedule: str,
+    random_seed: int = 0,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Dispatch retrieval through the method's explicit scheduling invariant.
+
+    Atomic scheduling always admits the complete evaluator batch before its
+    first query, including singleton batches.
+    """
+    if schedule not in _RETRIEVAL_SCHEDULES:
+        raise ValueError("unknown retrieval schedule")
+    helper = (
+        update_and_retrieve_support_causal_batch
+        if schedule == "causal"
+        else update_and_retrieve_support_atomic_batch
+    )
+    return helper(
+        memory, features, gradients, predicted_classes, contexts, entropies, item_ids,
+        topk=topk, include_current=include_current, beta=beta, selection=selection,
+        random_seed=random_seed,
+    )
+
+
 class SupportSelectionRamen(TTABase):
     """Parameterized implementation shared by manifest-visible ablations."""
 
     support_selection: str = "global_nearest"
+    retrieval_schedule: str = "causal"
 
     def __init__(self, model, datasets, args):
         super().__init__()
@@ -192,10 +280,11 @@ class SupportSelectionRamen(TTABase):
             entropies = softmax_entropy(logits, reduction="none")
             item_ids = torch.arange(self.counter, self.counter + batch_size, device=self.device, dtype=torch.long)
             self.counter += batch_size
-            retrieved, support_counts, memory_sizes, memory_bytes = update_and_retrieve_support_causal_batch(
+            retrieved, support_counts, memory_sizes, memory_bytes = update_and_retrieve_support_batch(
                 self.memory, features, gradients, predicted_classes, contexts, entropies, item_ids,
                 topk=self.cfg["topk"], include_current=self.cfg["include_current"], beta=self.cfg["beta"],
-                selection=self.support_selection, random_seed=self.cfg.get("random_seed", 0),
+                selection=self.support_selection, schedule=self.retrieval_schedule,
+                random_seed=self.cfg.get("random_seed", 0),
             )
             self.model.set_by_sample_grad(retrieved)
             self.last_diagnostics = self._diagnostics(
@@ -263,3 +352,10 @@ class CausalRamen(SupportSelectionRamen):
     """Strictly causal, class-balanced Ramen without context routing."""
 
     support_selection = "class_balanced"
+
+
+class StructuredAtomicRamen(SupportSelectionRamen):
+    """Batch-atomic scheduling control for :class:`CausalRamen`."""
+
+    support_selection = "class_balanced"
+    retrieval_schedule = "batch_atomic"

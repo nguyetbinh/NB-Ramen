@@ -1,0 +1,192 @@
+{
+  "datasets": [
+    {
+      "data_root": "/Users/admin/data",
+      "dataset": "CIFAR100C",
+      "deep": {
+        "details": {
+          "arrays": {
+            "brightness": {
+              "dtype": "uint8",
+              "shape": [
+                50000,
+                32,
+                32,
+                3
+              ]
+            },
+            "contrast": {
+              "dtype": "uint8",
+              "shape": [
+                50000,
+                32,
+                32,
+                3
+              ]
+            },
+            "defocus_blur": {
+              "dtype": "uint8",
+              "shape": [
+                50000,
+                32,
+                32,
+                3
+              ]
+            },
+            "elastic_transform": {
+              "dtype": "uint8",
+              "shape": [
+                50000,
+                32,
+                32,
+                3
+              ]
+            },
+            "fog": {
+              "dtype": "uint8",
+              "shape": [
+                50000,
+                32,
+                32,
+                3
+              ]
+            },
+            "frost": {
+              "dtype": "uint8",
+              "shape": [
+                50000,
+                32,
+                32,
+                3
+              ]
+            },
+            "gaussian_noise": {
+              "dtype": "uint8",
+              "shape": [
+                50000,
+                32,
+                32,
+                3
+              ]
+            },
+            "glass_blur": {
+              "dtype": "uint8",
+              "shape": [
+                50000,
+                32,
+                32,
+                3
+              ]
+            },
+            "impulse_noise": {
+              "dtype": "uint8",
+              "shape": [
+                50000,
+                32,
+                32,
+                3
+              ]
+            },
+            "jpeg_compression": {
+              "dtype": "uint8",
+              "shape": [
+                50000,
+                32,
+                32,
+                3
+              ]
+            },
+            "motion_blur": {
+              "dtype": "uint8",
+              "shape": [
+                50000,
+                32,
+                32,
+                3
+              ]
+            },
+            "pixelate": {
+              "dtype": "uint8",
+              "shape": [
+                50000,
+                32,
+                32,
+                3
+              ]
+            },
+            "shot_noise": {
+              "dtype": "uint8",
+              "shape": [
+                50000,
+                32,
+                32,
+                3
+              ]
+            },
+            "snow": {
+              "dtype": "uint8",
+              "shape": [
+                50000,
+                32,
+                32,
+                3
+              ]
+            },
+            "zoom_blur": {
+              "dtype": "uint8",
+              "shape": [
+                50000,
+                32,
+                32,
+                3
+              ]
+            }
+          },
+          "expected_classes": 100,
+          "expected_samples": 50000,
+          "labels": {
+            "dtype": "uint8",
+            "max": 99,
+            "min": 0,
+            "shape": [
+              50000
+            ]
+          }
+        },
+        "errors": [],
+        "requested": true,
+        "status": "passed"
+      },
+      "include_extra_corruptions": false,
+      "missing": [],
+      "severity": 5,
+      "valid": true
+    }
+  ],
+  "runtime": {
+    "device": {
+      "cuda_visible_devices": null,
+      "nvidia_device_files_present": false,
+      "nvidia_smi_available": false
+    },
+    "executable": "/Users/admin/miniconda3/envs/nb-ramen/bin/python",
+    "git": {
+      "available": true,
+      "commit": "b054063bf9036e561a9ffc5ef8f21608a2af0dd0",
+      "dirty": true
+    },
+    "machine": "arm64",
+    "packages": {
+      "Pillow": "10.4.0",
+      "PyYAML": "6.0.2",
+      "clip": "1.0",
+      "numpy": "1.26.4",
+      "torch": "2.4.1",
+      "torchvision": "0.19.1",
+      "tqdm": "4.66.5"
+    },
+    "platform": "macOS-15.7.7-arm64-arm-64bit",
+    "python": "3.11.16"
+  },
+  "valid": true
+}

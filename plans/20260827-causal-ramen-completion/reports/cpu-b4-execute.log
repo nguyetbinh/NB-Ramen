@@ -1,0 +1,85 @@
+Loading config from /Users/admin/Documents/NB-Ramen/cfg/smoke/default/NoAdapt.yaml
+--------------------------------------------------------------------------------
+Namespace(dataset='CIFAR100C', data_root='/Users/admin/data', artifact_provenance='fast', tta_mode='mixed', model='clip_vitbase16', use_tbn=False, tta_algo='NoAdapt', batch_size=4, num_workers=0, seed=0, cuda=False, device_request='cpu', num_threads=4, config={'optimizer': 'signsgd', 'lr': 1e-09}, save_to='/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-cpu-smoke/cifar100c-block-seed-0-noadapt-dev-cpu-n4-bs-4-blk-4-cfg-98584622153d-prov-fast-data-6dbea801cbad/results.csv', stream_mode='block', legacy_mixed_order=False, stream_seed=0, stream_domain_weights=None, stream_block_size=4, stream_gradual_sharpness=4.0, stream_sample_budget=None, max_eval_samples=4, stream_novel_domain_idx=None, stream_novel_release_fraction=0.5, stream_correlation_strength=0.9, stream_burst_size=None, run_id='cifar100c-block-seed-0-noadapt-dev-cpu-n4-bs-4-blk-4-cfg-98584622153d-prov-fast-data-6dbea801cbad', evidence_dir='/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-cpu-smoke', reference_trace=None, metric_window_size=4, metric_window_stride=4, device=device(type='cpu'), config_dir='/Users/admin/Documents/NB-Ramen/cfg/smoke', config_path='/Users/admin/Documents/NB-Ramen/cfg/smoke/default/NoAdapt.yaml', max_batch_size=4)
+--------------------------------------------------------------------------------
+{'optimizer': 'signsgd', 'lr': 1e-09}
+--------------------------------------------------------------------------------
+Loading model...
+Loading datasets...
+dataset includes environments:
+['gaussian_noise', 'shot_noise', 'impulse_noise', 'defocus_blur', 'glass_blur', 'motion_blur', 'zoom_blur', 'snow', 'frost', 'fog', 'brightness', 'contrast', 'elastic_transform', 'pixelate', 'jpeg_compression']
+Initializing model
+39936
+  0%|          | 0/1 [00:00<?, ?it/s]100%|██████████| 1/1 [00:00<00:00,  3.93it/s]100%|██████████| 1/1 [00:00<00:00,  3.93it/s]
+--------------------------------------------------------------------------------
+gaussian_noise: nan%
+shot_noise: nan%
+impulse_noise: nan%
+defocus_blur: nan%
+glass_blur: nan%
+motion_blur: nan%
+zoom_blur: nan%
+snow: nan%
+frost: nan%
+fog: nan%
+brightness: nan%
+contrast: nan%
+elastic_transform: nan%
+pixelate: 25.00%
+jpeg_compression: nan%
+--------------------------------------------------------------------------------
+total: 25.00%
+Loading config from /Users/admin/Documents/NB-Ramen/cfg/smoke/CIFAR100C/Ramen.yaml
+--------------------------------------------------------------------------------
+Namespace(dataset='CIFAR100C', data_root='/Users/admin/data', artifact_provenance='fast', tta_mode='mixed', model='clip_vitbase16', use_tbn=False, tta_algo='Ramen', batch_size=4, num_workers=0, seed=0, cuda=False, device_request='cpu', num_threads=4, config={'max_capacity': 4, 'topk': 2, 'beta': 5.0, 'optimizer': 'signsgd', 'lr': 0.01}, save_to='/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-cpu-smoke/cifar100c-block-seed-0-ramen-dev-cpu-n4-bs-4-blk-4-cfg-7098bd868b96-prov-fast-data-6dbea801cbad/results.csv', stream_mode='block', legacy_mixed_order=False, stream_seed=0, stream_domain_weights=None, stream_block_size=4, stream_gradual_sharpness=4.0, stream_sample_budget=None, max_eval_samples=4, stream_novel_domain_idx=None, stream_novel_release_fraction=0.5, stream_correlation_strength=0.9, stream_burst_size=None, run_id='cifar100c-block-seed-0-ramen-dev-cpu-n4-bs-4-blk-4-cfg-7098bd868b96-prov-fast-data-6dbea801cbad', evidence_dir='/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-cpu-smoke', reference_trace='/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-cpu-smoke/cifar100c-block-seed-0-noadapt-dev-cpu-n4-bs-4-blk-4-cfg-98584622153d-prov-fast-data-6dbea801cbad/trace.jsonl', metric_window_size=4, metric_window_stride=4, device=device(type='cpu'), config_dir='/Users/admin/Documents/NB-Ramen/cfg/smoke', config_path='/Users/admin/Documents/NB-Ramen/cfg/smoke/CIFAR100C/Ramen.yaml', max_batch_size=4)
+--------------------------------------------------------------------------------
+{'max_capacity': 4, 'topk': 2, 'beta': 5.0, 'optimizer': 'signsgd', 'lr': 0.01}
+--------------------------------------------------------------------------------
+Loading model...
+Loading datasets...
+dataset includes environments:
+['gaussian_noise', 'shot_noise', 'impulse_noise', 'defocus_blur', 'glass_blur', 'motion_blur', 'zoom_blur', 'snow', 'frost', 'fog', 'brightness', 'contrast', 'elastic_transform', 'pixelate', 'jpeg_compression']
+Initializing model
+  0%|          | 0/1 [00:00<?, ?it/s]  0%|          | 0/1 [00:00<?, ?it/s]
+Traceback (most recent call last):
+  File "/Users/admin/Documents/NB-Ramen/src/main.py", line 901, in <module>
+    main(args)
+  File "/Users/admin/Documents/NB-Ramen/src/main.py", line 699, in main
+    domain_names, dataset_accs, _ = ordered_stream_test(
+                                    ^^^^^^^^^^^^^^^^^^^^
+  File "/Users/admin/Documents/NB-Ramen/src/main.py", line 302, in ordered_stream_test
+    logits = tta_model(image)
+             ^^^^^^^^^^^^^^^^
+  File "/Users/admin/miniconda3/envs/nb-ramen/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1553, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/admin/miniconda3/envs/nb-ramen/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1562, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/admin/Documents/NB-Ramen/src/methods/Ramen.py", line 144, in forward
+    self.cache[c].query(feats, topk=self.cfg['topk'])  # num_queries * topk * value_dim
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/admin/Documents/NB-Ramen/src/methods/Ramen.py", line 71, in query
+    dist = torch.cdist(queries, self.keys[:self.size])  # torch.Tensor,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/admin/miniconda3/envs/nb-ramen/lib/python3.11/site-packages/torch/functional.py", line 1336, in cdist
+    return _VF.cdist(x1, x2, p, None)  # type: ignore[attr-defined]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: "cdist" not implemented for 'Half'
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/admin/Documents/NB-Ramen/src/runtime/experiment_matrix.py", line 1183, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/Users/admin/Documents/NB-Ramen/src/runtime/experiment_matrix.py", line 1175, in main
+    payload["outcomes"] = execute_matrix(
+                          ^^^^^^^^^^^^^^^
+  File "/Users/admin/Documents/NB-Ramen/src/runtime/experiment_matrix.py", line 1119, in execute_matrix
+    runner(command, cwd=str(REPOSITORY_ROOT), check=True)
+  File "/Users/admin/miniconda3/envs/nb-ramen/lib/python3.11/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['/Users/admin/miniconda3/envs/nb-ramen/bin/python3.11', '/Users/admin/Documents/NB-Ramen/src/main.py', '--dataset', 'CIFAR100C', '--model', 'clip_vitbase16', '--tta_algo', 'Ramen', '--tta_mode', 'mixed', '--batch_size', '4', '--seed', '0', '--stream_mode', 'block', '--stream_seed', '0', '--device', 'cpu', '--data_root', '/Users/admin/data', '--config', '/Users/admin/Documents/NB-Ramen/cfg/smoke', '--evidence_dir', '/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-cpu-smoke', '--run_id', 'cifar100c-block-seed-0-ramen-dev-cpu-n4-bs-4-blk-4-cfg-7098bd868b96-prov-fast-data-6dbea801cbad', '--save_to', '/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-cpu-smoke/cifar100c-block-seed-0-ramen-dev-cpu-n4-bs-4-blk-4-cfg-7098bd868b96-prov-fast-data-6dbea801cbad/results.csv', '--metric_window_size', '4', '--metric_window_stride', '4', '--artifact-provenance', 'fast', '--max-eval-samples', '4', '--stream_block_size', '4', '--reference_trace', '/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-cpu-smoke/cifar100c-block-seed-0-noadapt-dev-cpu-n4-bs-4-blk-4-cfg-98584622153d-prov-fast-data-6dbea801cbad/trace.jsonl']' returned non-zero exit status 1.
+real 32.33
+user 36.95
+sys 8.07

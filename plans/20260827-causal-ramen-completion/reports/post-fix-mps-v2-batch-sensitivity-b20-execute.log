@@ -1,0 +1,441 @@
+Loading config from /Users/admin/Documents/NB-Ramen/cfg/default/NoAdapt.yaml
+--------------------------------------------------------------------------------
+Namespace(dataset='CIFAR100C', data_root='/Users/admin/data', artifact_provenance='fast', tta_mode='mixed', model='clip_vitbase16', use_tbn=False, tta_algo='NoAdapt', batch_size=20, num_workers=0, seed=0, cuda=False, device_request='mps', num_threads=4, config={'optimizer': 'signsgd', 'lr': 1e-09}, save_to='/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2/cifar100c-block-seed-0-noadapt-dev-mps-n64-bs-20-blk-8-cfg-a05da3c15a1d-prov-fast-data-6dbea801cbad/results.csv', stream_mode='block', legacy_mixed_order=False, stream_seed=0, stream_domain_weights=None, stream_block_size=8, stream_gradual_sharpness=4.0, stream_sample_budget=None, max_eval_samples=64, stream_novel_domain_idx=None, stream_novel_release_fraction=0.5, stream_correlation_strength=0.9, stream_burst_size=None, run_id='cifar100c-block-seed-0-noadapt-dev-mps-n64-bs-20-blk-8-cfg-a05da3c15a1d-prov-fast-data-6dbea801cbad', evidence_dir='/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2', reference_trace=None, metric_window_size=50, metric_window_stride=50, device=device(type='mps'), config_dir='/Users/admin/Documents/NB-Ramen/cfg', config_path='/Users/admin/Documents/NB-Ramen/cfg/default/NoAdapt.yaml', max_batch_size=20)
+--------------------------------------------------------------------------------
+{'optimizer': 'signsgd', 'lr': 1e-09}
+--------------------------------------------------------------------------------
+Loading model...
+Loading datasets...
+dataset includes environments:
+['gaussian_noise', 'shot_noise', 'impulse_noise', 'defocus_blur', 'glass_blur', 'motion_blur', 'zoom_blur', 'snow', 'frost', 'fog', 'brightness', 'contrast', 'elastic_transform', 'pixelate', 'jpeg_compression']
+Initializing model
+39936
+  0%|          | 0/4 [00:00<?, ?it/s] 25%|██▌       | 1/4 [00:00<00:02,  1.41it/s] 50%|█████     | 2/4 [00:01<00:01,  1.50it/s] 75%|███████▌  | 3/4 [00:01<00:00,  1.54it/s]100%|██████████| 4/4 [00:02<00:00,  2.13it/s]100%|██████████| 4/4 [00:02<00:00,  1.84it/s]
+--------------------------------------------------------------------------------
+gaussian_noise: 12.50%
+shot_noise: 25.00%
+impulse_noise: nan%
+defocus_blur: nan%
+glass_blur: 0.00%
+motion_blur: nan%
+zoom_blur: nan%
+snow: nan%
+frost: nan%
+fog: 37.50%
+brightness: nan%
+contrast: nan%
+elastic_transform: 37.50%
+pixelate: 25.00%
+jpeg_compression: nan%
+--------------------------------------------------------------------------------
+total: 22.92%
+Loading config from /Users/admin/Documents/NB-Ramen/cfg/CIFAR100C/Ramen.yaml
+--------------------------------------------------------------------------------
+Namespace(dataset='CIFAR100C', data_root='/Users/admin/data', artifact_provenance='fast', tta_mode='mixed', model='clip_vitbase16', use_tbn=False, tta_algo='Ramen', batch_size=20, num_workers=0, seed=0, cuda=False, device_request='mps', num_threads=4, config={'max_capacity': 750, 'topk': 5, 'beta': 5.0, 'optimizer': 'signsgd', 'lr': 0.01}, save_to='/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2/cifar100c-block-seed-0-ramen-dev-mps-n64-bs-20-blk-8-cfg-54c124be79a3-prov-fast-data-6dbea801cbad/results.csv', stream_mode='block', legacy_mixed_order=False, stream_seed=0, stream_domain_weights=None, stream_block_size=8, stream_gradual_sharpness=4.0, stream_sample_budget=None, max_eval_samples=64, stream_novel_domain_idx=None, stream_novel_release_fraction=0.5, stream_correlation_strength=0.9, stream_burst_size=None, run_id='cifar100c-block-seed-0-ramen-dev-mps-n64-bs-20-blk-8-cfg-54c124be79a3-prov-fast-data-6dbea801cbad', evidence_dir='/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2', reference_trace='/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2/cifar100c-block-seed-0-noadapt-dev-mps-n64-bs-20-blk-8-cfg-a05da3c15a1d-prov-fast-data-6dbea801cbad/trace.jsonl', metric_window_size=50, metric_window_stride=50, device=device(type='mps'), config_dir='/Users/admin/Documents/NB-Ramen/cfg', config_path='/Users/admin/Documents/NB-Ramen/cfg/CIFAR100C/Ramen.yaml', max_batch_size=20)
+--------------------------------------------------------------------------------
+{'max_capacity': 750, 'topk': 5, 'beta': 5.0, 'optimizer': 'signsgd', 'lr': 0.01}
+--------------------------------------------------------------------------------
+Loading model...
+Loading datasets...
+dataset includes environments:
+['gaussian_noise', 'shot_noise', 'impulse_noise', 'defocus_blur', 'glass_blur', 'motion_blur', 'zoom_blur', 'snow', 'frost', 'fog', 'brightness', 'contrast', 'elastic_transform', 'pixelate', 'jpeg_compression']
+Initializing model
+  0%|          | 0/4 [00:00<?, ?it/s] 25%|██▌       | 1/4 [00:04<00:12,  4.00s/it] 50%|█████     | 2/4 [00:06<00:06,  3.09s/it] 75%|███████▌  | 3/4 [00:08<00:02,  2.67s/it]100%|██████████| 4/4 [00:09<00:00,  1.94s/it]100%|██████████| 4/4 [00:09<00:00,  2.36s/it]
+--------------------------------------------------------------------------------
+gaussian_noise: 12.50%
+shot_noise: 25.00%
+impulse_noise: nan%
+defocus_blur: nan%
+glass_blur: 12.50%
+motion_blur: nan%
+zoom_blur: nan%
+snow: nan%
+frost: nan%
+fog: 37.50%
+brightness: nan%
+contrast: nan%
+elastic_transform: 37.50%
+pixelate: 37.50%
+jpeg_compression: nan%
+--------------------------------------------------------------------------------
+total: 27.08%
+Loading config from /Users/admin/Documents/NB-Ramen/cfg/CIFAR100C/StructuredAtomicRamen.yaml
+--------------------------------------------------------------------------------
+Namespace(dataset='CIFAR100C', data_root='/Users/admin/data', artifact_provenance='fast', tta_mode='mixed', model='clip_vitbase16', use_tbn=False, tta_algo='StructuredAtomicRamen', batch_size=20, num_workers=0, seed=0, cuda=False, device_request='mps', num_threads=4, config={'max_capacity': 750, 'capacity_scope': 'per_class', 'topk': 5, 'beta': 5.0, 'include_current': True, 'optimizer': 'signsgd', 'lr': 0.01}, save_to='/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2/cifar100c-block-seed-0-structuredatomicramen-dev-mps-n64-bs-20-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad/results.csv', stream_mode='block', legacy_mixed_order=False, stream_seed=0, stream_domain_weights=None, stream_block_size=8, stream_gradual_sharpness=4.0, stream_sample_budget=None, max_eval_samples=64, stream_novel_domain_idx=None, stream_novel_release_fraction=0.5, stream_correlation_strength=0.9, stream_burst_size=None, run_id='cifar100c-block-seed-0-structuredatomicramen-dev-mps-n64-bs-20-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad', evidence_dir='/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2', reference_trace='/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2/cifar100c-block-seed-0-noadapt-dev-mps-n64-bs-20-blk-8-cfg-a05da3c15a1d-prov-fast-data-6dbea801cbad/trace.jsonl', metric_window_size=50, metric_window_stride=50, device=device(type='mps'), config_dir='/Users/admin/Documents/NB-Ramen/cfg', config_path='/Users/admin/Documents/NB-Ramen/cfg/CIFAR100C/StructuredAtomicRamen.yaml', max_batch_size=20)
+--------------------------------------------------------------------------------
+{'max_capacity': 750, 'capacity_scope': 'per_class', 'topk': 5, 'beta': 5.0, 'include_current': True, 'optimizer': 'signsgd', 'lr': 0.01}
+--------------------------------------------------------------------------------
+Loading model...
+Loading datasets...
+dataset includes environments:
+['gaussian_noise', 'shot_noise', 'impulse_noise', 'defocus_blur', 'glass_blur', 'motion_blur', 'zoom_blur', 'snow', 'frost', 'fog', 'brightness', 'contrast', 'elastic_transform', 'pixelate', 'jpeg_compression']
+Initializing model
+  0%|          | 0/4 [00:00<?, ?it/s] 25%|██▌       | 1/4 [00:03<00:09,  3.04s/it] 50%|█████     | 2/4 [00:05<00:05,  2.66s/it] 75%|███████▌  | 3/4 [00:08<00:02,  2.62s/it]100%|██████████| 4/4 [00:08<00:00,  1.86s/it]100%|██████████| 4/4 [00:08<00:00,  2.18s/it]
+--------------------------------------------------------------------------------
+gaussian_noise: 12.50%
+shot_noise: 25.00%
+impulse_noise: nan%
+defocus_blur: nan%
+glass_blur: 12.50%
+motion_blur: nan%
+zoom_blur: nan%
+snow: nan%
+frost: nan%
+fog: 37.50%
+brightness: nan%
+contrast: nan%
+elastic_transform: 37.50%
+pixelate: 37.50%
+jpeg_compression: nan%
+--------------------------------------------------------------------------------
+total: 27.08%
+Loading config from /Users/admin/Documents/NB-Ramen/cfg/CIFAR100C/CausalRamen.yaml
+--------------------------------------------------------------------------------
+Namespace(dataset='CIFAR100C', data_root='/Users/admin/data', artifact_provenance='fast', tta_mode='mixed', model='clip_vitbase16', use_tbn=False, tta_algo='CausalRamen', batch_size=20, num_workers=0, seed=0, cuda=False, device_request='mps', num_threads=4, config={'max_capacity': 750, 'capacity_scope': 'per_class', 'topk': 5, 'beta': 5.0, 'include_current': True, 'optimizer': 'signsgd', 'lr': 0.01}, save_to='/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2/cifar100c-block-seed-0-causalramen-dev-mps-n64-bs-20-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad/results.csv', stream_mode='block', legacy_mixed_order=False, stream_seed=0, stream_domain_weights=None, stream_block_size=8, stream_gradual_sharpness=4.0, stream_sample_budget=None, max_eval_samples=64, stream_novel_domain_idx=None, stream_novel_release_fraction=0.5, stream_correlation_strength=0.9, stream_burst_size=None, run_id='cifar100c-block-seed-0-causalramen-dev-mps-n64-bs-20-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad', evidence_dir='/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2', reference_trace='/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2/cifar100c-block-seed-0-noadapt-dev-mps-n64-bs-20-blk-8-cfg-a05da3c15a1d-prov-fast-data-6dbea801cbad/trace.jsonl', metric_window_size=50, metric_window_stride=50, device=device(type='mps'), config_dir='/Users/admin/Documents/NB-Ramen/cfg', config_path='/Users/admin/Documents/NB-Ramen/cfg/CIFAR100C/CausalRamen.yaml', max_batch_size=20)
+--------------------------------------------------------------------------------
+{'max_capacity': 750, 'capacity_scope': 'per_class', 'topk': 5, 'beta': 5.0, 'include_current': True, 'optimizer': 'signsgd', 'lr': 0.01}
+--------------------------------------------------------------------------------
+Loading model...
+Loading datasets...
+dataset includes environments:
+['gaussian_noise', 'shot_noise', 'impulse_noise', 'defocus_blur', 'glass_blur', 'motion_blur', 'zoom_blur', 'snow', 'frost', 'fog', 'brightness', 'contrast', 'elastic_transform', 'pixelate', 'jpeg_compression']
+Initializing model
+  0%|          | 0/4 [00:00<?, ?it/s] 25%|██▌       | 1/4 [00:03<00:09,  3.25s/it] 50%|█████     | 2/4 [00:05<00:05,  2.82s/it] 75%|███████▌  | 3/4 [00:08<00:02,  2.72s/it]100%|██████████| 4/4 [00:09<00:00,  1.97s/it]100%|██████████| 4/4 [00:09<00:00,  2.30s/it]
+--------------------------------------------------------------------------------
+gaussian_noise: 12.50%
+shot_noise: 25.00%
+impulse_noise: nan%
+defocus_blur: nan%
+glass_blur: 0.00%
+motion_blur: nan%
+zoom_blur: nan%
+snow: nan%
+frost: nan%
+fog: 37.50%
+brightness: nan%
+contrast: nan%
+elastic_transform: 37.50%
+pixelate: 37.50%
+jpeg_compression: nan%
+--------------------------------------------------------------------------------
+total: 25.00%
+{
+  "commands": [
+    [
+      "/Users/admin/miniconda3/envs/nb-ramen/bin/python3.11",
+      "/Users/admin/Documents/NB-Ramen/src/main.py",
+      "--dataset",
+      "CIFAR100C",
+      "--model",
+      "clip_vitbase16",
+      "--tta_algo",
+      "NoAdapt",
+      "--tta_mode",
+      "mixed",
+      "--batch_size",
+      "20",
+      "--seed",
+      "0",
+      "--stream_mode",
+      "block",
+      "--stream_seed",
+      "0",
+      "--device",
+      "mps",
+      "--data_root",
+      "/Users/admin/data",
+      "--config",
+      "/Users/admin/Documents/NB-Ramen/cfg",
+      "--evidence_dir",
+      "/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2",
+      "--run_id",
+      "cifar100c-block-seed-0-noadapt-dev-mps-n64-bs-20-blk-8-cfg-a05da3c15a1d-prov-fast-data-6dbea801cbad",
+      "--save_to",
+      "/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2/cifar100c-block-seed-0-noadapt-dev-mps-n64-bs-20-blk-8-cfg-a05da3c15a1d-prov-fast-data-6dbea801cbad/results.csv",
+      "--metric_window_size",
+      "50",
+      "--metric_window_stride",
+      "50",
+      "--artifact-provenance",
+      "fast",
+      "--max-eval-samples",
+      "64",
+      "--stream_block_size",
+      "8"
+    ],
+    [
+      "/Users/admin/miniconda3/envs/nb-ramen/bin/python3.11",
+      "/Users/admin/Documents/NB-Ramen/src/main.py",
+      "--dataset",
+      "CIFAR100C",
+      "--model",
+      "clip_vitbase16",
+      "--tta_algo",
+      "Ramen",
+      "--tta_mode",
+      "mixed",
+      "--batch_size",
+      "20",
+      "--seed",
+      "0",
+      "--stream_mode",
+      "block",
+      "--stream_seed",
+      "0",
+      "--device",
+      "mps",
+      "--data_root",
+      "/Users/admin/data",
+      "--config",
+      "/Users/admin/Documents/NB-Ramen/cfg",
+      "--evidence_dir",
+      "/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2",
+      "--run_id",
+      "cifar100c-block-seed-0-ramen-dev-mps-n64-bs-20-blk-8-cfg-54c124be79a3-prov-fast-data-6dbea801cbad",
+      "--save_to",
+      "/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2/cifar100c-block-seed-0-ramen-dev-mps-n64-bs-20-blk-8-cfg-54c124be79a3-prov-fast-data-6dbea801cbad/results.csv",
+      "--metric_window_size",
+      "50",
+      "--metric_window_stride",
+      "50",
+      "--artifact-provenance",
+      "fast",
+      "--max-eval-samples",
+      "64",
+      "--stream_block_size",
+      "8",
+      "--reference_trace",
+      "/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2/cifar100c-block-seed-0-noadapt-dev-mps-n64-bs-20-blk-8-cfg-a05da3c15a1d-prov-fast-data-6dbea801cbad/trace.jsonl"
+    ],
+    [
+      "/Users/admin/miniconda3/envs/nb-ramen/bin/python3.11",
+      "/Users/admin/Documents/NB-Ramen/src/main.py",
+      "--dataset",
+      "CIFAR100C",
+      "--model",
+      "clip_vitbase16",
+      "--tta_algo",
+      "StructuredAtomicRamen",
+      "--tta_mode",
+      "mixed",
+      "--batch_size",
+      "20",
+      "--seed",
+      "0",
+      "--stream_mode",
+      "block",
+      "--stream_seed",
+      "0",
+      "--device",
+      "mps",
+      "--data_root",
+      "/Users/admin/data",
+      "--config",
+      "/Users/admin/Documents/NB-Ramen/cfg",
+      "--evidence_dir",
+      "/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2",
+      "--run_id",
+      "cifar100c-block-seed-0-structuredatomicramen-dev-mps-n64-bs-20-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad",
+      "--save_to",
+      "/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2/cifar100c-block-seed-0-structuredatomicramen-dev-mps-n64-bs-20-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad/results.csv",
+      "--metric_window_size",
+      "50",
+      "--metric_window_stride",
+      "50",
+      "--artifact-provenance",
+      "fast",
+      "--max-eval-samples",
+      "64",
+      "--stream_block_size",
+      "8",
+      "--reference_trace",
+      "/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2/cifar100c-block-seed-0-noadapt-dev-mps-n64-bs-20-blk-8-cfg-a05da3c15a1d-prov-fast-data-6dbea801cbad/trace.jsonl"
+    ],
+    [
+      "/Users/admin/miniconda3/envs/nb-ramen/bin/python3.11",
+      "/Users/admin/Documents/NB-Ramen/src/main.py",
+      "--dataset",
+      "CIFAR100C",
+      "--model",
+      "clip_vitbase16",
+      "--tta_algo",
+      "CausalRamen",
+      "--tta_mode",
+      "mixed",
+      "--batch_size",
+      "20",
+      "--seed",
+      "0",
+      "--stream_mode",
+      "block",
+      "--stream_seed",
+      "0",
+      "--device",
+      "mps",
+      "--data_root",
+      "/Users/admin/data",
+      "--config",
+      "/Users/admin/Documents/NB-Ramen/cfg",
+      "--evidence_dir",
+      "/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2",
+      "--run_id",
+      "cifar100c-block-seed-0-causalramen-dev-mps-n64-bs-20-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad",
+      "--save_to",
+      "/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2/cifar100c-block-seed-0-causalramen-dev-mps-n64-bs-20-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad/results.csv",
+      "--metric_window_size",
+      "50",
+      "--metric_window_stride",
+      "50",
+      "--artifact-provenance",
+      "fast",
+      "--max-eval-samples",
+      "64",
+      "--stream_block_size",
+      "8",
+      "--reference_trace",
+      "/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2/cifar100c-block-seed-0-noadapt-dev-mps-n64-bs-20-blk-8-cfg-a05da3c15a1d-prov-fast-data-6dbea801cbad/trace.jsonl"
+    ]
+  ],
+  "execute": true,
+  "outcomes": [
+    {
+      "run_id": "cifar100c-block-seed-0-noadapt-dev-mps-n64-bs-20-blk-8-cfg-a05da3c15a1d-prov-fast-data-6dbea801cbad",
+      "status": "executed"
+    },
+    {
+      "run_id": "cifar100c-block-seed-0-ramen-dev-mps-n64-bs-20-blk-8-cfg-54c124be79a3-prov-fast-data-6dbea801cbad",
+      "status": "executed"
+    },
+    {
+      "run_id": "cifar100c-block-seed-0-structuredatomicramen-dev-mps-n64-bs-20-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad",
+      "status": "executed"
+    },
+    {
+      "run_id": "cifar100c-block-seed-0-causalramen-dev-mps-n64-bs-20-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad",
+      "status": "executed"
+    }
+  ],
+  "runs": [
+    {
+      "artifact_provenance": "fast",
+      "batch_size": 20,
+      "config_data": {
+        "lr": 1e-09,
+        "optimizer": "signsgd"
+      },
+      "config_dir": "/Users/admin/Documents/NB-Ramen/cfg",
+      "config_hash": "a05da3c15a1d",
+      "config_path": "/Users/admin/Documents/NB-Ramen/cfg/default/NoAdapt.yaml",
+      "data_root": "/Users/admin/data",
+      "dataset": "CIFAR100C",
+      "device": "mps",
+      "evidence_dir": "/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2",
+      "max_eval_samples": 64,
+      "method": "NoAdapt",
+      "metric_window_size": 50,
+      "metric_window_stride": 50,
+      "model": "clip_vitbase16",
+      "reference_trace": null,
+      "run_dir": "/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2/cifar100c-block-seed-0-noadapt-dev-mps-n64-bs-20-blk-8-cfg-a05da3c15a1d-prov-fast-data-6dbea801cbad",
+      "run_id": "cifar100c-block-seed-0-noadapt-dev-mps-n64-bs-20-blk-8-cfg-a05da3c15a1d-prov-fast-data-6dbea801cbad",
+      "seed": 0,
+      "stream_block_size": 8,
+      "stream_mode": "block"
+    },
+    {
+      "artifact_provenance": "fast",
+      "batch_size": 20,
+      "config_data": {
+        "beta": 5.0,
+        "lr": 0.01,
+        "max_capacity": 750,
+        "optimizer": "signsgd",
+        "topk": 5
+      },
+      "config_dir": "/Users/admin/Documents/NB-Ramen/cfg",
+      "config_hash": "54c124be79a3",
+      "config_path": "/Users/admin/Documents/NB-Ramen/cfg/CIFAR100C/Ramen.yaml",
+      "data_root": "/Users/admin/data",
+      "dataset": "CIFAR100C",
+      "device": "mps",
+      "evidence_dir": "/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2",
+      "max_eval_samples": 64,
+      "method": "Ramen",
+      "metric_window_size": 50,
+      "metric_window_stride": 50,
+      "model": "clip_vitbase16",
+      "reference_trace": "/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2/cifar100c-block-seed-0-noadapt-dev-mps-n64-bs-20-blk-8-cfg-a05da3c15a1d-prov-fast-data-6dbea801cbad/trace.jsonl",
+      "run_dir": "/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2/cifar100c-block-seed-0-ramen-dev-mps-n64-bs-20-blk-8-cfg-54c124be79a3-prov-fast-data-6dbea801cbad",
+      "run_id": "cifar100c-block-seed-0-ramen-dev-mps-n64-bs-20-blk-8-cfg-54c124be79a3-prov-fast-data-6dbea801cbad",
+      "seed": 0,
+      "stream_block_size": 8,
+      "stream_mode": "block"
+    },
+    {
+      "artifact_provenance": "fast",
+      "batch_size": 20,
+      "config_data": {
+        "beta": 5.0,
+        "capacity_scope": "per_class",
+        "include_current": true,
+        "lr": 0.01,
+        "max_capacity": 750,
+        "optimizer": "signsgd",
+        "topk": 5
+      },
+      "config_dir": "/Users/admin/Documents/NB-Ramen/cfg",
+      "config_hash": "491d76737805",
+      "config_path": "/Users/admin/Documents/NB-Ramen/cfg/CIFAR100C/StructuredAtomicRamen.yaml",
+      "data_root": "/Users/admin/data",
+      "dataset": "CIFAR100C",
+      "device": "mps",
+      "evidence_dir": "/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2",
+      "max_eval_samples": 64,
+      "method": "StructuredAtomicRamen",
+      "metric_window_size": 50,
+      "metric_window_stride": 50,
+      "model": "clip_vitbase16",
+      "reference_trace": "/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2/cifar100c-block-seed-0-noadapt-dev-mps-n64-bs-20-blk-8-cfg-a05da3c15a1d-prov-fast-data-6dbea801cbad/trace.jsonl",
+      "run_dir": "/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2/cifar100c-block-seed-0-structuredatomicramen-dev-mps-n64-bs-20-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad",
+      "run_id": "cifar100c-block-seed-0-structuredatomicramen-dev-mps-n64-bs-20-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad",
+      "seed": 0,
+      "stream_block_size": 8,
+      "stream_mode": "block"
+    },
+    {
+      "artifact_provenance": "fast",
+      "batch_size": 20,
+      "config_data": {
+        "beta": 5.0,
+        "capacity_scope": "per_class",
+        "include_current": true,
+        "lr": 0.01,
+        "max_capacity": 750,
+        "optimizer": "signsgd",
+        "topk": 5
+      },
+      "config_dir": "/Users/admin/Documents/NB-Ramen/cfg",
+      "config_hash": "491d76737805",
+      "config_path": "/Users/admin/Documents/NB-Ramen/cfg/CIFAR100C/CausalRamen.yaml",
+      "data_root": "/Users/admin/data",
+      "dataset": "CIFAR100C",
+      "device": "mps",
+      "evidence_dir": "/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2",
+      "max_eval_samples": 64,
+      "method": "CausalRamen",
+      "metric_window_size": 50,
+      "metric_window_stride": 50,
+      "model": "clip_vitbase16",
+      "reference_trace": "/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2/cifar100c-block-seed-0-noadapt-dev-mps-n64-bs-20-blk-8-cfg-a05da3c15a1d-prov-fast-data-6dbea801cbad/trace.jsonl",
+      "run_dir": "/Users/admin/Documents/NB-Ramen/evidence/causal-ramen-completion-mps-block-n64-v2/cifar100c-block-seed-0-causalramen-dev-mps-n64-bs-20-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad",
+      "run_id": "cifar100c-block-seed-0-causalramen-dev-mps-n64-bs-20-blk-8-cfg-491d76737805-prov-fast-data-6dbea801cbad",
+      "seed": 0,
+      "stream_block_size": 8,
+      "stream_mode": "block"
+    }
+  ]
+}
+real 80.21
+user 30.41
+sys 10.45
+matrix_exit=0

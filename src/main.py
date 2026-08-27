@@ -429,7 +429,10 @@ def ordered_stream_test(
     if memory_bytes_available:
         method_memory = {
             'status': 'computed',
-            'definition': 'exact bytes retained by the method support memory after each causal sample update',
+            'definition': (
+                'exact bytes retained by the method support memory at the state exposed for each emitted sample; '
+                'batch-atomic methods repeat the post-admission batch state'
+            ),
             'unit': 'bytes',
             'max_retained_bytes': max(retained_memory_bytes),
             'final_retained_bytes': retained_memory_bytes[-1],
