@@ -10,7 +10,7 @@ verification.
 
 Raw evidence remains at
 `/Users/admin/Documents/NB-Ramen/evidence/cifar100c-pilot-mps-block-n200`.
-The five runs are NoAdapt, Tent, legacy batch-atomic Ramen,
+The five runs analyzed in this report are NoAdapt, Tent, legacy batch-atomic Ramen,
 OracleLatentRamen, and LatentRamen. All contain 200 trace rows and share
 exported stream fingerprint
 `aa6c94d923ff8024119c10111c8c685f4cd2e72fb70d47fc5978ba593a70020b`.
@@ -21,6 +21,9 @@ The prefix contains three complete
 pixelate=64, gaussian_noise=64, glass_blur=64, shot_noise=8
 shift_timesteps=[64,128,192]
 ```
+
+A later paired CausalRamen run on the same fingerprint is analyzed separately
+in the [dedicated CausalRamen report](causal-ramen-mps-paired-pilot.md).
 
 ## Strictly validated summaries
 
