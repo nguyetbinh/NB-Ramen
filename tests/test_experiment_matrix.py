@@ -2,6 +2,7 @@ import contextlib
 import hashlib
 import io
 import json
+import shutil
 import tempfile
 from dataclasses import replace
 from pathlib import Path
@@ -12,6 +13,8 @@ from src.runtime.experiment_matrix import (
     IncompleteRunError,
     OPEN_SET_METHODS,
     OPEN_SET_OOD_RATIOS,
+    REPOSITORY_ROOT,
+    build_canonical_open_set_evidence_matrix,
     build_command,
     build_experiment_matrix,
     build_open_set_evidence_matrix,
@@ -28,6 +31,9 @@ from src.runtime.artifact_provenance import (
     SCHEMA_VERSION as ARTIFACT_SCHEMA_VERSION,
     default_sidecar_path,
     resolve_clip_model,
+)
+from src.runtime.open_set_split_robustness_matrix import (
+    build_canonical_open_set_split_robustness_matrix,
 )
 
 
@@ -93,6 +99,16 @@ def _write_valid_evidence(run):
         "artifact_provenance": run.artifact_provenance,
         "data_root": str(run.data_root),
     }
+    if run.require_config_lock:
+        args.update({
+            "config_lock_path": str(run.config_path) if run.method != "NoAdapt" and run.config_path else None,
+            "config_lock_sha256": run.config_sha256 if run.method != "NoAdapt" else None,
+        })
+    if run.known_class_split_sha256 is not None:
+        args.update({
+            "known_class_split_path": str(run.known_class_split_path),
+            "known_class_split_sha256": run.known_class_split_sha256,
+        })
     model_artifact = resolve_clip_model(run.model)
     model_artifact.update({
         "status": "verified", "path": str(Path.home() / ".cache" / "clip" / model_artifact["filename"]),
@@ -286,27 +302,60 @@ def _write_valid_open_set_evidence(run, *, diagnostics=False, consensus=False):
         "ground_truth_class": 10, "prediction": 1, "correct": True,
         "original_label": 10, "known_label_or_minus_one": 1, "is_ood": False,
         "open_set_split_version": run.known_class_split, "ood_ratio": run.ood_ratio,
-        "pre_adaptation_ood_score": 0.1,
+        "pre_adaptation_ood_score": 0.1, "post_adaptation_ood_score": 0.1,
     })
     summary["stream_fingerprint"] = fingerprint
-    summary["open_set"] = {
+    detection = {
         "status": "unavailable", "reason": "OOD metrics require at least one OOD sample",
         "score": "negative_logsumexp_pre_adaptation_logits", "id_accuracy": 1.0,
         "auroc": None, "fpr95": None, "fpr95_threshold": None,
         "ood_recall_at_fpr95": None, "h_score": None, "id_count": 1, "ood_count": 0,
+    }
+    summary["open_set"] = {
+        **detection, "pre_adaptation_detection": dict(detection),
+        "post_adaptation_detection": {
+            **detection, "score": "negative_logsumexp_post_adaptation_logits",
+        },
         "split_version": run.known_class_split, "requested_ood_ratio": run.ood_ratio,
         "realized_ood_ratio": 0.0, "realized_ood_count": 0, "realized_known_count": 1,
         "id_domain_accuracies": {"domain-a": 1.0}, "worst_domain_id_accuracy": 1.0,
     }
+    summary["id_only_post_shift_recovery_time"] = {
+        "status": "computed",
+        "definition": "ID-only full-window recovery within each original persistent-domain episode",
+        "window_size": run.metric_window_size,
+        "shifts": [],
+    }
+    summary["id_only_negative_adaptation_rate"] = (
+        {
+            "status": "reference_required",
+            "reason": "pass --reference_trace from NoAdapt on the identical stream",
+        }
+        if run.reference_trace is None else
+        {
+            "status": "computed", "value": 0.0,
+            "retained_id_samples": 1, "negative_windows": 0, "total_windows": 1,
+            "window_size": run.metric_window_size, "stride": run.metric_window_stride,
+            "reference_trace": str(run.reference_trace),
+        }
+    )
     if diagnostics:
         row.update({
             "retrieved_ood_fraction": 0.0, "retrieved_ood_weight_fraction": 0.0,
             "ramen_vs_oracle_id_cosine": 1.0, "ramen_vs_oracle_id_sign_disagreement": 0.0,
+            "consensus_vs_oracle_id_cosine": 1.0,
+            "consensus_vs_oracle_id_sign_disagreement": 0.0,
+            "consensus_vs_ramen_cosine": 1.0,
+            "consensus_diagnostic_mask_rate": 1.0,
+            "consensus_diagnostic_applied": False,
         })
         summary["oracle_gradient_diagnostics"] = {
             "status": "computed", "retrieved_ood_fraction_mean": 0.0,
             "retrieved_ood_weight_fraction_mean": 0.0,
             "gradient_direction_corruption_mean": 0.0, "sign_disagreement_mean": 0.0,
+            "ramen_gdc_mean": 0.0, "consensus_gdc_mean": 0.0,
+            "ramen_sdr_mean": 0.0, "consensus_sdr_mean": 0.0,
+            "gdc_reduction_mean": 0.0, "sdr_reduction_mean": 0.0,
             "defined_direction_count": 1,
         }
     if consensus:
@@ -414,9 +463,45 @@ class ExperimentMatrixTests(unittest.TestCase):
             with self.assertRaisesRegex(IncompleteRunError, "consensus diagnostic fields"):
                 validate_completed_run(consensus)
 
+    def test_open_set_resume_recomputes_id_only_stability_blocks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            baseline, adapted = build_open_set_evidence_matrix(
+                streams=("block",), ood_ratios=(0.0,), seeds=(0,),
+                methods=("NoAdapt", "Ramen"), evidence_dir=directory,
+                data_root=directory, max_eval_samples=1,
+            )
+            _write_valid_open_set_evidence(baseline)
+            _write_valid_open_set_evidence(adapted)
+            validate_completed_run(adapted)
+            with patch("src.runtime.experiment_matrix.validate_dataset_layout", return_value={"valid": True}):
+                outcomes = execute_matrix(
+                    (baseline, adapted), data_root=directory, resume=True,
+                    runner=lambda *_args, **_kwargs: self.fail("model launched"),
+                )
+            self.assertEqual(["skipped", "skipped"], [item["status"] for item in outcomes])
+
+            mutations = (
+                ("id_only_negative_adaptation_rate", lambda block: block.__setitem__("negative_windows", 1)),
+                ("id_only_post_shift_recovery_time", lambda block: block.__setitem__(
+                    "shifts", [{"status": "recovered", "recovery_samples": 99}]
+                )),
+            )
+            for field, mutate in mutations:
+                with self.subTest(field=field):
+                    _write_valid_open_set_evidence(adapted)
+                    _mutate_summary(adapted, lambda summary: mutate(summary[field]))
+                    with self.assertRaisesRegex(IncompleteRunError, field):
+                        validate_completed_run(adapted)
+                    with patch("src.runtime.experiment_matrix.validate_dataset_layout", return_value={"valid": True}):
+                        with self.assertRaisesRegex(IncompleteRunError, field):
+                            execute_matrix(
+                                (baseline, adapted), data_root=directory, resume=True,
+                                runner=lambda *_args, **_kwargs: self.fail("model launched"),
+                            )
+
     def test_canonical_open_set_matrix_binds_ratio_and_paired_baseline(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
-            runs = build_open_set_evidence_matrix(
+            runs = build_canonical_open_set_evidence_matrix(
                 evidence_dir=temporary_directory, data_root=temporary_directory,
             )
             self.assertEqual(252, len(runs))
@@ -436,6 +521,115 @@ class ExperimentMatrixTests(unittest.TestCase):
                 if run.method != "NoAdapt":
                     self.assertIsNotNone(run.reference_trace)
                     self.assertIn(f"open-ood-{run.ood_ratio:g}".replace(".", "-"), str(run.reference_trace))
+
+    def test_canonical_open_set_exact_provenance_ids_are_portable_and_distinct(self):
+        fast = build_canonical_open_set_evidence_matrix(artifact_provenance="fast")
+        exact = build_canonical_open_set_evidence_matrix(artifact_provenance="exact")
+        self.assertEqual(252, len(exact))
+        self.assertLessEqual(max(len(run.run_id) for run in exact), 128)
+        self.assertEqual({run.method for run in fast}, {run.method for run in exact})
+        self.assertTrue(all(run.artifact_provenance == "exact" for run in exact))
+        self.assertTrue(all("-prov-exact-" in run.run_id or "-prov-xact-" in run.run_id for run in exact))
+        self.assertTrue(any("-prov-exact-" in run.run_id for run in exact))
+        self.assertTrue(any("-prov-xact-" in run.run_id for run in exact))
+        self.assertEqual(252, len({run.run_id for run in exact}))
+        self.assertTrue({run.run_id for run in fast}.isdisjoint(run.run_id for run in exact))
+
+    def test_exact_open_set_id_only_abbreviates_provenance_on_overflow(self):
+        common = dict(
+            dataset="CIFAR100C", stream_mode="recurring", seed=0, device="cuda",
+            artifact_provenance="exact", data_root="/tmp/data", open_set_ood_ratio=.3,
+            open_set_per_domain_source_budget=400,
+        )
+        legacy_fit = make_run_id(method="NoAdapt", config_hash="missing", **common)
+        overflow = make_run_id(
+            method="OracleIDGradientRamen", config_hash="c" * 12, **common,
+        )
+        self.assertIn("-prov-exact-", legacy_fit)
+        self.assertNotIn("-prov-xact-", legacy_fit)
+        self.assertIn("-prov-xact-", overflow)
+        self.assertLessEqual(len(overflow), 128)
+
+    def test_split_locked_resume_rejects_forged_manifest_digest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = next(run for run in build_canonical_open_set_split_robustness_matrix(
+                evidence_dir=directory, data_root=directory,
+            ) if run.method == "Ramen")
+            run = replace(run, reference_trace=None)
+            _write_valid_open_set_evidence(run)
+            manifest_path = run.run_dir / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["args"]["known_class_split_sha256"] = "0" * 64
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(IncompleteRunError, "known_class_split_sha256"):
+                validate_completed_run(run)
+
+    def test_canonical_open_set_matrix_rejects_every_identity_deviation(self):
+        base = {"evidence_dir": "/tmp/evidence", "data_root": "/tmp/data"}
+        invalid = (
+            ("device", {"device": "mps"}, "device='cuda'"),
+            ("streams", {"streams": ("block",)}, "streams is fixed"),
+            ("ratios", {"ood_ratios": (.3,)}, "OOD ratios is fixed"),
+            ("seeds", {"seeds": (0,)}, "seeds is fixed"),
+            ("methods", {"methods": ("NoAdapt", "Ramen")}, "methods is fixed"),
+            ("limited", {"max_eval_samples": 32}, "full streams"),
+            ("block size", {"stream_block_size": 32}, "stream_block_size=64"),
+            ("provenance", {"artifact_provenance": "off"}, "artifact_provenance"),
+            ("budget", {"per_domain_source_budget": 200}, "source budget is fixed"),
+        )
+        for label, kwargs, message in invalid:
+            with self.subTest(label=label), self.assertRaisesRegex(ValueError, message):
+                build_canonical_open_set_evidence_matrix(**base, **kwargs)
+
+    def test_open_set_pilot_builder_remains_explicitly_noncanonical_and_partial(self):
+        runs = build_open_set_evidence_matrix(
+            streams=("block",), ood_ratios=(0.0,), seeds=(0,),
+            methods=("NoAdapt", "Ramen"), evidence_dir="/tmp/evidence", data_root="/tmp/data",
+        )
+        self.assertEqual(["NoAdapt", "Ramen"], [run.method for run in runs])
+
+    def test_canonical_open_set_config_requires_clean_gate_and_no_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_root = Path(directory) / "cfg"
+            config_dataset = config_root / "CIFAR100C"
+            config_dataset.mkdir(parents=True)
+            for method in OPEN_SET_METHODS:
+                if method != "NoAdapt":
+                    shutil.copy(REPOSITORY_ROOT / "cfg" / "CIFAR100C" / f"{method}.yaml", config_dataset)
+            clean_config = config_dataset / "EntropyGatedRamen.yaml"
+            clean_config.write_text(clean_config.read_text(encoding="utf-8").replace("0.50", "0.40"), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "max_normalized_entropy"):
+                build_canonical_open_set_evidence_matrix(
+                    evidence_dir=directory, data_root=directory, config_dir=config_root,
+                )
+            clean_config.write_text(clean_config.read_text(encoding="utf-8").replace("0.40", "0.50"), encoding="utf-8")
+            consensus_config = config_dataset / "OracleConsensusRamen.yaml"
+            consensus_config.write_text(
+                consensus_config.read_text(encoding="utf-8").replace("include_current: true\n", ""), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "ConsensusRamen-v0"):
+                build_canonical_open_set_evidence_matrix(
+                    evidence_dir=directory, data_root=directory, config_dir=config_root,
+                )
+            consensus_config.write_text(
+                consensus_config.read_text(encoding="utf-8").replace("consensus_mode: hard_mask\n", "consensus_mode: hard_mask\ninclude_current: true\n"), encoding="utf-8"
+            )
+            runs = build_canonical_open_set_evidence_matrix(
+                evidence_dir=directory, data_root=directory, config_dir=config_root,
+            )
+            clean = next(run for run in runs if run.method == "EntropyGatedRamen")
+            self.assertEqual(hashlib.sha256(clean.config_path.read_bytes()).hexdigest()[:12], clean.config_hash)
+
+            fallback_root = Path(directory) / "fallback-cfg"
+            fallback_dir = fallback_root / "default"
+            fallback_dir.mkdir(parents=True)
+            for method in OPEN_SET_METHODS:
+                if method != "NoAdapt":
+                    shutil.copy(REPOSITORY_ROOT / "cfg" / "CIFAR100C" / f"{method}.yaml", fallback_dir)
+            with self.assertRaisesRegex(ValueError, "resolved a fallback config"):
+                build_canonical_open_set_evidence_matrix(
+                    evidence_dir=directory, data_root=directory, config_dir=fallback_root,
+                )
 
     def test_canonical_open_set_matrix_rejects_pilot_device_or_unknown_ratio(self):
         with self.assertRaisesRegex(ValueError, "requires device='cuda'"):
@@ -519,13 +713,18 @@ class ExperimentMatrixTests(unittest.TestCase):
             with self.assertRaisesRegex(IncompleteRunError, "memory_size disagrees"):
                 validate_completed_run(run)
 
-    def test_entropy_gated_method_is_explicitly_selectable_without_expanding_defaults(self):
+    def test_clean_and_historical_entropy_gated_methods_are_selectable_without_expanding_defaults(self):
         with tempfile.TemporaryDirectory() as directory:
-            runs = build_experiment_matrix(
+            clean = build_experiment_matrix(
+                datasets=("CIFAR100C",), streams=("block",), methods=("EntropyGatedRamen",),
+                seeds=(0,), evidence_dir=directory, data_root=directory, device="cpu", max_eval_samples=1,
+            )
+            historical = build_experiment_matrix(
                 datasets=("CIFAR100C",), streams=("block",), methods=("EntropyGatedLatentRamen",),
                 seeds=(0,), evidence_dir=directory, data_root=directory, device="cpu", max_eval_samples=1,
             )
-        self.assertEqual(["NoAdapt", "EntropyGatedLatentRamen"], [run.method for run in runs])
+        self.assertEqual(["NoAdapt", "EntropyGatedRamen"], [run.method for run in clean])
+        self.assertEqual(["NoAdapt", "EntropyGatedLatentRamen"], [run.method for run in historical])
         self.assertEqual(300, len(build_experiment_matrix(seeds=(0, 1, 2), max_eval_samples=1)))
 
     def test_soft_consensus_ablation_is_explicitly_selectable_without_expanding_defaults(self):
@@ -568,7 +767,7 @@ class ExperimentMatrixTests(unittest.TestCase):
     def test_gated_resume_rejects_entropy_decision_that_disagrees_with_config(self):
         with tempfile.TemporaryDirectory() as directory:
             runs = build_experiment_matrix(
-                datasets=("CIFAR100C",), streams=("iid_mixed",), methods=("EntropyGatedLatentRamen",),
+                datasets=("CIFAR100C",), streams=("iid_mixed",), methods=("EntropyGatedRamen",),
                 seeds=(0,), evidence_dir=directory, data_root=directory, device="cpu", max_eval_samples=1,
             )
             baseline, gated = runs
@@ -596,7 +795,7 @@ class ExperimentMatrixTests(unittest.TestCase):
     def test_gated_resume_requires_complete_admission_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             runs = build_experiment_matrix(
-                datasets=("CIFAR100C",), streams=("iid_mixed",), methods=("EntropyGatedLatentRamen",),
+                datasets=("CIFAR100C",), streams=("iid_mixed",), methods=("EntropyGatedRamen",),
                 seeds=(0,), evidence_dir=directory, data_root=directory, device="cpu", max_eval_samples=1,
             )
             baseline, gated = runs
@@ -824,6 +1023,7 @@ class ExperimentMatrixTests(unittest.TestCase):
         fast = build_experiment_matrix(**common, artifact_provenance="fast")[0]
         exact = build_experiment_matrix(**common, artifact_provenance="exact")[0]
         self.assertNotEqual(fast.run_id, exact.run_id)
+        self.assertIn("-prov-exact-", exact.run_id)
         command = build_command(exact)
         self.assertEqual("exact", command[command.index("--artifact-provenance") + 1])
 
@@ -964,7 +1164,7 @@ class ExperimentMatrixTests(unittest.TestCase):
             device="mps", max_eval_samples=9,
         )[0]
         payload = run.to_dict()
-        for field in ("device", "data_root", "max_eval_samples", "config_dir", "config_path", "config_hash", "config_data"):
+        for field in ("device", "data_root", "max_eval_samples", "config_dir", "config_path", "config_hash", "config_sha256", "config_data"):
             self.assertIn(field, payload)
 
     def test_valid_completed_artifact_is_skipped_without_launching(self):

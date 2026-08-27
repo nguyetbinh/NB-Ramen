@@ -173,6 +173,36 @@ def open_set_metrics(
     )
 
 
+def open_set_detection_summary(
+    predictions: Iterable[Any],
+    ground_truth_classes: Iterable[Any],
+    is_ood: Iterable[bool],
+    ood_scores: Iterable[float],
+    *,
+    score: str,
+) -> dict[str, Any]:
+    """Return the serializable detection block, including explicit undefined states."""
+    predicted, truth, flags, scores = list(predictions), list(ground_truth_classes), list(is_ood), list(ood_scores)
+    try:
+        metrics = open_set_metrics(predicted, truth, flags, scores)
+        return {
+            "status": "computed", "score": score, "id_accuracy": metrics.id_accuracy,
+            "auroc": metrics.auroc, "fpr95": metrics.fpr_at_95_tpr,
+            "fpr95_threshold": metrics.fpr95_threshold,
+            "ood_recall_at_fpr95": metrics.ood_recall_at_fpr95,
+            "h_score": metrics.h_score, "id_count": metrics.id_count, "ood_count": metrics.ood_count,
+        }
+    except ValueError as exc:
+        id_count = sum(not flag for flag in flags)
+        return {
+            "status": "unavailable", "reason": str(exc), "score": score,
+            "id_accuracy": id_accuracy(predicted, truth, flags) if id_count else None,
+            "auroc": None, "fpr95": None, "fpr95_threshold": None,
+            "ood_recall_at_fpr95": None, "h_score": None,
+            "id_count": id_count, "ood_count": sum(flags),
+        }
+
+
 def open_set_metrics_from_trace_rows(
     trace_rows: Iterable[Mapping[str, Any]],
     *,

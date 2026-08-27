@@ -13,7 +13,7 @@ from unittest import mock
 from src import main as main_module
 from src.evaluation.evidence import (
     SUMMARY_SCHEMA_VERSION, TRACE_SCHEMA_VERSION, JsonlTraceWriter, atomic_write_json, build_run_manifest,
-    compare_trace_negative_adaptation, verify_reference_trace_stream_fingerprint,
+    compare_trace_id_negative_adaptation, compare_trace_negative_adaptation, verify_reference_trace_stream_fingerprint,
     write_run_manifest,
 )
 
@@ -193,6 +193,22 @@ class EvidenceTests(unittest.TestCase):
             with JsonlTraceWriter(Path(directory) / "partial.jsonl", "run") as writer:
                 with self.assertRaisesRegex(ValueError, "all present"):
                     writer.write({**record, "admitted_to_memory": True})
+
+    def test_trace_writer_rejects_partial_oracle_consensus_diagnostic_group(self):
+        record = {
+            "timestep": 0, "sample_idx": 0, "ground_truth_domain": 0,
+            "ground_truth_class": 0, "prediction": 0, "correct": True,
+            "predicted_entropy": 0.0, "inferred_context": None,
+            "memory_size": 0, "num_active_contexts": None, "memory_bytes": None,
+            "latency_ms": 1.0, "original_label": 0, "known_label_or_minus_one": 0,
+            "is_ood": False, "open_set_split_version": "split", "ood_ratio": 0.0,
+            "pre_adaptation_ood_score": 0.0,
+            "post_adaptation_ood_score": 0.0,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            with JsonlTraceWriter(Path(directory) / "trace.jsonl", "run") as writer:
+                with self.assertRaisesRegex(ValueError, "oracle-gradient"):
+                    writer.write({**record, "retrieved_ood_fraction": 0.0})
 
     def test_trace_writer_refuses_to_mix_with_an_existing_run(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -456,6 +472,29 @@ class EvidenceTests(unittest.TestCase):
             reference_path.write_text("".join(json.dumps(row) + "\n" for row in reference))
             with self.assertRaisesRegex(ValueError, "identity mismatch"):
                 compare_trace_negative_adaptation(adapted_path, reference_path, window_size=2)
+
+    def test_id_only_trace_comparison_filters_ood_and_requires_matching_flags(self):
+        with tempfile.TemporaryDirectory() as directory:
+            adapted_path = Path(directory) / "adapted.jsonl"
+            reference_path = Path(directory) / "reference.jsonl"
+            def rows(correctness):
+                return [
+                    {"timestep": index, "sample_idx": index, "ground_truth_domain": 0,
+                     "ground_truth_class": 1, "correct": correct, "is_ood": index in {1, 3}}
+                    for index, correct in enumerate(correctness)
+                ]
+            adapted = rows([True, False, False, True, False, False])
+            reference = rows([True, True, False, False, True, True])
+            adapted_path.write_text("".join(json.dumps(row) + "\n" for row in adapted))
+            reference_path.write_text("".join(json.dumps(row) + "\n" for row in reference))
+            result = compare_trace_id_negative_adaptation(adapted_path, reference_path, window_size=2, stride=2)
+            self.assertEqual(4, result["retained_id_samples"])
+            self.assertEqual(2, result["total_windows"])
+            self.assertEqual(0.5, result["value"])
+            reference[1]["is_ood"] = False
+            reference_path.write_text("".join(json.dumps(row) + "\n" for row in reference))
+            with self.assertRaisesRegex(ValueError, "is_ood mismatch"):
+                compare_trace_id_negative_adaptation(adapted_path, reference_path, window_size=2)
 
     def test_reference_trace_requires_matching_verified_sibling_stream(self):
         with tempfile.TemporaryDirectory() as directory:

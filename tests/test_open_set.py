@@ -2,9 +2,12 @@
 
 import json
 import importlib.util
+import hashlib
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -17,7 +20,9 @@ _OPEN_SET_SPEC = importlib.util.spec_from_file_location("open_set", PROJECT_ROOT
 _OPEN_SET = importlib.util.module_from_spec(_OPEN_SET_SPEC)
 _OPEN_SET_SPEC.loader.exec_module(_OPEN_SET)
 OpenSetDomainDataset = _OPEN_SET.OpenSetDomainDataset
+OpenSetCIFAR100C = _OPEN_SET.OpenSetCIFAR100C
 load_cifar100_open_set_split = _OPEN_SET.load_cifar100_open_set_split
+CIFAR100_CLASS_NAMES = _OPEN_SET.CIFAR100_CLASS_NAMES
 
 
 class _Domain:
@@ -50,6 +55,114 @@ class OpenSetTests(unittest.TestCase):
         self.assertEqual(80, len(split["known_class_ids"]))
         self.assertEqual(20, len(split["unknown_class_ids"]))
         self.assertEqual(set(range(100)), set(split["known_class_ids"]) | set(split["unknown_class_ids"]))
+        self.assertNotIn("fingerprint", split)
+        self.assertNotIn("taxonomy_sha256", split)
+
+    def test_name_ranked_robustness_splits_recompute_from_frozen_recipe(self):
+        split_dir = PROJECT_ROOT / "cfg" / "research"
+        loaded = [
+            load_cifar100_open_set_split(split_dir / f"open-set-cifar100-split-v{version}.json")
+            for version in (2, 3)
+        ]
+        self.assertEqual(
+            ["open-set-cifar100-name-rank-v2", "open-set-cifar100-name-rank-v3"],
+            [split["version"] for split in loaded],
+        )
+        for split in loaded:
+            # Deliberately repeat the published UTF-8 digest recipe here
+            # rather than relying on the loader's implementation.
+            salt = split["version"]
+            ranked = sorted(
+                range(100),
+                key=lambda class_id: (
+                    hashlib.sha256(
+                        f"{salt}\0{CIFAR100_CLASS_NAMES[class_id]}".encode("utf-8")
+                    ).hexdigest(),
+                    CIFAR100_CLASS_NAMES[class_id],
+                ),
+            )
+            self.assertEqual(tuple(ranked[:80]), split["known_class_ids"])
+            self.assertEqual(tuple(ranked[80:]), split["unknown_class_ids"])
+            self.assertEqual(80, len(set(split["known_class_ids"])))
+            self.assertEqual(20, len(set(split["unknown_class_ids"])))
+            self.assertFalse(set(split["known_class_ids"]) & set(split["unknown_class_ids"]))
+            self.assertEqual(set(range(100)), set(split["known_class_ids"]) | set(split["unknown_class_ids"]))
+            self.assertRegex(split["fingerprint"], r"^[0-9a-f]{64}$")
+            self.assertRegex(split["taxonomy_sha256"], r"^[0-9a-f]{64}$")
+        self.assertNotEqual(loaded[0]["known_class_ids"], loaded[1]["known_class_ids"])
+
+    def test_verified_name_ranked_identifiers_are_bound_into_stream_fingerprint(self):
+        split_path = PROJECT_ROOT / "cfg" / "research" / "open-set-cifar100-split-v2.json"
+
+        def initialize_without_images(dataset, *args, **kwargs):
+            dataset.classes = list(CIFAR100_CLASS_NAMES)
+            dataset.environments = ("corruption",)
+            dataset.datasets = [_Domain(range(100))]
+
+        with patch.object(_OPEN_SET.CIFAR100C, "__init__", initialize_without_images):
+            dataset = OpenSetCIFAR100C("unused", split_path=split_path)
+        split = load_cifar100_open_set_split(split_path)
+        self.assertEqual(split["fingerprint"], dataset.open_set_split_fingerprint)
+        self.assertEqual(split["taxonomy_sha256"], dataset.open_set_taxonomy_sha256)
+
+        stream = build_open_set_stream(dataset, "iid_mixed", 7, ood_ratio=0.2)
+        open_set = stream.metadata["open_set"]
+        self.assertEqual(split["fingerprint"], open_set["split_fingerprint"])
+        self.assertEqual(split["taxonomy_sha256"], open_set["taxonomy_sha256"])
+        self.assertTrue(verify_stream_fingerprint(stream.to_dict()))
+
+        tampered = json.loads(json.dumps(stream.to_dict()))
+        tampered["metadata"]["open_set"]["taxonomy_sha256"] = "0" * 64
+        self.assertFalse(verify_stream_fingerprint(tampered))
+
+    def test_name_ranked_split_rejects_recipe_or_fingerprint_tampering(self):
+        source = PROJECT_ROOT / "cfg" / "research" / "open-set-cifar100-split-v2.json"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "split.json"
+            payload = json.loads(source.read_text(encoding="utf-8"))
+            payload["known_class_ids"][0], payload["known_class_ids"][1] = (
+                payload["known_class_ids"][1], payload["known_class_ids"][0]
+            )
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "do not match"):
+                load_cifar100_open_set_split(path)
+
+            payload = json.loads(source.read_text(encoding="utf-8"))
+            payload["fingerprint"] = "0" * 64
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "fingerprint"):
+                load_cifar100_open_set_split(path)
+
+    def test_split_byte_lock_rejects_semantically_identical_reformatting(self):
+        source = PROJECT_ROOT / "cfg" / "research" / "open-set-cifar100-split-v2.json"
+        expected = hashlib.sha256(source.read_bytes()).hexdigest()
+        locked = load_cifar100_open_set_split(source, expected_sha256=expected)
+        self.assertEqual("open-set-cifar100-name-rank-v2", locked["version"])
+        with tempfile.TemporaryDirectory() as directory:
+            reformatted = Path(directory) / "split.json"
+            # Same JSON value, different bytes: a preregistered launch must
+            # reject even whitespace-only drift.
+            reformatted.write_text(
+                json.dumps(json.loads(source.read_text(encoding="utf-8")), sort_keys=True),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "planned bytes"):
+                load_cifar100_open_set_split(reformatted, expected_sha256=expected)
+
+    def test_open_set_wrapper_passes_split_byte_lock_to_loader(self):
+        split_path = PROJECT_ROOT / "cfg" / "research" / "open-set-cifar100-split-v3.json"
+        expected = hashlib.sha256(split_path.read_bytes()).hexdigest()
+
+        def initialize_without_images(dataset, *args, **kwargs):
+            dataset.classes = list(CIFAR100_CLASS_NAMES)
+            dataset.environments = ("corruption",)
+            dataset.datasets = [_Domain(range(100))]
+
+        with patch.object(_OPEN_SET.CIFAR100C, "__init__", initialize_without_images):
+            dataset = OpenSetCIFAR100C(
+                "unused", split_path=split_path, split_sha256=expected,
+            )
+        self.assertEqual("open-set-cifar100-name-rank-v3", dataset.open_set_split_version)
 
     def test_domain_wrapper_keeps_source_label_and_separates_metadata(self):
         source = _Domain([1, 4])

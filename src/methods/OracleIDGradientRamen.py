@@ -21,6 +21,8 @@ from .losses import softmax_entropy
 
 
 _ORACLE_OOD_SOURCE = "evaluator_is_ood"
+_DIAGNOSTIC_CONSENSUS_THRESHOLD = 0.2
+_DIAGNOSTIC_MIN_CONSENSUS_CLASSES = 3
 
 
 def validate_oracle_id_gradient_config(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -157,11 +159,16 @@ def _direction_diagnostics(all_gradient: torch.Tensor, id_gradient: torch.Tensor
 
 
 def aggregate_oracle_supports(queries, caches, *, topk: int, beta: float):
-    """Return Ramen all-support and oracle-ID directions plus per-query evidence."""
+    """Derive Ramen, label-free consensus, and OracleID directions from one retrieval.
+
+    OOD flags participate only in the ID-only reference.  In particular, the
+    hard consensus mask is a function solely of the ordinary per-class support
+    contributions, matching the deployable v0 threshold and class minimum.
+    """
     batch_size = queries.shape[0]
     gradient_dim = next(cache.values for cache in caches).shape[1]
-    all_sum = torch.zeros((batch_size, gradient_dim), device=queries.device, dtype=queries.dtype)
-    id_sum = torch.zeros_like(all_sum)
+    class_all = []
+    class_id = []
     active_classes = torch.zeros(batch_size, device=queries.device, dtype=torch.long)
     ood_count = torch.zeros(batch_size, device=queries.device, dtype=torch.long)
     total_count = torch.zeros(batch_size, device=queries.device, dtype=torch.long)
@@ -173,27 +180,53 @@ def aggregate_oracle_supports(queries, caches, *, topk: int, beta: float):
             continue
         values, entropies, distances, flags = result
         weights = torch.exp(-entropies) * torch.exp(-float(beta) * distances)
-        all_sum += (values * weights.unsqueeze(-1)).sum(dim=1)
-        id_sum += (values * weights.masked_fill(flags, 0).unsqueeze(-1)).sum(dim=1)
+        class_all.append((values * weights.unsqueeze(-1)).sum(dim=1))
+        class_id.append((values * weights.masked_fill(flags, 0).unsqueeze(-1)).sum(dim=1))
         active_classes += 1
         ood_count += flags.sum(dim=1)
         total_count += flags.shape[1]
         ood_weight += weights.masked_fill(~flags, 0).sum(dim=1)
         total_weight += weights.sum(dim=1)
-    divisor = active_classes.clamp_min(1).to(all_sum.dtype).unsqueeze(-1)
-    all_gradient, id_gradient = all_sum / divisor, id_sum / divisor
-    fractions = torch.where(total_count > 0, ood_count.to(all_sum.dtype) / total_count.to(all_sum.dtype), torch.zeros_like(ood_weight))
+    if class_all:
+        per_class_all = torch.stack(class_all, dim=1)
+        all_gradient = per_class_all.mean(dim=1)
+        id_gradient = torch.stack(class_id, dim=1).mean(dim=1)
+        agreement = torch.sign(per_class_all).mean(dim=1).abs()
+        consensus_applied = len(class_all) >= _DIAGNOSTIC_MIN_CONSENSUS_CLASSES
+        mask = (
+            agreement >= _DIAGNOSTIC_CONSENSUS_THRESHOLD
+            if consensus_applied else torch.ones_like(agreement, dtype=torch.bool)
+        )
+        consensus_gradient = all_gradient * mask.to(dtype=all_gradient.dtype)
+    else:
+        all_gradient = torch.zeros((batch_size, gradient_dim), device=queries.device, dtype=queries.dtype)
+        id_gradient = torch.zeros_like(all_gradient)
+        consensus_gradient = all_gradient.clone()
+        mask = torch.ones_like(all_gradient, dtype=torch.bool)
+        consensus_applied = False
+    fractions = torch.where(total_count > 0, ood_count.to(all_gradient.dtype) / total_count.to(all_gradient.dtype), torch.zeros_like(ood_weight))
     weight_fractions = torch.where(total_weight > 0, ood_weight / total_weight, torch.zeros_like(ood_weight))
     cosine, sign_disagreement = [], []
+    consensus_cosine, consensus_sign_disagreement, consensus_ramen_cosine = [], [], []
     for index in range(batch_size):
         item_cosine, item_sign = _direction_diagnostics(all_gradient[index], id_gradient[index])
         cosine.append(item_cosine)
         sign_disagreement.append(item_sign)
-    return all_gradient, id_gradient, {
+        item_cosine, item_sign = _direction_diagnostics(consensus_gradient[index], id_gradient[index])
+        consensus_cosine.append(item_cosine)
+        consensus_sign_disagreement.append(item_sign)
+        item_cosine, _ = _direction_diagnostics(consensus_gradient[index], all_gradient[index])
+        consensus_ramen_cosine.append(item_cosine)
+    return all_gradient, consensus_gradient, id_gradient, {
         "retrieved_ood_fraction": fractions,
         "retrieved_ood_weight_fraction": weight_fractions,
         "ramen_vs_oracle_id_cosine": cosine,
         "ramen_vs_oracle_id_sign_disagreement": sign_disagreement,
+        "consensus_vs_oracle_id_cosine": consensus_cosine,
+        "consensus_vs_oracle_id_sign_disagreement": consensus_sign_disagreement,
+        "consensus_vs_ramen_cosine": consensus_ramen_cosine,
+        "consensus_diagnostic_mask_rate": mask.to(dtype=all_gradient.dtype).mean(dim=1),
+        "consensus_diagnostic_applied": [consensus_applied] * batch_size,
         "active_classes": active_classes,
     }
 
@@ -247,7 +280,7 @@ class OracleIDGradientRamen(OracleOODContextHook, TTABase):
                 if not (self.drop_ood_from_memory and bool(is_ood[index])):
                     self.cache[int(predicted_classes[index])].add(features[item], gradients[item], entropies[item],
                                                                    priorities[item], is_ood[item])
-            _, id_gradient, diagnostics = aggregate_oracle_supports(
+            _, _, id_gradient, diagnostics = aggregate_oracle_supports(
                 features, self.cache, topk=self.cfg["topk"], beta=self.cfg["beta"],
             )
             rows: dict[str, list[Any]] = {}
@@ -284,6 +317,11 @@ class OracleIDGradientRamen(OracleOODContextHook, TTABase):
             "retrieved_ood_weight_fraction": None if rows is None else rows["retrieved_ood_weight_fraction"],
             "ramen_vs_oracle_id_cosine": None if rows is None else rows["ramen_vs_oracle_id_cosine"],
             "ramen_vs_oracle_id_sign_disagreement": None if rows is None else rows["ramen_vs_oracle_id_sign_disagreement"],
+            "consensus_vs_oracle_id_cosine": None if rows is None else rows["consensus_vs_oracle_id_cosine"],
+            "consensus_vs_oracle_id_sign_disagreement": None if rows is None else rows["consensus_vs_oracle_id_sign_disagreement"],
+            "consensus_vs_ramen_cosine": None if rows is None else rows["consensus_vs_ramen_cosine"],
+            "consensus_diagnostic_mask_rate": None if rows is None else rows["consensus_diagnostic_mask_rate"],
+            "consensus_diagnostic_applied": None if rows is None else rows["consensus_diagnostic_applied"],
             "active_classes": None if rows is None else rows["active_classes"],
             "oracle_ood_source": _ORACLE_OOD_SOURCE,
         }

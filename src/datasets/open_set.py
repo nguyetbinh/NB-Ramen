@@ -35,12 +35,112 @@ DEFAULT_DOMAINNET_SPLIT_PATH = (
     Path(__file__).resolve().parents[2] / "cfg" / "research" / "open-set-domainnet-split-v1.json"
 )
 
+# This is the source-label order set by CIFAR100C.set_classes().  Keep this
+# dependency-light copy here because split validation is also used by tools
+# which intentionally do not import the image dataset stack.
+CIFAR100_CLASS_NAMES = (
+    "apple", "aquarium_fish", "baby", "bear", "beaver", "bed", "bee", "beetle", "bicycle", "bottle",
+    "bowl", "boy", "bridge", "bus", "butterfly", "camel", "can", "castle", "caterpillar", "cattle",
+    "chair", "chimpanzee", "clock", "cloud", "cockroach", "couch", "crab", "crocodile", "cup", "dinosaur",
+    "dolphin", "elephant", "flatfish", "forest", "fox", "girl", "hamster", "house", "kangaroo", "keyboard",
+    "lamp", "lawn_mower", "leopard", "lion", "lizard", "lobster", "man", "maple_tree", "motorcycle", "mountain",
+    "mouse", "mushroom", "oak_tree", "orange", "orchid", "otter", "palm_tree", "pear", "pickup_truck", "pine_tree",
+    "plain", "plate", "poppy", "porcupine", "possum", "rabbit", "raccoon", "ray", "road", "rocket",
+    "rose", "sea", "seal", "shark", "shrew", "skunk", "skyscraper", "snail", "snake", "spider",
+    "squirrel", "streetcar", "sunflower", "sweet_pepper", "table", "tank", "telephone", "television", "tiger", "tractor",
+    "train", "trout", "tulip", "turtle", "wardrobe", "whale", "willow_tree", "wolf", "woman", "worm",
+)
+_CIFAR100_TAXONOMY_SHA256 = hashlib.sha256(
+    json.dumps(list(CIFAR100_CLASS_NAMES), ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+).hexdigest()
+_CIFAR100_NAME_RANK_ALGORITHM = "sha256-utf8-salt-nul-class-name-rank-v1"
 
-def load_cifar100_open_set_split(path: str | Path | None = None) -> dict[str, Any]:
+
+def _cifar100_name_ranked_ids(salt: str) -> tuple[int, ...]:
+    """Return canonical CIFAR-100 IDs ranked by the frozen name recipe."""
+    return tuple(sorted(
+        range(len(CIFAR100_CLASS_NAMES)),
+        key=lambda class_id: (
+            hashlib.sha256(f"{salt}\0{CIFAR100_CLASS_NAMES[class_id]}".encode("utf-8")).hexdigest(),
+            CIFAR100_CLASS_NAMES[class_id],
+        ),
+    ))
+
+
+def _cifar100_split_fingerprint(split: Mapping[str, Any]) -> str:
+    payload = {
+        "version": split["version"],
+        "dataset": split["dataset"],
+        "canonical_class_names": split["canonical_class_names"],
+        "taxonomy_sha256": split["taxonomy_sha256"],
+        "recipe": split["recipe"],
+        "known_class_ids": split["known_class_ids"],
+        "unknown_class_ids": split["unknown_class_ids"],
+    }
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _validate_cifar100_recipe_metadata(split: Mapping[str, Any], known: list[int], unknown: list[int]) -> None:
+    """Validate optional, self-auditing metadata on name-ranked split files.
+
+    v1 predates this metadata and remains intentionally loadable.  Once a
+    recipe is supplied, however, the materialized IDs must exactly match it.
+    """
+    recipe = split.get("recipe")
+    metadata_keys = ("dataset", "canonical_class_names", "taxonomy_sha256", "fingerprint")
+    if recipe is None:
+        if any(key in split for key in metadata_keys):
+            raise ValueError("CIFAR-100 split audit metadata requires a recipe")
+        return
+    if not isinstance(recipe, Mapping):
+        raise ValueError("CIFAR-100 split recipe must be an object")
+    if split.get("dataset") != "CIFAR-100-C":
+        raise ValueError("CIFAR-100 split recipe requires dataset='CIFAR-100-C'")
+    if tuple(split.get("canonical_class_names", ())) != CIFAR100_CLASS_NAMES:
+        raise ValueError("CIFAR-100 split canonical class taxonomy does not match CIFAR100C")
+    if split.get("taxonomy_sha256") != _CIFAR100_TAXONOMY_SHA256:
+        raise ValueError("CIFAR-100 split taxonomy SHA-256 does not match CIFAR100C")
+    expected_recipe = {
+        "algorithm": _CIFAR100_NAME_RANK_ALGORITHM,
+        "input_encoding": "UTF-8",
+        "input_format": "salt + NUL + canonical class name",
+        "rank_order": "SHA-256 digest ascending, then class name ascending",
+        "known_selection": "first 80 ranked class names",
+        "unknown_selection": "remaining 20 ranked class names",
+    }
+    if any(recipe.get(key) != value for key, value in expected_recipe.items()):
+        raise ValueError("unsupported or malformed CIFAR-100 split recipe")
+    salt = recipe.get("salt")
+    if not isinstance(salt, str) or not salt:
+        raise ValueError("CIFAR-100 split recipe requires a non-empty salt")
+    if split["version"] != salt:
+        raise ValueError("CIFAR-100 name-ranked split version and salt must match")
+    ranked_ids = _cifar100_name_ranked_ids(salt)
+    if tuple(known) != ranked_ids[:80] or tuple(unknown) != ranked_ids[80:]:
+        raise ValueError("CIFAR-100 split IDs do not match the declared name-ranking recipe")
+    fingerprint = split.get("fingerprint")
+    if not isinstance(fingerprint, str) or fingerprint != _cifar100_split_fingerprint(split):
+        raise ValueError("CIFAR-100 split fingerprint does not verify")
+
+
+def load_cifar100_open_set_split(
+    path: str | Path | None = None, *, expected_sha256: str | None = None,
+) -> dict[str, Any]:
     """Load and validate the repository's versioned CIFAR-100 open-set split."""
     split_path = Path(path) if path is not None else DEFAULT_SPLIT_PATH
-    with split_path.open(encoding="utf-8") as handle:
-        split = json.load(handle)
+    raw = split_path.read_bytes()
+    if expected_sha256 is not None:
+        if (not isinstance(expected_sha256, str) or len(expected_sha256) != 64
+                or any(character not in "0123456789abcdef" for character in expected_sha256)):
+            raise ValueError("expected CIFAR-100 split SHA-256 must be 64 lowercase hexadecimal characters")
+        if hashlib.sha256(raw).hexdigest() != expected_sha256:
+            raise ValueError("CIFAR-100 split JSON SHA-256 does not match the planned bytes")
+    try:
+        split = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid CIFAR-100 split JSON: {split_path}") from exc
     if not isinstance(split, Mapping):
         raise ValueError("open-set split must be a JSON object")
     version = split.get("version")
@@ -56,11 +156,18 @@ def load_cifar100_open_set_split(path: str | Path | None = None) -> dict[str, An
         raise ValueError("CIFAR-100 open-set split must contain 80 known and 20 unknown classes")
     if set(known).intersection(unknown) or set(known).union(unknown) != set(range(100)):
         raise ValueError("open-set class IDs must be a disjoint partition of 0..99")
-    return {
+    _validate_cifar100_recipe_metadata(split, known, unknown)
+    result = {
         "version": version,
         "known_class_ids": tuple(known),
         "unknown_class_ids": tuple(unknown),
     }
+    # v1 has no audited recipe identifiers.  Preserve its historical return
+    # shape while propagating verified identifiers from newer split artifacts.
+    if split.get("recipe") is not None:
+        result["fingerprint"] = split["fingerprint"]
+        result["taxonomy_sha256"] = split["taxonomy_sha256"]
+    return result
 
 
 class OpenSetDomainDataset:
@@ -97,11 +204,14 @@ class OpenSetDomainDataset:
 class OpenSetCIFAR100C(CIFAR100C):
     """CIFAR-100-C with an 80-class model vocabulary and 20 held-out classes."""
 
-    def __init__(self, root, extra=False, severity=5, transform=None, *, split_path=None):
-        split = load_cifar100_open_set_split(split_path)
+    def __init__(self, root, extra=False, severity=5, transform=None, *, split_path=None, split_sha256=None):
+        split = load_cifar100_open_set_split(split_path, expected_sha256=split_sha256)
         super().__init__(root, extra=extra, severity=severity, transform=transform)
         all_classes = tuple(self.classes)
         self.open_set_split_version = split["version"]
+        if "fingerprint" in split:
+            self.open_set_split_fingerprint = split["fingerprint"]
+            self.open_set_taxonomy_sha256 = split["taxonomy_sha256"]
         self.known_class_ids = split["known_class_ids"]
         self.unknown_class_ids = split["unknown_class_ids"]
         known_label_by_original = {original: known for known, original in enumerate(self.known_class_ids)}

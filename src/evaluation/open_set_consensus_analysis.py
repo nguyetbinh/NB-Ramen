@@ -133,24 +133,20 @@ def _open_set_metrics(summary: Mapping[str, object], method: str) -> dict[str, o
         if value is None:
             raise ValueError(f"open-set summary {name} is missing or non-finite for {method}")
         result[name] = value
-    detection_status = block.get("status")
-    if detection_status == "computed":
-        for name in ("auroc", "fpr95", "h_score"):
-            value = _number(block.get(name))
-            if value is None:
-                raise ValueError(f"computed open-set summary {name} is missing or non-finite for {method}")
-            result[name] = value
-    elif detection_status == "unavailable":
-        if not isinstance(block.get("reason"), str) or not block["reason"]:
-            raise ValueError(f"unavailable open-set summary has no reason for {method}")
-        if any(block.get(name) is not None for name in ("auroc", "fpr95", "h_score")):
-            raise ValueError(f"unavailable open-set metrics must be null for {method}")
-        # OOD=0 is a preregistered canonical cell. Detection statistics are
-        # correctly unavailable there; keep that explicit state rather than
-        # making the complete canonical matrix impossible to analyse.
-        result.update({"auroc": None, "fpr95": None, "h_score": None})
-    else:
-        raise ValueError(f"open-set detection status is invalid for {method}")
+    pre = block.get("pre_adaptation_detection")
+    post = block.get("post_adaptation_detection")
+    if not isinstance(pre, Mapping) or not isinstance(post, Mapping):
+        raise ValueError(f"open-set summary lacks explicit pre/post adaptation detection for {method}")
+    result["pre_adaptation_detection"] = _detection_metrics(pre, method, "pre")
+    result["post_adaptation_detection"] = _detection_metrics(post, method, "post")
+    # Retain the prior report fields as the pre-adaptation projection.
+    result.update(result["pre_adaptation_detection"])
+    result["post_adaptation_auroc"] = result["post_adaptation_detection"]["auroc"]
+    result["post_adaptation_fpr95"] = result["post_adaptation_detection"]["fpr95"]
+    result["post_adaptation_h_score"] = result["post_adaptation_detection"]["h_score"]
+    result["post_adaptation_ood_recall_at_fpr95"] = (
+        result["post_adaptation_detection"]["ood_recall_at_fpr95"]
+    )
     result["stability"] = _stability_metrics(summary, method)
     result["cost"] = _cost_metrics(summary, method)
     if method in OPEN_SET_DIRECTIONAL_ORACLE_METHODS:
@@ -159,46 +155,111 @@ def _open_set_metrics(summary: Mapping[str, object], method: str) -> dict[str, o
             raise ValueError(f"oracle diagnostics missing for {method}")
         result["oracle_gradient_direction_corruption"] = _number(diagnostic.get("gradient_direction_corruption_mean"))
         result["oracle_sign_disagreement"] = _number(diagnostic.get("sign_disagreement_mean"))
+        for field in (
+            "ramen_gdc_mean", "consensus_gdc_mean", "ramen_sdr_mean",
+            "consensus_sdr_mean", "gdc_reduction_mean", "sdr_reduction_mean",
+        ):
+            if field not in diagnostic:
+                raise ValueError(f"oracle diagnostic {field} is missing for {method}")
+            value = _number(diagnostic.get(field))
+            if diagnostic.get(field) is not None and value is None:
+                raise ValueError(f"oracle diagnostic {field} is non-finite for {method}")
+            result[field] = value
     if method in OPEN_SET_CONSENSUS_METHODS:
         diagnostic = summary.get("consensus_diagnostics")
         if not isinstance(diagnostic, Mapping):
             raise ValueError(f"consensus diagnostics missing for {method}")
         result["consensus_applied_sample_fraction"] = _number(diagnostic.get("consensus_applied_sample_fraction"))
-        # ``mask_rate`` is the retained-coordinate rate, aggregated only on
-        # rows where the hard consensus mask actually ran.
         result["consensus_retained_coordinate_rate"] = _number(diagnostic.get("mask_rate"))
     return result
 
 
+def _detection_metrics(block: Mapping[str, object], method: str, phase: str) -> dict[str, object]:
+    detection_status = block.get("status")
+    result = {}
+    if detection_status == "computed":
+        for name in ("auroc", "fpr95", "h_score", "ood_recall_at_fpr95"):
+            value = _number(block.get(name))
+            if value is None:
+                raise ValueError(f"computed {phase}-adaptation summary {name} is missing or non-finite for {method}")
+            result[name] = value
+    elif detection_status == "unavailable":
+        if not isinstance(block.get("reason"), str) or not block["reason"]:
+            raise ValueError(f"unavailable {phase}-adaptation summary has no reason for {method}")
+        if any(
+            block.get(name) is not None
+            for name in ("auroc", "fpr95", "h_score", "ood_recall_at_fpr95")
+        ):
+            raise ValueError(f"unavailable {phase}-adaptation metrics must be null for {method}")
+        # OOD=0 is a preregistered canonical cell. Detection statistics are
+        # correctly unavailable there; keep that explicit state rather than
+        # making the complete canonical matrix impossible to analyse.
+        result.update({
+            "auroc": None, "fpr95": None, "h_score": None,
+            "ood_recall_at_fpr95": None,
+        })
+    else:
+        raise ValueError(f"{phase}-adaptation detection status is invalid for {method}")
+    return result
+
+
 def _stability_metrics(summary: Mapping[str, object], method: str) -> dict[str, object]:
-    """Expose validated stability evidence without collapsing unavailable states."""
-    negative = _required_mapping(summary, "negative_adaptation_rate", method)
+    """Expose open-set stability evidence without treating OOD as errors."""
+    negative = _required_mapping(summary, "id_only_negative_adaptation_rate", method)
     negative_status = negative.get("status")
     if negative_status == "computed":
         value = _probability(negative.get("value"))
+        retained_id_samples = _nonnegative_integer(negative.get("retained_id_samples"))
+        total_windows = _nonnegative_integer(negative.get("total_windows"))
+        negative_windows = _nonnegative_integer(negative.get("negative_windows"))
         if value is None:
             raise ValueError(f"negative-adaptation rate is invalid for {method}")
-        negative_output: dict[str, object] = {"status": "computed", "rate": value}
+        if (
+            retained_id_samples is None or total_windows is None or total_windows == 0
+            or negative_windows is None or negative_windows > total_windows
+        ):
+            raise ValueError(f"ID-only negative-adaptation counts are invalid for {method}")
+        negative_output: dict[str, object] = {
+            "status": "computed", "rate": value,
+            "retained_id_samples": retained_id_samples,
+            "total_windows": total_windows,
+            "negative_windows": negative_windows,
+        }
     elif negative_status == "reference_required":
         if not isinstance(negative.get("reason"), str) or not negative["reason"]:
             raise ValueError(f"negative-adaptation unavailable reason is invalid for {method}")
         negative_output = {"status": "reference_required", "rate": None}
+    elif negative_status == "insufficient_id_samples":
+        retained_id_samples = _nonnegative_integer(negative.get("retained_id_samples"))
+        total_windows = _nonnegative_integer(negative.get("total_windows"))
+        negative_windows = _nonnegative_integer(negative.get("negative_windows"))
+        if (
+            retained_id_samples is None or total_windows != 0 or negative_windows != 0
+            or negative.get("value") is not None
+        ):
+            raise ValueError(f"ID-only negative-adaptation counts are invalid for {method}")
+        negative_output = {
+            "status": "insufficient_id_samples", "rate": None,
+            "retained_id_samples": retained_id_samples,
+            "total_windows": total_windows,
+            "negative_windows": negative_windows,
+        }
     else:
         raise ValueError(f"negative-adaptation status is invalid for {method}")
 
-    recovery = _required_mapping(summary, "post_shift_recovery_time", method)
+    recovery = _required_mapping(summary, "id_only_post_shift_recovery_time", method)
     recovery_status = recovery.get("status")
     if recovery_status == "computed":
         shifts = recovery.get("shifts")
         if not isinstance(shifts, list) or any(not isinstance(item, Mapping) for item in shifts):
-            raise ValueError(f"post-shift recovery evidence is invalid for {method}")
+            raise ValueError(f"ID-only post-shift recovery evidence is invalid for {method}")
         recovery_output: dict[str, object] = {"status": "computed", "shifts": list(shifts)}
     elif recovery_status == "not_applicable":
         if not isinstance(recovery.get("reason"), str) or not recovery["reason"]:
-            raise ValueError(f"post-shift recovery reason is invalid for {method}")
+            raise ValueError(f"ID-only post-shift recovery reason is invalid for {method}")
         recovery_output = {"status": "not_applicable", "shifts": []}
     else:
-        raise ValueError(f"post-shift recovery status is invalid for {method}")
+        raise ValueError(f"ID-only post-shift recovery status is invalid for {method}")
     return {
         "negative_adaptation": negative_output,
         "post_shift_recovery": recovery_output,

@@ -1,7 +1,7 @@
 import unittest
 
 from src.evaluation.online_metrics import (
-    average_accuracy, domain_accuracies, domain_shift_recovery_times, negative_adaptation_rate,
+    average_accuracy, domain_accuracies, domain_shift_recovery_times, id_only_domain_shift_recovery_times, negative_adaptation_rate,
     post_shift_recovery_time, sliding_window_accuracy, worst_domain_accuracy,
 )
 
@@ -46,6 +46,20 @@ class OnlineMetricsTests(unittest.TestCase):
             [True, True, False, True], [0, 0, 1, 1], window_size=3
         )
         self.assertEqual("insufficient_episode", results[0]["status"])
+
+    def test_id_only_recovery_preserves_domain_episode_boundaries(self):
+        results = id_only_domain_shift_recovery_times(
+            [True, True, False, False, True, True], [0, 0, 1, 1, 1, 1],
+            [False, False, True, False, False, False], window_size=2,
+        )
+        self.assertEqual("recovered", results[0]["status"])
+        self.assertEqual(1, results[0]["recovery_samples"])
+
+    def test_id_only_recovery_reports_insufficient_id_episode(self):
+        results = id_only_domain_shift_recovery_times(
+            [True, True, False, True], [0, 0, 1, 1], [False, True, True, False], window_size=2,
+        )
+        self.assertEqual("insufficient_id_episode", results[0]["status"])
 
     def test_empty_accuracy_and_unaligned_streams_fail(self):
         with self.assertRaises(ValueError):

@@ -64,12 +64,18 @@ OPEN_SET_TRACE_FIELDS = (
     "open_set_split_version",
     "ood_ratio",
     "pre_adaptation_ood_score",
+    "post_adaptation_ood_score",
 )
 ORACLE_GRADIENT_TRACE_FIELDS = (
     "retrieved_ood_fraction",
     "retrieved_ood_weight_fraction",
     "ramen_vs_oracle_id_cosine",
     "ramen_vs_oracle_id_sign_disagreement",
+    "consensus_vs_oracle_id_cosine",
+    "consensus_vs_oracle_id_sign_disagreement",
+    "consensus_vs_ramen_cosine",
+    "consensus_diagnostic_mask_rate",
+    "consensus_diagnostic_applied",
 )
 CONSENSUS_TRACE_FIELDS = (
     "consensus_mean_agreement",
@@ -405,6 +411,8 @@ class JsonlTraceWriter:
                 raise ValueError("ood_ratio must be a finite probability")
             if not _is_finite_number(row["pre_adaptation_ood_score"]):
                 raise ValueError("pre_adaptation_ood_score must be finite")
+            if not _is_finite_number(row["post_adaptation_ood_score"]):
+                raise ValueError("post_adaptation_ood_score must be finite")
             if row["is_ood"] != (known_label == -1):
                 raise ValueError("is_ood must agree with known_label_or_minus_one")
         oracle_gradient_present = [field in row for field in ORACLE_GRADIENT_TRACE_FIELDS]
@@ -424,6 +432,17 @@ class JsonlTraceWriter:
                 row["ramen_vs_oracle_id_sign_disagreement"], minimum=0.0, maximum=1.0
             ):
                 raise ValueError("ramen_vs_oracle_id_sign_disagreement must be finite in [0, 1] or null")
+            for field in ("consensus_vs_oracle_id_cosine", "consensus_vs_ramen_cosine"):
+                if row[field] is not None and not _is_finite_number(row[field], minimum=-1.0, maximum=1.0):
+                    raise ValueError(f"{field} must be finite in [-1, 1] or null")
+            if row["consensus_vs_oracle_id_sign_disagreement"] is not None and not _is_finite_number(
+                row["consensus_vs_oracle_id_sign_disagreement"], minimum=0.0, maximum=1.0
+            ):
+                raise ValueError("consensus_vs_oracle_id_sign_disagreement must be finite in [0, 1] or null")
+            if not _is_finite_number(row["consensus_diagnostic_mask_rate"], minimum=0.0, maximum=1.0):
+                raise ValueError("consensus_diagnostic_mask_rate must be a finite probability")
+            if not isinstance(row["consensus_diagnostic_applied"], bool):
+                raise ValueError("consensus_diagnostic_applied must be a boolean")
         consensus_present = [field in row for field in CONSENSUS_TRACE_FIELDS]
         if any(consensus_present) and not all(consensus_present):
             raise ValueError("consensus trace fields must be all present or all absent")
@@ -524,6 +543,75 @@ def compare_trace_negative_adaptation(
         "stride": stride,
         "reference_trace": str(reference_path),
     }
+
+
+def compare_trace_id_negative_adaptation(
+    adapted_path: os.PathLike[str] | str,
+    reference_path: os.PathLike[str] | str,
+    *,
+    window_size: int = 50,
+    stride: Optional[int] = None,
+    _expected_reference_sha256: Optional[str] = None,
+) -> dict[str, Any]:
+    """Compare paired open-set traces over the ordered ID subsequence only.
+
+    Trace identity and the evaluator-only OOD flag are checked before a row is
+    admitted.  Windows are therefore contiguous in ID observation order, not
+    in the original mixed ID/OOD stream.
+    """
+    if stride is None:
+        stride = window_size
+    if window_size <= 0 or stride <= 0:
+        raise ValueError("window_size and stride must be positive")
+    identity_fields = ("timestep", "sample_idx", "ground_truth_domain", "ground_truth_class")
+    adapted_window: deque[bool] = deque(maxlen=window_size)
+    reference_window: deque[bool] = deque(maxlen=window_size)
+    negative_windows = total_windows = retained_id_samples = row_count = 0
+    reference_digest = hashlib.sha256() if _expected_reference_sha256 is not None else None
+    with Path(adapted_path).open(encoding="utf-8") as adapted_file, \
+            Path(reference_path).open(encoding="utf-8") as reference_file:
+        for adapted_line, reference_line in zip_longest(adapted_file, reference_file):
+            if adapted_line is None or reference_line is None:
+                raise ValueError("adapted and reference traces have different lengths")
+            adapted = json.loads(adapted_line)
+            reference = json.loads(reference_line)
+            if reference_digest is not None:
+                reference_digest.update(reference_line.encode("utf-8"))
+            if any(adapted.get(field) != reference.get(field) for field in identity_fields):
+                raise ValueError(f"trace identity mismatch at row {row_count}")
+            if not isinstance(adapted.get("is_ood"), bool) or not isinstance(reference.get("is_ood"), bool):
+                raise TypeError("open-set trace is_ood fields must be booleans")
+            if adapted["is_ood"] != reference["is_ood"]:
+                raise ValueError(f"trace is_ood mismatch at row {row_count}")
+            if not isinstance(adapted.get("correct"), bool) or not isinstance(reference.get("correct"), bool):
+                raise TypeError("trace correct fields must be booleans")
+            if not adapted["is_ood"]:
+                adapted_window.append(adapted["correct"])
+                reference_window.append(reference["correct"])
+                window_start = retained_id_samples - window_size + 1
+                if len(adapted_window) == window_size and window_start % stride == 0:
+                    total_windows += 1
+                    negative_windows += int(sum(adapted_window) < sum(reference_window))
+                retained_id_samples += 1
+            row_count += 1
+    if reference_digest is not None and reference_digest.hexdigest() != _expected_reference_sha256:
+        raise ValueError("reference trace changed after provenance validation")
+    result = {
+        "retained_id_samples": retained_id_samples,
+        "negative_windows": negative_windows,
+        "total_windows": total_windows,
+        "window_size": window_size,
+        "stride": stride,
+        "reference_trace": str(reference_path),
+    }
+    if total_windows == 0:
+        return {
+            "status": "insufficient_id_samples",
+            "reason": "at least one full ID-only comparison window is required",
+            "value": None,
+            **result,
+        }
+    return {"status": "computed", "value": negative_windows / total_windows, **result}
 
 
 def _is_nonnegative_integer(value: Any) -> bool:
@@ -999,6 +1087,10 @@ def verify_reference_trace_stream_fingerprint(
                         raise ValueError(
                             f"reference trace row {line_number} has invalid pre_adaptation_ood_score"
                         )
+                    if not _is_finite_number(row["post_adaptation_ood_score"]):
+                        raise ValueError(
+                            f"reference trace row {line_number} has invalid post_adaptation_ood_score"
+                        )
                     if known_label_by_original is None:
                         raise ValueError(
                             f"reference trace row {line_number} has open-set fields without split metadata"
@@ -1050,6 +1142,19 @@ def verify_reference_trace_stream_fingerprint(
                         raise ValueError(
                             f"reference trace row {line_number} has invalid ramen_vs_oracle_id_sign_disagreement"
                         )
+                    for field in ("consensus_vs_oracle_id_cosine", "consensus_vs_ramen_cosine"):
+                        if row[field] is not None and not _is_finite_number(row[field], minimum=-1.0, maximum=1.0):
+                            raise ValueError(f"reference trace row {line_number} has invalid {field}")
+                    if row["consensus_vs_oracle_id_sign_disagreement"] is not None and not _is_finite_number(
+                        row["consensus_vs_oracle_id_sign_disagreement"], minimum=0.0, maximum=1.0
+                    ):
+                        raise ValueError(
+                            f"reference trace row {line_number} has invalid consensus_vs_oracle_id_sign_disagreement"
+                        )
+                    if not _is_finite_number(row["consensus_diagnostic_mask_rate"], minimum=0.0, maximum=1.0):
+                        raise ValueError(f"reference trace row {line_number} has invalid consensus_diagnostic_mask_rate")
+                    if not isinstance(row["consensus_diagnostic_applied"], bool):
+                        raise ValueError(f"reference trace row {line_number} has invalid consensus_diagnostic_applied")
                 consensus_present = [field in row for field in CONSENSUS_TRACE_FIELDS]
                 if any(consensus_present) and not all(consensus_present):
                     raise ValueError(
