@@ -25,11 +25,16 @@ from typing import Any
 
 import torch
 
+from evaluation.gradient_diagnostics import production_support_weights
 from memory.structured_memory import FlatRetrievalBatch, StructuredGradientMemory
 from models.ModelForBySampleTTA import CLIPModelForBySampleTTA
 from routing.online_prototypes import OnlinePrototypeRouter
 
-from .LatentRamen import aggregate_class_balanced_gradients, validate_latent_ramen_config
+from .LatentRamen import (
+    _counterfactual_thresholds, _failure_analysis_method_payloads, _failure_analysis_profile, _single_failure_payload,
+    aggregate_class_balanced_gradients, evaluate_replay_counterfactuals,
+    validate_latent_ramen_config,
+)
 from .TTABase import TTABase
 from .losses import softmax_entropy
 
@@ -97,8 +102,8 @@ def update_and_retrieve_support_causal_batch(
     include_current: bool,
     beta: float,
     selection: str,
-    random_seed: int = 0,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    random_seed: int = 0, failure_analysis_profile: str = "off",
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[dict[str, Any]]]:
     """Process a batch in stream order, preventing all future-item reads.
 
     Historical-only retrieval occurs before insertion.  This matters at full
@@ -106,7 +111,9 @@ def update_and_retrieve_support_causal_batch(
     the query is meant to use.  The current item is inserted immediately
     afterwards, so externally visible state still advances one item at a time.
     """
-    retrieved, support_counts, memory_sizes, memory_bytes = [], [], [], []
+    if failure_analysis_profile not in {"off", "trace_v1", "replay_v1"}:
+        raise ValueError("unknown failure_analysis_profile")
+    retrieved, support_counts, memory_sizes, memory_bytes, failure_payloads = [], [], [], [], []
     for index in range(features.shape[0]):
         current = slice(index, index + 1)
         kwargs: dict[str, Any] = {}
@@ -117,6 +124,13 @@ def update_and_retrieve_support_causal_batch(
         if include_current:
             memory.add(features[current], gradients[current], predicted_classes[current], contexts[current],
                        entropies[current], item_ids=item_ids[current])
+        candidates = None
+        if failure_analysis_profile != "off":
+            candidates = memory.legal_candidate_snapshot(
+                contexts[current], schedule="causal", selection=selection,
+                predicted_classes=predicted_classes[current] if selection == "same_class" else None,
+                include_current=include_current, current_item_ids=item_ids[current],
+            )[0]
         if selection == "class_balanced":
             support = memory.query(
                 features[current], contexts[current], topk, include_current=include_current,
@@ -136,12 +150,35 @@ def update_and_retrieve_support_causal_batch(
         support_counts.append(item_count)
         memory_sizes.append(memory.size)
         memory_bytes.append(memory.retained_bytes)
-    return (
+        if failure_analysis_profile != "off":
+            if selection == "class_balanced":
+                payload = _single_failure_payload(
+                    support, beta, item_id=item_ids[index], batch_position=index,
+                    legal_candidates=candidates, schedule="causal", profile=failure_analysis_profile,
+                    replay_item=None if failure_analysis_profile != "replay_v1" else {
+                        "query_feature": features[index].detach().clone(), "query_gradient": gradients[index].detach().clone(),
+                        "predicted_class": predicted_classes[index].detach().clone(), "context": contexts[index].detach().clone(),
+                        "entropy": entropies[index].detach().clone(), "admitted_to_memory": torch.tensor(True, device=features.device),
+                    },
+                )
+            else:
+                payload = _single_failure_payload(
+                    support, beta, item_id=item_ids[index], batch_position=index,
+                    legal_candidates=candidates, schedule="causal", profile=failure_analysis_profile,
+                    replay_item=None if failure_analysis_profile != "replay_v1" else {
+                        "query_feature": features[index].detach().clone(), "query_gradient": gradients[index].detach().clone(),
+                        "predicted_class": predicted_classes[index].detach().clone(), "context": contexts[index].detach().clone(),
+                        "entropy": entropies[index].detach().clone(), "admitted_to_memory": torch.tensor(True, device=features.device),
+                    },
+                )
+            failure_payloads.append(payload)
+    result = (
         torch.cat(retrieved, dim=0),
         torch.cat(support_counts, dim=0),
         torch.tensor(memory_sizes, device=features.device, dtype=torch.long),
         torch.tensor(memory_bytes, device=features.device, dtype=torch.long),
     )
+    return result if failure_analysis_profile == "off" else (*result, failure_payloads)
 
 
 def update_and_retrieve_support_atomic_batch(
@@ -157,8 +194,8 @@ def update_and_retrieve_support_atomic_batch(
     include_current: bool,
     beta: float,
     selection: str,
-    random_seed: int = 0,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    random_seed: int = 0, failure_analysis_profile: str = "off",
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[dict[str, Any]]]:
     """Admit an evaluator batch before querying any of its items.
 
     This is intentionally a scheduling-only counterpart to the causal helper:
@@ -167,6 +204,8 @@ def update_and_retrieve_support_atomic_batch(
     excludes only itself and may still use the other (including later) items
     admitted from the same evaluator batch.
     """
+    if failure_analysis_profile not in {"off", "trace_v1", "replay_v1"}:
+        raise ValueError("unknown failure_analysis_profile")
     memory.add(features, gradients, predicted_classes, contexts, entropies, item_ids=item_ids)
     kwargs: dict[str, Any] = {}
     if selection == "same_class":
@@ -185,12 +224,58 @@ def update_and_retrieve_support_atomic_batch(
         )
         retrieved, support_counts = aggregate_unbalanced_gradients(support, beta)
     batch_size = features.shape[0]
-    return (
+    result = (
         retrieved,
         support_counts,
         torch.full((batch_size,), memory.size, device=features.device, dtype=torch.long),
         torch.full((batch_size,), memory.retained_bytes, device=features.device, dtype=torch.long),
     )
+    if failure_analysis_profile == "off":
+        return result
+    snapshots = memory.legal_candidate_snapshot(
+        contexts, schedule="batch_atomic", selection=selection,
+        predicted_classes=predicted_classes if selection == "same_class" else None,
+        include_current=include_current, current_item_ids=item_ids,
+    )
+    payloads: list[dict[str, Any]] = []
+    for index in range(batch_size):
+        if selection == "class_balanced":
+            current_valid = support.valid_mask[index]
+            future_mask = current_valid & (support.item_ids[index] > item_ids[index])
+            weights = production_support_weights(
+                support.entropies[index:index + 1], support.distances[index:index + 1],
+                support.valid_mask[index:index + 1], beta,
+            )[0]
+            future_weight_fraction = float(
+                weights[future_mask].sum() / weights[current_valid].sum().clamp_min(torch.finfo(weights.dtype).eps)
+            )
+            payload = _single_failure_payload(
+                # Keep only this query to preserve exact per-query support.
+                type("SingleRetrieval", (), {key: value[index:index + 1] for key, value in support.__dict__.items()})(),
+                beta, item_id=item_ids[index], batch_position=index,
+                future_support_count=int((support.item_ids[index] > item_ids[index]).logical_and(support.valid_mask[index]).sum()),
+                future_support_weight_fraction=future_weight_fraction,
+                legal_candidates=snapshots[index], schedule="atomic", profile=failure_analysis_profile,
+                replay_item=None if failure_analysis_profile != "replay_v1" else {
+                    "query_feature": features[index].detach().clone(), "query_gradient": gradients[index].detach().clone(),
+                    "predicted_class": predicted_classes[index].detach().clone(), "context": contexts[index].detach().clone(),
+                    "entropy": entropies[index].detach().clone(), "admitted_to_memory": torch.tensor(True, device=features.device),
+                },
+            )
+        else:
+            payload = _single_failure_payload(
+                type("SingleRetrieval", (), {key: value[index:index + 1] for key, value in support.__dict__.items()})(),
+                beta, item_id=item_ids[index], batch_position=index,
+                future_support_count=int((support.item_ids[index] > item_ids[index]).logical_and(support.valid_mask[index]).sum()),
+                legal_candidates=snapshots[index], schedule="atomic", profile=failure_analysis_profile,
+                replay_item=None if failure_analysis_profile != "replay_v1" else {
+                    "query_feature": features[index].detach().clone(), "query_gradient": gradients[index].detach().clone(),
+                    "predicted_class": predicted_classes[index].detach().clone(), "context": contexts[index].detach().clone(),
+                    "entropy": entropies[index].detach().clone(), "admitted_to_memory": torch.tensor(True, device=features.device),
+                },
+            )
+        payloads.append(payload)
+    return (*result, payloads)
 
 
 def update_and_retrieve_support_batch(
@@ -207,8 +292,8 @@ def update_and_retrieve_support_batch(
     beta: float,
     selection: str,
     schedule: str,
-    random_seed: int = 0,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    random_seed: int = 0, failure_analysis_profile: str = "off",
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[dict[str, Any]]]:
     """Dispatch retrieval through the method's explicit scheduling invariant.
 
     Atomic scheduling always admits the complete evaluator batch before its
@@ -224,7 +309,7 @@ def update_and_retrieve_support_batch(
     return helper(
         memory, features, gradients, predicted_classes, contexts, entropies, item_ids,
         topk=topk, include_current=include_current, beta=beta, selection=selection,
-        random_seed=random_seed,
+        random_seed=random_seed, failure_analysis_profile=failure_analysis_profile,
     )
 
 
@@ -237,6 +322,8 @@ class SupportSelectionRamen(TTABase):
     def __init__(self, model, datasets, args):
         super().__init__()
         self.cfg = validate_support_ablation_config(args.config, selection=self.support_selection)
+        self.failure_analysis_profile = _failure_analysis_profile(args, self.cfg)
+        self.failure_counterfactual_thresholds = _counterfactual_thresholds(args)
         self.num_classes = datasets.num_classes
         self.device = next(model.parameters()).device
         self.model = CLIPModelForBySampleTTA(model, datasets.classes, self.cfg, args)
@@ -280,19 +367,30 @@ class SupportSelectionRamen(TTABase):
             entropies = softmax_entropy(logits, reduction="none")
             item_ids = torch.arange(self.counter, self.counter + batch_size, device=self.device, dtype=torch.long)
             self.counter += batch_size
-            retrieved, support_counts, memory_sizes, memory_bytes = update_and_retrieve_support_batch(
+            retrieval = update_and_retrieve_support_batch(
                 self.memory, features, gradients, predicted_classes, contexts, entropies, item_ids,
                 topk=self.cfg["topk"], include_current=self.cfg["include_current"], beta=self.cfg["beta"],
                 selection=self.support_selection, schedule=self.retrieval_schedule,
                 random_seed=self.cfg.get("random_seed", 0),
+                failure_analysis_profile=self.failure_analysis_profile,
             )
+            if self.failure_analysis_profile == "off":
+                retrieved, support_counts, memory_sizes, memory_bytes = retrieval
+                failure_analysis = None
+            else:
+                retrieved, support_counts, memory_sizes, memory_bytes, failure_analysis = retrieval
             self.model.set_by_sample_grad(retrieved)
             self.last_diagnostics = self._diagnostics(
-                routing, contexts, support_counts, memory_sizes, memory_bytes, active_contexts
+                routing, contexts, support_counts, memory_sizes, memory_bytes, active_contexts,
+                failure_analysis=failure_analysis, failure_analysis_profile=self.failure_analysis_profile,
             )
         self.model.step_and_zero_grad()
         with torch.no_grad():
             output = self.model(x)
+        if self.failure_analysis_profile == "replay_v1":
+            evaluate_replay_counterfactuals(
+                self.model, x, output, retrieved, failure_analysis, self.failure_counterfactual_thresholds
+            )
         self.model.reset_parameters()
         return output
 
@@ -307,14 +405,17 @@ class SupportSelectionRamen(TTABase):
     def get_diagnostics(self) -> dict[str, Any]:
         return dict(self.last_diagnostics)
 
+    def get_failure_analysis_payload(self) -> list[dict[str, Any]]:
+        return _failure_analysis_method_payloads(self.last_diagnostics.get("failure_analysis"))
+
     def diagnostics(self) -> dict[str, Any]:
         return self.get_diagnostics()
 
     def _diagnostics(
         self, routing=None, contexts=None, support_counts=None, memory_sizes=None, memory_bytes=None,
-        active_contexts=None,
+        active_contexts=None, failure_analysis=None, failure_analysis_profile="off",
     ):
-        return {
+        result = {
             "support_selection": self.support_selection,
             "memory_size": self.memory.size if memory_sizes is None else memory_sizes.detach().clone(),
             "memory_bytes": self.memory.retained_bytes if memory_bytes is None else memory_bytes.detach().clone(),
@@ -330,6 +431,10 @@ class SupportSelectionRamen(TTABase):
             "support_count": None if support_counts is None else support_counts.detach().clone(),
             "spawned": None if routing is None else routing.spawned.detach().clone(),
         }
+        if failure_analysis_profile != "off":
+            result["failure_analysis_profile"] = failure_analysis_profile
+            result["failure_analysis"] = failure_analysis
+        return result
 
 
 class RandomMemoryRamen(SupportSelectionRamen):

@@ -96,6 +96,26 @@ class SupportAblationTests(unittest.TestCase):
         self.assertEqual([[1.], [2.]], retrieved.tolist())
         self.assertEqual([1, 1], counts.tolist())
 
+    def test_replay_payload_records_atomic_schedule(self):
+        memory = StructuredGradientMemory(1, 4, 1, 1, device="cpu", capacity_scope="per_class")
+        *_, payloads = update_and_retrieve_support_atomic_batch(
+            memory, torch.tensor([[0.], [1.]]), torch.tensor([[1.], [2.]]), torch.tensor([0, 0]),
+            torch.tensor([0, 0]), torch.zeros(2), torch.tensor([0, 1]), topk=1,
+            include_current=False, beta=0., selection="class_balanced", failure_analysis_profile="replay_v1",
+        )
+        self.assertEqual(["atomic", "atomic"], [payload["schedule"] for payload in payloads])
+        self.assertEqual([1, 0], [payload["future_support_count"] for payload in payloads])
+
+    def test_replay_payload_records_causal_schedule(self):
+        memory = StructuredGradientMemory(1, 4, 1, 1, device="cpu", capacity_scope="per_class")
+        *_, payloads = update_and_retrieve_support_causal_batch(
+            memory, torch.tensor([[0.], [1.]]), torch.tensor([[1.], [2.]]), torch.tensor([0, 0]),
+            torch.tensor([0, 0]), torch.zeros(2), torch.tensor([0, 1]), topk=1,
+            include_current=False, beta=0., selection="class_balanced", failure_analysis_profile="replay_v1",
+        )
+        self.assertEqual(["causal", "causal"], [payload["schedule"] for payload in payloads])
+        self.assertEqual([0, 0], [payload["future_support_count"] for payload in payloads])
+
     def test_atomic_schedule_is_exactly_causal_for_single_item_batches(self):
         inputs = dict(
             features=torch.tensor([[0.]]), gradients=torch.tensor([[10.]]),

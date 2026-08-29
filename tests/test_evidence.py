@@ -12,13 +12,93 @@ from unittest import mock
 
 from src import main as main_module
 from src.evaluation.evidence import (
-    SUMMARY_SCHEMA_VERSION, TRACE_SCHEMA_VERSION, JsonlTraceWriter, atomic_write_json, build_run_manifest,
+    FAILURE_ANALYSIS_REQUIRED_FIELDS, SUMMARY_SCHEMA_VERSION, TRACE_SCHEMA_VERSION, JsonlTraceWriter, atomic_write_json, build_run_manifest,
     compare_trace_negative_adaptation, verify_reference_trace_stream_fingerprint,
     write_run_manifest,
 )
 
 
 class EvidenceTests(unittest.TestCase):
+    @staticmethod
+    def _trace_record(timestep=0):
+        return {
+            "timestep": timestep, "sample_idx": timestep, "ground_truth_domain": 0,
+            "ground_truth_class": 0, "prediction": 0, "correct": True,
+            "predicted_entropy": 0.0, "inferred_context": None, "memory_size": 0,
+            "num_active_contexts": None, "memory_bytes": None, "latency_ms": 1.0,
+        }
+
+    def test_optional_failure_analysis_family_is_complete_or_absent(self):
+        complete = {field: 0 for field in FAILURE_ANALYSIS_REQUIRED_FIELDS}
+        complete["evaluator_sample_identity"] = {"sample_idx": 0, "ground_truth_domain": 0}
+        complete.update({
+            "schedule": "causal",
+            "conflict_metric": "fraction_low_consensus_coordinates_v1",
+            "conflict": 0.0,
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            historical = Path(directory) / "historical.jsonl"
+            with JsonlTraceWriter(historical, "historical") as writer:
+                writer.write(self._trace_record())
+            self.assertNotIn("failure_analysis", json.loads(historical.read_text()))
+
+            with JsonlTraceWriter(Path(directory) / "partial.jsonl", "adapted") as writer:
+                with self.assertRaisesRegex(ValueError, "missing required fields"):
+                    writer.write({**self._trace_record(), "failure_analysis": {"query_item_id": 0}})
+
+            with JsonlTraceWriter(Path(directory) / "mixed.jsonl", "adapted") as writer:
+                writer.write({**self._trace_record(), "failure_analysis": complete})
+                with self.assertRaisesRegex(ValueError, "all present or all absent"):
+                    writer.write(self._trace_record(timestep=1))
+
+    def test_failure_analysis_requires_f3_f5_provenance(self):
+        complete = {field: 0 for field in FAILURE_ANALYSIS_REQUIRED_FIELDS}
+        complete.update({
+            "evaluator_sample_identity": {"sample_idx": 0, "ground_truth_domain": 0},
+            "schedule": "causal",
+            "conflict_metric": "fraction_low_consensus_coordinates_v1",
+            "conflict": 0.5,
+        })
+        invalid_cases = {
+            "missing schedule": {key: value for key, value in complete.items() if key != "schedule"},
+            "invalid schedule": {**complete, "schedule": "batched"},
+            "wrong metric": {**complete, "conflict_metric": "other"},
+            "null required field": {**complete, "support_count": None},
+            "nonfinite conflict": {**complete, "conflict": float("nan")},
+            "out of range conflict": {**complete, "conflict": 1.01},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            for name, failure in invalid_cases.items():
+                with self.subTest(name=name), JsonlTraceWriter(
+                    Path(directory) / f"{name}.jsonl", name
+                ) as writer:
+                    with self.assertRaisesRegex(ValueError, "failure_analysis"):
+                        writer.write({**self._trace_record(), "failure_analysis": failure})
+
+    def test_main_cli_parses_and_validates_failure_analysis_options(self):
+        argv = [
+            "main.py", "--device", "cpu", "--run_id", "cli-test",
+            "--failure-analysis-profile", "replay_v1",
+            "--failure-analysis-max-samples", "7",
+            "--failure-analysis-max-bytes", "8192",
+            "--failure-counterfactual-thresholds", "0.50,0.75,1.00",
+        ]
+        with mock.patch("sys.argv", argv):
+            args = main_module.args_parser()
+        self.assertEqual("replay_v1", args.failure_analysis_profile)
+        self.assertEqual(7, args.failure_analysis_max_samples)
+        self.assertEqual(8192, args.failure_analysis_max_bytes)
+        self.assertEqual((0.5, 0.75, 1.0), args.failure_counterfactual_thresholds)
+
+        with mock.patch("sys.argv", [
+            "main.py", "--device", "cpu", "--failure-counterfactual-thresholds", "0.5,0.5",
+        ]), self.assertRaises(SystemExit):
+            main_module.args_parser()
+        with mock.patch("sys.argv", [
+            "main.py", "--device", "cpu", "--failure-counterfactual-thresholds", "0.25,0.5,1.0",
+        ]), self.assertRaises(SystemExit):
+            main_module.args_parser()
+
     def test_trace_writer_requires_complete_retrieval_profile_extension(self):
         base = {
             "timestep": 0, "sample_idx": 0, "ground_truth_domain": 0,

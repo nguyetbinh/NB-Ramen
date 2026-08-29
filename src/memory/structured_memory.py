@@ -59,6 +59,7 @@ class FlatRetrievalBatch:
     recencies: torch.Tensor
     reliabilities: torch.Tensor
     item_ids: torch.Tensor
+    predicted_classes: torch.Tensor
     distances: torch.Tensor
     valid_mask: torch.Tensor
 
@@ -322,6 +323,74 @@ class StructuredGradientMemory:
             eligible.append(len(items))
         return live, torch.tensor(eligible, device=self.device, dtype=torch.long)
 
+    def legal_candidate_snapshot(
+        self,
+        contexts: torch.Tensor | int,
+        *,
+        schedule: str,
+        selection: str = "class_balanced",
+        predicted_classes: torch.Tensor | int | None = None,
+        current_item_ids: torch.Tensor | int | None = None,
+        include_current: bool = True,
+    ) -> list[list[dict[str, int | float]]]:
+        """Return read-only, pre-ranking legal candidates for analysis.
+
+        This is intentionally an opt-in API: callers must name the retrieval
+        schedule so replay data cannot accidentally describe a different
+        causal contract.  Each item is represented by scalar metadata only;
+        vectors remain in memory unless a replay writer explicitly requests
+        them through its own bounded path.
+        """
+        if schedule not in {"causal", "batch_atomic"}:
+            raise ValueError("schedule must be 'causal' or 'batch_atomic'")
+        if selection not in {"class_balanced", "random", "same_class", "global_nearest", "context_nearest"}:
+            raise ValueError("unknown retrieval selection")
+        batch_size = 1 if isinstance(contexts, int) else (1 if contexts.ndim == 0 else contexts.numel())
+        contexts = self._integer_vector(contexts, "contexts", batch_size)
+        if bool((contexts < 0).any()):
+            raise ValueError("contexts must be non-negative")
+        if not include_current and current_item_ids is None:
+            raise ValueError("current_item_ids is required when include_current=False")
+        current_ids = None if current_item_ids is None else self._integer_vector(
+            current_item_ids, "current_item_ids", batch_size
+        )
+        classes = None
+        if selection == "same_class":
+            if predicted_classes is None:
+                raise ValueError("predicted_classes is required for same_class retrieval")
+            classes = self._integer_vector(predicted_classes, "predicted_classes", batch_size)
+            if bool(((classes < 0) | (classes >= self.num_classes)).any()):
+                raise ValueError("predicted_classes contains an out-of-range class")
+
+        snapshots: list[list[dict[str, int | float]]] = []
+        for index, context in enumerate(contexts.tolist()):
+            candidates = [
+                (predicted_class, bucket_context, item)
+                for (predicted_class, bucket_context), bucket in self._buckets.items()
+                for item in bucket
+                if selection not in {"class_balanced", "context_nearest"} or bucket_context == context
+            ]
+            if selection == "same_class":
+                candidates = [candidate for candidate in candidates if candidate[0] == int(classes[index])]
+            if current_ids is not None and not include_current:
+                candidates = [candidate for candidate in candidates if int(candidate[2].item_id) != int(current_ids[index])]
+            snapshots.append([
+                {
+                    "item_id": int(item.item_id),
+                    "predicted_class": predicted_class,
+                    "context": bucket_context,
+                    "entropy": float(item.entropy),
+                    "recency": int(item.recency),
+                    "reliability": float(item.reliability),
+                }
+                for predicted_class, bucket_context, item in sorted(candidates, key=lambda candidate: int(candidate[2].item_id))
+            ])
+        return snapshots
+
+    # A descriptive alias for external replay code; both names preserve the
+    # same read-only snapshot contract.
+    snapshot_legal_candidates = legal_candidate_snapshot
+
     def query_flat(
         self,
         features: torch.Tensor,
@@ -375,6 +444,7 @@ class StructuredGradientMemory:
             recencies=torch.zeros(shape, device=self.device, dtype=torch.long),
             reliabilities=torch.zeros(shape, device=self.device, dtype=torch.float32),
             item_ids=torch.full(shape, -1, device=self.device, dtype=torch.long),
+            predicted_classes=torch.full(shape, -1, device=self.device, dtype=torch.long),
             distances=torch.full(shape, float("inf"), device=self.device, dtype=torch.float32),
             valid_mask=torch.zeros(shape, device=self.device, dtype=torch.bool),
         )
@@ -413,6 +483,7 @@ class StructuredGradientMemory:
                 result.recencies[batch_index, rank] = item.recency
                 result.reliabilities[batch_index, rank] = item.reliability
                 result.item_ids[batch_index, rank] = item.item_id
+                result.predicted_classes[batch_index, rank] = candidates[candidate_index][0]
                 result.distances[batch_index, rank] = distances[candidate_index]
                 result.valid_mask[batch_index, rank] = True
         return result

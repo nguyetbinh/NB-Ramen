@@ -32,6 +32,7 @@ from evaluation import (
     write_summary,
     verify_reference_trace_stream_fingerprint,
 )
+from evaluation.failure_analysis_artifacts import ReplaySidecarWriter, parse_counterfactual_thresholds, sha256_file
 from runtime import DeviceMemoryTracker, collect_hardware_evidence
 from runtime.artifact_provenance import (
     ProvenanceError,
@@ -233,6 +234,12 @@ def ordered_stream_test(
     datasets, tta_model, args, evidence_paths, stream_dataset, segments=None,
     reference_identity=None,
 ):
+    try:
+        args.failure_counterfactual_thresholds = parse_counterfactual_thresholds(
+            getattr(args, 'failure_counterfactual_thresholds', (0.50, 0.75, 1.00))
+        )
+    except ValueError as exc:
+        raise ValueError(f'invalid failure counterfactual thresholds: {exc}') from exc
     reference_sha256 = None
     if args.reference_trace is not None:
         reference_sha256 = verify_reference_trace_stream_fingerprint(
@@ -255,6 +262,20 @@ def ordered_stream_test(
         evaluation_parts = [Subset(stream_dataset, range(start, stop)) for start, stop in segments]
 
     trace_writer = JsonlTraceWriter(evidence_paths['trace'], args.run_id)
+    analysis_writer = None
+    analysis_metadata = None
+    failure_profile = getattr(args, 'failure_analysis_profile', 'off')
+    analysis_enabled = failure_profile != 'off' and getattr(args, 'tta_algo', 'NoAdapt') != 'NoAdapt'
+    if analysis_enabled and failure_profile == 'replay_v1':
+        manifest = json.loads(evidence_paths['manifest'].read_text(encoding='utf-8'))
+        analysis_writer = ReplaySidecarWriter(
+            evidence_paths['run_dir'] / 'failure-analysis', run_id=args.run_id,
+            manifest_sha256=sha256_file(evidence_paths['manifest']), stream_fingerprint=stream_dataset.fingerprint,
+            source_fingerprint=manifest.get('git', {}).get('source', {}).get('fingerprint'),
+            config={'counterfactual_thresholds': list(getattr(args, 'failure_counterfactual_thresholds', (0.50, 0.75, 1.00)))},
+            max_samples=getattr(args, 'failure_analysis_max_samples', 1000),
+            max_bytes=getattr(args, 'failure_analysis_max_bytes', 256 * 1024 * 1024),
+        )
     timestep = 0
     total_correct = 0
     correctness_history = bytearray()
@@ -271,6 +292,7 @@ def ordered_stream_test(
     retrieval_profile_available = None
     memory_tracker = DeviceMemoryTracker(args.device)
     memory_tracker.start()
+    evaluation_completed = False
 
     try:
         for part_index, evaluation_part in enumerate(evaluation_parts):
@@ -316,6 +338,15 @@ def ordered_stream_test(
 
                 batch_size = label.size(0)
                 diagnostics = _method_diagnostics(tta_model, batch_size)
+                analysis_payloads = None
+                if analysis_enabled:
+                    getter = getattr(tta_model, 'get_failure_analysis_payload', None)
+                    if not callable(getter):
+                        raise RuntimeError('failure analysis was requested but the method does not expose get_failure_analysis_payload()')
+                    analysis_payloads = getter()
+                    if not isinstance(analysis_payloads, (list, tuple)) or len(analysis_payloads) != batch_size \
+                            or any(not isinstance(item, dict) for item in analysis_payloads):
+                        raise RuntimeError('get_failure_analysis_payload() must return one dictionary per batch sample')
                 batch_memory_bytes = diagnostics['memory_bytes']
                 batch_availability = {value is not None for value in batch_memory_bytes}
                 if len(batch_availability) != 1:
@@ -390,6 +421,33 @@ def ordered_stream_test(
                     if batch_profile_available:
                         row.update({field: diagnostics[field][offset] for field in profile_fields})
                         retrieval_profile_rows.append(row)
+                    if analysis_payloads is not None:
+                        payload = analysis_payloads[offset]
+                        trace_payload = payload.get('trace')
+                        if not isinstance(trace_payload, dict) or not trace_payload:
+                            raise RuntimeError('failure analysis payload requires a nonempty trace object per sample')
+                        identity = {'segment_index': part_index, 'producer_query_timestep': timestep, 'evaluator_sample_identity': {
+                            'sample_idx': int(samples[offset]), 'ground_truth_domain': int(domains[offset]),
+                        }}
+                        row['failure_analysis'] = {**trace_payload, **identity}
+                        if analysis_writer is not None:
+                            query = dict(payload.get('query') or {})
+                            query.update(identity)
+                            # This evaluator-only join occurs after the method returned.
+                            query['ground_truth_class'] = int(labels[offset])
+                            query['counterfactuals'] = payload.get('counterfactuals', [])
+                            supplied_items = payload.get('item', [])
+                            supplied_items = supplied_items if isinstance(supplied_items, (list, tuple)) else [supplied_items]
+                            joined_items = []
+                            for supplied_item in supplied_items:
+                                if isinstance(supplied_item, dict):
+                                    item = dict(supplied_item)
+                                    # Method payloads cannot forge evaluator provenance or
+                                    # receive labels until after their forward call returned.
+                                    item.update(identity)
+                                    item['ground_truth_class'] = int(labels[offset])
+                                    joined_items.append(item)
+                            analysis_writer.write(items=joined_items, query=query)
                     trace_writer.write(row)
                     forward_latencies_ms.append(latency_ms)
                     if row['memory_bytes'] is not None:
@@ -409,8 +467,11 @@ def ordered_stream_test(
                     timestep += 1
             if segments is not None and part_index < len(evaluation_parts) - 1:
                 tta_model.reset()
+        evaluation_completed = True
     finally:
         trace_writer.close()
+        if analysis_writer is not None:
+            analysis_metadata = analysis_writer.close(completed=evaluation_completed)
 
     dataset_num_corrects = dataset_num_corrects.numpy()
     dataset_accs = np.divide(
@@ -551,6 +612,12 @@ def ordered_stream_test(
         },
         'stream_fingerprint': stream_dataset.fingerprint,
     }
+    if analysis_enabled:
+        summary['failure_analysis'] = {
+            'profile': failure_profile,
+            'status': analysis_metadata['status'] if analysis_metadata else 'completed',
+            'sidecar': 'failure-analysis/metadata.json' if analysis_metadata else None,
+        }
     if profile_rows:
         values = sorted(row['retrieval_elapsed_ms'] for row in profile_rows)
         def percentile(fraction):
@@ -808,6 +875,10 @@ def args_parser():
                         help='NoAdapt trace on the identical stream for negative-adaptation rate')
     parser.add_argument('--metric_window_size', type=int, default=50)
     parser.add_argument('--metric_window_stride', type=int, default=50)
+    parser.add_argument('--failure-analysis-profile', choices=['off', 'trace_v1', 'replay_v1'], default='off')
+    parser.add_argument('--failure-analysis-max-samples', type=int, default=1000)
+    parser.add_argument('--failure-analysis-max-bytes', type=int, default=256 * 1024 * 1024)
+    parser.add_argument('--failure-counterfactual-thresholds', default='0.50,0.75,1.00')
 
     args = parser.parse_args()
 
@@ -851,6 +922,14 @@ def args_parser():
         args.run_id = f'{args.dataset}-{args.tta_algo}-{stream_identity}-s{args.seed}{block_identity}-{timestamp}'
     if args.metric_window_size <= 0 or args.metric_window_stride <= 0:
         parser.error('metric window size and stride must be positive')
+    if args.failure_analysis_max_samples <= 0 or args.failure_analysis_max_bytes <= 0:
+        parser.error('failure-analysis limits must be positive integers')
+    try:
+        args.failure_counterfactual_thresholds = parse_counterfactual_thresholds(
+            args.failure_counterfactual_thresholds
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.legacy_mixed_order and (
         args.tta_mode != 'mixed' or args.stream_mode != 'iid_mixed'
     ):

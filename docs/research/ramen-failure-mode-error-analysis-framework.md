@@ -927,6 +927,17 @@ $$
 
 This statement is currently a **research hypothesis**, not an established result.
 
+## 27. Runtime implementation and bounded pilot status (2026-08-28)
+
+The diagnostic runtime and its bounded CPU/MPS mechanics pilot are implemented.
+The implementation contract, evaluator-only boundary, exact commands, verified
+report locations, and limitations are documented in
+[Ramen Failure-Mode Analysis Runtime and Pilot Record](ramen-failure-mode-analysis-runtime.md).
+
+The pilot validates the evidence pipeline only. It does not meet the
+cross-seed, multi-stream, harmful-event, and evaluator-only recovery criteria
+in Section 26. `ConsensusRamen` therefore remains unimplemented.
+
 ---
 
 # Reference

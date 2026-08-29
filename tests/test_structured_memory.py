@@ -155,6 +155,18 @@ class StructuredGradientMemoryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             memory.query(torch.tensor([[0.0, 0.0]]), 4, topk=1, include_current=False)
 
+    def test_legal_candidate_snapshot_is_read_only_and_uses_retrieval_filters(self):
+        memory = self.make_memory()
+        self.add(memory, [[0, 0], [1, 0], [2, 0]], [0, 1, 0], [4, 4, 5], item_ids=torch.tensor([40, 50, 60]))
+        before = memory.diagnostics()
+        snapshot = memory.legal_candidate_snapshot(
+            4, schedule="causal", selection="class_balanced", include_current=False, current_item_ids=40,
+        )
+        self.assertEqual([50], [item["item_id"] for item in snapshot[0]])
+        self.assertEqual(before, memory.diagnostics())
+        with self.assertRaises(ValueError):
+            memory.legal_candidate_snapshot(4, schedule="unknown")
+
     def test_reset_clears_memory_and_restarts_generated_ids(self):
         memory = self.make_memory()
         self.add(memory, [[0, 0]], [0], [1])
