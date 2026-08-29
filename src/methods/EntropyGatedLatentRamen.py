@@ -11,7 +11,9 @@ import torch
 from memory.structured_memory import StructuredGradientMemory
 from .LatentRamen import (
     LatentRamen,
+    _single_failure_payload,
     aggregate_class_balanced_gradients,
+    evaluate_replay_counterfactuals,
     validate_latent_ramen_config,
 )
 from .losses import softmax_entropy
@@ -38,16 +40,24 @@ def update_and_retrieve_entropy_gated_causal_batch(
     entropies: torch.Tensor,
     item_ids: torch.Tensor,
     admitted_to_memory: torch.Tensor,
-    *, topk: int, include_current: bool, beta: float,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    *, topk: int, include_current: bool, beta: float, failure_analysis_profile: str = "off",
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[dict[str, Any]]]:
     """Process each item causally, exposing only admitted current support."""
-    retrieved, active_counts, sizes, bytes_ = [], [], [], []
+    if failure_analysis_profile not in {"off", "trace_v1", "replay_v1"}:
+        raise ValueError("unknown failure_analysis_profile")
+    retrieved, active_counts, sizes, bytes_, failure_payloads = [], [], [], [], []
     for index in range(features.shape[0]):
         current = slice(index, index + 1)
         admitted = bool(admitted_to_memory[index].item())
         if admitted:
             memory.add(features[current], gradients[current], predicted_classes[current], contexts[current],
                        entropies[current], item_ids=item_ids[current])
+        candidates = None
+        if failure_analysis_profile != "off":
+            candidates = memory.legal_candidate_snapshot(
+                contexts[current], schedule="causal", selection="class_balanced",
+                include_current=include_current if admitted else False, current_item_ids=item_ids[current],
+            )[0]
         support = memory.query(
             features[current], contexts[current], topk,
             include_current=include_current if admitted else False,
@@ -58,12 +68,23 @@ def update_and_retrieve_entropy_gated_causal_batch(
         active_counts.append(item_counts)
         sizes.append(memory.size)
         bytes_.append(memory.retained_bytes)
-    return (
+        if failure_analysis_profile != "off":
+            replay_item = None if failure_analysis_profile != "replay_v1" else {
+                "query_feature": features[index].detach().clone(), "query_gradient": gradients[index].detach().clone(),
+                "predicted_class": predicted_classes[index].detach().clone(), "context": contexts[index].detach().clone(),
+                "entropy": entropies[index].detach().clone(), "admitted_to_memory": admitted_to_memory[index].detach().clone(),
+            }
+            failure_payloads.append(_single_failure_payload(
+                support, beta, item_id=item_ids[index], batch_position=index, legal_candidates=candidates,
+                profile=failure_analysis_profile, replay_item=replay_item,
+            ))
+    result = (
         torch.cat(retrieved, dim=0),
         torch.cat(active_counts, dim=0),
         torch.tensor(sizes, device=features.device, dtype=torch.long),
         torch.tensor(bytes_, device=features.device, dtype=torch.long),
     )
+    return result if failure_analysis_profile == "off" else (*result, failure_payloads)
 
 
 class EntropyGatedLatentRamen(LatentRamen):
@@ -91,11 +112,16 @@ class EntropyGatedLatentRamen(LatentRamen):
             admitted = normalized_entropy <= self.cfg["max_normalized_entropy"]
             item_ids = torch.arange(self.counter, self.counter + batch_size, device=self.device, dtype=torch.long)
             self.counter += batch_size
-            retrieved, active_classes, memory_sizes, memory_bytes = update_and_retrieve_entropy_gated_causal_batch(
+            retrieval = update_and_retrieve_entropy_gated_causal_batch(
                 self.memory, features, gradients, predicted_classes, routing.context_ids, entropies,
                 item_ids, admitted, topk=self.cfg["topk"], include_current=self.cfg["include_current"],
-                beta=self.cfg["beta"],
+                beta=self.cfg["beta"], failure_analysis_profile=self.failure_analysis_profile,
             )
+            if self.failure_analysis_profile == "off":
+                retrieved, active_classes, memory_sizes, memory_bytes = retrieval
+                failure_analysis = None
+            else:
+                retrieved, active_classes, memory_sizes, memory_bytes, failure_analysis = retrieval
             self.model.set_by_sample_grad(retrieved)
             active_contexts = contexts_before_batch + routing.spawned.long().cumsum(dim=0)
             self.last_diagnostics = self._diagnostics(
@@ -103,10 +129,16 @@ class EntropyGatedLatentRamen(LatentRamen):
                 admission_prediction=predicted_classes,
                 admission_normalized_entropy=normalized_entropy,
                 admitted_to_memory=admitted,
+                failure_analysis=failure_analysis,
+                failure_analysis_profile=self.failure_analysis_profile,
             )
 
         self.model.step_and_zero_grad()
         with torch.no_grad():
             output = self.model(x)
+        if self.failure_analysis_profile == "replay_v1":
+            evaluate_replay_counterfactuals(
+                self.model, x, output, retrieved, failure_analysis, self.failure_counterfactual_thresholds
+            )
         self.model.reset_parameters()
         return output

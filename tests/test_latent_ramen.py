@@ -17,6 +17,8 @@ from methods.LatentRamen import (
     update_and_retrieve_profiled_causal_batch,
     validate_latent_ramen_config,
     _profile_elapsed_tensor,
+    _counterfactual_thresholds,
+    evaluate_replay_counterfactuals,
 )
 from methods.EntropyGatedLatentRamen import (
     update_and_retrieve_entropy_gated_causal_batch,
@@ -25,6 +27,68 @@ from methods.EntropyGatedLatentRamen import (
 
 
 class LatentRamenPureTests(unittest.TestCase):
+    def test_replay_counterfactuals_reset_between_fixed_masks(self):
+        class FakeModel:
+            def __init__(self):
+                self.reset_calls = 0
+                self.gradients = None
+                self.events = []
+            def reset_parameters(self):
+                self.reset_calls += 1
+                self.gradients = None
+                self.events.append("reset")
+            def featurize(self, x):
+                self.events.append("featurize")
+                return x
+            def set_by_sample_grad(self, gradients):
+                self.gradients = gradients.clone()
+                self.events.append("set")
+            def step_and_zero_grad(self):
+                self.events.append("step")
+            def __call__(self, x):
+                # A kept first coordinate predicts class 1; a masked one class 0.
+                self.events.append("predict")
+                return torch.stack((1 - self.gradients[:, 0], self.gradients[:, 0]), dim=1)
+
+        model = FakeModel()
+        entries = [{"_consensus_strength": torch.tensor([.6, .2])}]
+        actual = torch.tensor([[1., 1.]])
+        actual_logits = torch.tensor([[0., 1.]])
+        returned_logits = actual_logits.clone()
+        evaluate_replay_counterfactuals(
+            model, torch.zeros(1, 1), actual_logits, actual, entries, (.5, .75, 1.)
+        )
+        torch.testing.assert_close(actual_logits, returned_logits)
+        variants = entries[0]["counterfactuals"]
+        self.assertEqual([.5, .75, 1.], [item["threshold"] for item in variants])
+        self.assertEqual([1, 0, 0], [item["prediction"].item() for item in variants])
+        self.assertTrue(entries[0]["reset_state_verified"])
+        self.assertEqual(5, model.reset_calls)  # parity replay, then each variant
+        self.assertEqual("reset", model.events[-1])
+
+    def test_replay_counterfactuals_fail_closed_when_reset_cannot_rebuild_actual(self):
+        class BadResetModel:
+            def reset_parameters(self): pass
+            def featurize(self, x): return x
+            def set_by_sample_grad(self, gradients): self.gradients = gradients
+            def step_and_zero_grad(self): pass
+            def __call__(self, x): return torch.tensor([[3., 0.]])
+
+        entries = [{"_consensus_strength": torch.tensor([1.])}]
+        evaluate_replay_counterfactuals(
+            BadResetModel(), torch.zeros(1, 1), torch.tensor([[0., 3.]]),
+            torch.tensor([[1.]]), entries, (.5, .75, 1.)
+        )
+        self.assertFalse(entries[0]["reset_state_verified"])
+        self.assertEqual([], entries[0]["counterfactuals"])
+
+    def test_method_threshold_parser_rejects_noncanonical_tuple(self):
+        class Args:
+            failure_counterfactual_thresholds = (.5,)
+
+        with self.assertRaisesRegex(ValueError, "preregistered tuple"):
+            _counterfactual_thresholds(Args())
+
     def test_aggregation_preserves_ramen_weights_and_class_balance(self):
         memory = StructuredGradientMemory(3, 4, 2, 1, device="cpu")
         memory.add(torch.tensor([[0., 0.], [1., 0.], [0., 2.]]), torch.tensor([[2.], [5.], [7.]]),
@@ -44,6 +108,17 @@ class LatentRamenPureTests(unittest.TestCase):
         gradients, counts = aggregate_class_balanced_gradients(result, beta=0.)
         self.assertEqual([0], counts.tolist())
         self.assertEqual([[0.]], gradients.tolist())
+
+    def test_replay_payload_records_causal_schedule_and_canonical_conflict_metric(self):
+        memory = StructuredGradientMemory(1, 4, 1, 1, device="cpu")
+        *_, payloads = update_and_retrieve_causal_batch(
+            memory, torch.tensor([[0.]]), torch.tensor([[1.]]), torch.tensor([0]), torch.tensor([0]),
+            torch.tensor([0.]), torch.tensor([0]), topk=1, include_current=True, beta=0.,
+            failure_analysis_profile="replay_v1",
+        )
+        self.assertEqual("causal", payloads[0]["schedule"])
+        self.assertEqual("fraction_low_consensus_coordinates_v1", payloads[0]["conflict_metric"])
+        self.assertIsInstance(payloads[0]["conflict"], torch.Tensor)
 
     def test_config_validation_defaults_and_rejects_invalid_ablation_flag(self):
         cfg = validate_latent_ramen_config({"max_capacity": 2, "topk": 1, "optimizer": "signsgd", "lr": .01})

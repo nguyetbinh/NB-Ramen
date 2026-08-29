@@ -1,6 +1,7 @@
 """Portable experiment evidence and online evaluation utilities."""
 
 from .evidence import (
+    FAILURE_ANALYSIS_REQUIRED_FIELDS,
     SUMMARY_SCHEMA_VERSION,
     TRACE_SCHEMA_VERSION,
     JsonlTraceWriter,
@@ -30,6 +31,12 @@ from .routing_metrics import (
     number_of_discovered_contexts,
     routing_diagnostics,
 )
+from .failure_analysis_artifacts import (
+    ReplayArtifactError,
+    ReplaySidecarReader,
+    ReplaySidecarWriter,
+    parse_counterfactual_thresholds,
+)
 
 
 def __getattr__(name):
@@ -45,9 +52,13 @@ def __getattr__(name):
 
 __all__ = [
     "TRACE_SCHEMA_VERSION",
+    "FAILURE_ANALYSIS_REQUIRED_FIELDS",
     "SUMMARY_SCHEMA_VERSION",
     "AnalysisThresholds",
     "JsonlTraceWriter",
+    "ReplayArtifactError",
+    "ReplaySidecarReader",
+    "ReplaySidecarWriter",
     "RoutingDiagnostics",
     "WindowAccuracy",
     "atomic_write_json",
@@ -66,6 +77,7 @@ __all__ = [
     "normalized_mutual_information",
     "number_of_discovered_contexts",
     "post_shift_recovery_time",
+    "parse_counterfactual_thresholds",
     "sliding_window_accuracy",
     "routing_diagnostics",
     "worst_domain_accuracy",

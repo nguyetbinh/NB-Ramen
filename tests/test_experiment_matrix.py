@@ -17,7 +17,8 @@ from src.runtime.experiment_matrix import (
     preflight,
     validate_completed_run,
 )
-from src.evaluation.evidence import SUMMARY_SCHEMA_VERSION, TRACE_SCHEMA_VERSION
+from src.evaluation.evidence import FAILURE_ANALYSIS_REQUIRED_FIELDS, SUMMARY_SCHEMA_VERSION, TRACE_SCHEMA_VERSION
+from src.evaluation.failure_analysis_artifacts import ReplaySidecarWriter
 from src.runtime.artifact_provenance import (
     CIFAR100C_OFFICIAL_ACQUISITION,
     SCHEMA_VERSION as ARTIFACT_SCHEMA_VERSION,
@@ -88,6 +89,13 @@ def _write_valid_evidence(run):
         "artifact_provenance": run.artifact_provenance,
         "data_root": str(run.data_root),
     }
+    if run.failure_analysis_profile != "off":
+        args.update({
+            "failure_analysis_profile": run.failure_analysis_profile,
+            "failure_analysis_max_samples": run.failure_analysis_max_samples,
+            "failure_analysis_max_bytes": run.failure_analysis_max_bytes,
+            "failure_counterfactual_thresholds": list(run.failure_counterfactual_thresholds),
+        })
     model_artifact = resolve_clip_model(run.model)
     model_artifact.update({
         "status": "verified", "path": str(Path.home() / ".cache" / "clip" / model_artifact["filename"]),
@@ -119,6 +127,8 @@ def _write_valid_evidence(run):
             },
         },
     }
+    if run.failure_analysis_profile == "replay_v1" and run.method != "NoAdapt":
+        manifest["git"] = {"source": {"fingerprint": "d" * 64}}
     summary = {
         "schema_version": SUMMARY_SCHEMA_VERSION,
         "run_id": run.run_id,
@@ -222,7 +232,27 @@ def _write_valid_evidence(run):
         "memory_bytes": None,
         "latency_ms": 1.0,
     }
+    if run.failure_analysis_profile != "off" and run.method != "NoAdapt":
+        failure = {field: 0 for field in FAILURE_ANALYSIS_REQUIRED_FIELDS}
+        failure["evaluator_sample_identity"] = {"sample_idx": 0, "ground_truth_domain": 0}
+        failure.update({
+            "schedule": "causal",
+            "conflict_metric": "fraction_low_consensus_coordinates_v1",
+            "conflict": 0.0,
+        })
+        trace["failure_analysis"] = failure
     (run.run_dir / "trace.jsonl").write_text(json.dumps(trace) + "\n", encoding="utf-8")
+    if run.failure_analysis_profile == "replay_v1" and run.method != "NoAdapt":
+        manifest_sha = hashlib.sha256((run.run_dir / "manifest.json").read_bytes()).hexdigest()
+        writer = ReplaySidecarWriter(
+            run.run_dir / "failure-analysis", run_id=run.run_id,
+            manifest_sha256=manifest_sha, stream_fingerprint=fingerprint,
+            source_fingerprint="d" * 64,
+            config={"counterfactual_thresholds": list(run.failure_counterfactual_thresholds)},
+            max_samples=run.failure_analysis_max_samples, max_bytes=run.failure_analysis_max_bytes,
+        )
+        writer.write(query={"query_id": 0})
+        writer.close()
 
 
 def _mutate_trace(run, mutate):
@@ -279,6 +309,80 @@ def _extend_to_two_sample_memory_timeline(run, memory_bytes):
 
 
 class ExperimentMatrixTests(unittest.TestCase):
+    def test_failure_analysis_cli_command_and_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            off = build_experiment_matrix(
+                datasets=("DomainNet",), streams=("block",), methods=("NoAdapt",), seeds=(0,),
+                evidence_dir=directory, data_root=directory, device="cpu",
+            )[0]
+            replay = build_experiment_matrix(
+                datasets=("DomainNet",), streams=("block",), methods=("NoAdapt",), seeds=(0,),
+                evidence_dir=directory, data_root=directory, device="cpu",
+                failure_analysis_profile="replay_v1", failure_analysis_max_samples=17,
+                failure_analysis_max_bytes=12345, failure_counterfactual_thresholds=(0.5, 0.75, 1.0),
+            )[0]
+            changed_limit = build_experiment_matrix(
+                datasets=("DomainNet",), streams=("block",), methods=("NoAdapt",), seeds=(0,),
+                evidence_dir=directory, data_root=directory, device="cpu",
+                failure_analysis_profile="replay_v1", failure_analysis_max_samples=18,
+                failure_analysis_max_bytes=12345, failure_counterfactual_thresholds=(0.5, 0.75, 1.0),
+            )[0]
+            self.assertNotEqual(off.run_id, replay.run_id)
+            self.assertNotEqual(replay.run_id, changed_limit.run_id)
+            command = build_command(replay)
+            for expected in (
+                "--failure-analysis-profile", "replay_v1", "--failure-analysis-max-samples", "17",
+                "--failure-analysis-max-bytes", "12345", "--failure-counterfactual-thresholds", "0.5,0.75,1.0",
+            ):
+                self.assertIn(expected, command)
+            self.assertNotIn("--failure-analysis-profile", build_command(off))
+
+    def test_noncanonical_counterfactual_thresholds_are_rejected_before_planning(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "preregistered tuple"):
+                build_experiment_matrix(
+                    datasets=("DomainNet",), streams=("block",), methods=("NoAdapt",), seeds=(0,),
+                    evidence_dir=directory, data_root=directory, device="cpu",
+                    failure_counterfactual_thresholds=(0.25, 0.75),
+                )
+            with self.assertRaisesRegex(ValueError, "preregistered tuple"):
+                make_run_id("DomainNet", "block", 0, "NoAdapt", failure_counterfactual_thresholds=(0.25, 0.75))
+
+    def test_replay_completed_run_requires_valid_sidecar_but_noadapt_may_omit_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            baseline, adapted = build_experiment_matrix(
+                datasets=("DomainNet",), streams=("block",), methods=("Ramen",), seeds=(0,),
+                evidence_dir=directory, data_root=directory, device="cpu", max_eval_samples=1,
+                failure_analysis_profile="replay_v1", failure_analysis_max_samples=2,
+                failure_analysis_max_bytes=4096,
+            )
+            _write_valid_evidence(baseline)
+            # A requested profile remains compatible with NoAdapt's absent trace family/sidecar.
+            validate_completed_run(baseline)
+            _write_valid_evidence(adapted)
+            validate_completed_run(adapted)
+            with (adapted.run_dir / "failure-analysis" / "queries.jsonl").open("ab") as handle:
+                handle.write(b"corrupt")
+            with self.assertRaisesRegex(IncompleteRunError, "invalid requested replay sidecar"):
+                validate_completed_run(adapted)
+
+    def test_replay_completed_run_rejects_insufficient_sidecar(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, adapted = build_experiment_matrix(
+                datasets=("DomainNet",), streams=("block",), methods=("Ramen",), seeds=(0,),
+                evidence_dir=directory, data_root=directory, device="cpu", max_eval_samples=1,
+                failure_analysis_profile="replay_v1", failure_analysis_max_samples=1,
+                failure_analysis_max_bytes=4096,
+            )
+            _write_valid_evidence(adapted)
+            sidecar = adapted.run_dir / "failure-analysis"
+            metadata_path = sidecar / "metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["status"] = "insufficient"
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+            with self.assertRaisesRegex(IncompleteRunError, "invalid requested replay sidecar"):
+                validate_completed_run(adapted)
+
     def test_profile_resume_replays_counters_even_when_summary_is_recomputed(self):
         with tempfile.TemporaryDirectory() as directory:
             config_root = Path(directory) / "profile-config"
@@ -888,6 +992,24 @@ class ExperimentMatrixTests(unittest.TestCase):
                 _write_valid_evidence(run)
                 _mutate_trace(run, mutate)
                 with self.assertRaises(IncompleteRunError):
+                    validate_completed_run(run)
+
+    def test_resume_rejects_missing_or_malformed_failure_provenance(self):
+        mutations = {
+            "missing conflict metric": lambda failure: failure.pop("conflict_metric"),
+            "invalid schedule": lambda failure: failure.__setitem__("schedule", "batched"),
+            "out of range conflict": lambda failure: failure.__setitem__("conflict", 1.1),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary_directory:
+                _, run = build_experiment_matrix(
+                    datasets=("DomainNet",), streams=("block",), methods=("Ramen",), seeds=(0,),
+                    evidence_dir=temporary_directory, data_root=temporary_directory, device="cpu",
+                    max_eval_samples=1, failure_analysis_profile="trace_v1",
+                )
+                _write_valid_evidence(run)
+                _mutate_trace(run, lambda row: mutate(row["failure_analysis"]))
+                with self.assertRaisesRegex(IncompleteRunError, "failure_analysis"):
                     validate_completed_run(run)
 
     def test_trace_rejects_malformed_or_contaminated_predictions(self):

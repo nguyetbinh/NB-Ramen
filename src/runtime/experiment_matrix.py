@@ -45,7 +45,9 @@ try:
         RETRIEVAL_PROFILE_TRACE_FIELDS,
         TRACE_SCHEMA_VERSION,
         compare_trace_negative_adaptation,
+        validate_failure_analysis,
     )
+    from ..evaluation.failure_analysis_artifacts import ReplaySidecarReader, parse_counterfactual_thresholds
     from ..evaluation.online_metrics import domain_shift_recovery_times
     from ..evaluation.routing_metrics import routing_diagnostics
 except ImportError:  # ``runtime`` top-level package or direct-file invocation.
@@ -59,9 +61,11 @@ except ImportError:  # ``runtime`` top-level package or direct-file invocation.
         RETRIEVAL_PROFILE_TRACE_FIELDS,
         TRACE_SCHEMA_VERSION,
         compare_trace_negative_adaptation,
+        validate_failure_analysis,
     )
     from evaluation.online_metrics import domain_shift_recovery_times
     from evaluation.routing_metrics import routing_diagnostics
+    from evaluation.failure_analysis_artifacts import ReplaySidecarReader, parse_counterfactual_thresholds
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -126,6 +130,10 @@ class ExperimentRun:
     config_data: dict[str, object]
     artifact_provenance: str
     reference_trace: Path | None = None
+    failure_analysis_profile: str = "off"
+    failure_analysis_max_samples: int = 1000
+    failure_analysis_max_bytes: int = 256 * 1024 * 1024
+    failure_counterfactual_thresholds: tuple[float, ...] = (0.50, 0.75, 1.00)
 
     @property
     def run_dir(self) -> Path:
@@ -230,8 +238,13 @@ def make_run_id(
     artifact_provenance: str = "fast",
     data_root: str | Path = "~/data",
     batch_size: int | None = None,
+    failure_analysis_profile: str = "off",
+    failure_analysis_max_samples: int = 1000,
+    failure_analysis_max_bytes: int = 256 * 1024 * 1024,
+    failure_counterfactual_thresholds: Sequence[float] = (0.50, 0.75, 1.00),
 ) -> str:
     """Return a stable, conservative ID suitable for use as one path segment."""
+    thresholds = parse_counterfactual_thresholds(failure_counterfactual_thresholds)
     budget = "full" if max_eval_samples is None else f"n{max_eval_samples}"
     canonical_data_root = str(_absolute(data_root))
     data_root_hash = hashlib.sha256(canonical_data_root.encode("utf-8")).hexdigest()[:CONFIG_HASH_LENGTH]
@@ -242,10 +255,16 @@ def make_run_id(
     ):
         raise ValueError("batch_size must be a positive integer")
     default_batch_size = BATCH_SIZE_BY_DATASET.get(dataset)
+    analysis_token = "off" if failure_analysis_profile == "off" else hashlib.sha256(
+        json.dumps([failure_analysis_profile, failure_analysis_max_samples, failure_analysis_max_bytes,
+                    list(thresholds)], separators=(",", ":")).encode()
+    ).hexdigest()[:8]
     tokens = (dataset, stream_mode, "seed", _seed_token(seed), method, "dev", device, budget,
               *(("bs", batch_size) if batch_size is not None and batch_size != default_batch_size else ()),
               *(("blk", stream_block_size) if stream_block_size != 64 else ()),
-              "cfg", config_hash, "prov", artifact_provenance, "data", data_root_hash)
+              "cfg", config_hash, "prov", artifact_provenance,
+              *(("fa", analysis_token) if failure_analysis_profile != "off" else ()),
+              "data", data_root_hash)
     normalized = []
     for token in tokens:
         value = "".join(character.lower() if character.isalnum() else "-" for character in str(token))
@@ -274,6 +293,10 @@ def build_experiment_matrix(
     config_dir: str | Path = REPOSITORY_ROOT / "cfg",
     artifact_provenance: str = "fast",
     data_root: str | Path = "~/data",
+    failure_analysis_profile: str = "off",
+    failure_analysis_max_samples: int = 1000,
+    failure_analysis_max_bytes: int = 256 * 1024 * 1024,
+    failure_counterfactual_thresholds: Sequence[float] = (0.50, 0.75, 1.00),
 ) -> list[ExperimentRun]:
     """Build the grid in execution order, with NoAdapt first in each cell."""
     datasets = tuple(datasets)
@@ -295,6 +318,11 @@ def build_experiment_matrix(
         raise ValueError("device must be one of " + ", ".join(SUPPORTED_DEVICES))
     if artifact_provenance not in SUPPORTED_ARTIFACT_PROVENANCE:
         raise ValueError("artifact_provenance must be one of " + ", ".join(SUPPORTED_ARTIFACT_PROVENANCE))
+    if failure_analysis_profile not in {"off", "trace_v1", "replay_v1"}:
+        raise ValueError("failure_analysis_profile must be off, trace_v1, or replay_v1")
+    thresholds = parse_counterfactual_thresholds(failure_counterfactual_thresholds)
+    if not _is_int(failure_analysis_max_samples, minimum=1) or not _is_int(failure_analysis_max_bytes, minimum=1):
+        raise ValueError("failure-analysis limits must be positive integers")
     if max_eval_samples is not None and (
         not isinstance(max_eval_samples, int) or isinstance(max_eval_samples, bool) or max_eval_samples <= 0
     ):
@@ -328,6 +356,10 @@ def build_experiment_matrix(
                     max_eval_samples=max_eval_samples, config_hash=baseline_hash, artifact_provenance=artifact_provenance,
                     data_root=canonical_data_root, stream_block_size=stream_block_size,
                     batch_size=dataset_batch_size,
+                    failure_analysis_profile=failure_analysis_profile,
+                    failure_analysis_max_samples=failure_analysis_max_samples,
+                    failure_analysis_max_bytes=failure_analysis_max_bytes,
+                    failure_counterfactual_thresholds=thresholds,
                 )
                 baseline_trace = root / baseline_id / "trace.jsonl"
                 for method in ordered_methods:
@@ -343,6 +375,10 @@ def build_experiment_matrix(
                             artifact_provenance=artifact_provenance,
                             data_root=canonical_data_root, stream_block_size=stream_block_size,
                             batch_size=dataset_batch_size,
+                            failure_analysis_profile=failure_analysis_profile,
+                            failure_analysis_max_samples=failure_analysis_max_samples,
+                            failure_analysis_max_bytes=failure_analysis_max_bytes,
+                            failure_counterfactual_thresholds=thresholds,
                         ),
                         model=MODEL_BY_DATASET[dataset],
                         batch_size=dataset_batch_size,
@@ -359,6 +395,10 @@ def build_experiment_matrix(
                         config_data=config_data,
                         artifact_provenance=artifact_provenance,
                         reference_trace=None if method == "NoAdapt" else baseline_trace,
+                        failure_analysis_profile=failure_analysis_profile,
+                        failure_analysis_max_samples=failure_analysis_max_samples,
+                        failure_analysis_max_bytes=failure_analysis_max_bytes,
+                        failure_counterfactual_thresholds=thresholds,
                     ))
     run_ids = [run.run_id for run in runs]
     if len(run_ids) != len(set(run_ids)):
@@ -424,6 +464,13 @@ def build_command(
         command.extend(("--stream_block_size", str(run.stream_block_size)))
     if run.reference_trace is not None:
         command.extend(("--reference_trace", str(run.reference_trace)))
+    if run.failure_analysis_profile != "off":
+        command.extend((
+            "--failure-analysis-profile", run.failure_analysis_profile,
+            "--failure-analysis-max-samples", str(run.failure_analysis_max_samples),
+            "--failure-analysis-max-bytes", str(run.failure_analysis_max_bytes),
+            "--failure-counterfactual-thresholds", ",".join(str(value) for value in run.failure_counterfactual_thresholds),
+        ))
     return command
 
 
@@ -911,6 +958,13 @@ def validate_completed_run(run: ExperimentRun) -> dict[str, object]:
         "artifact_provenance": run.artifact_provenance,
         "data_root": str(run.data_root),
     }
+    if run.failure_analysis_profile != "off":
+        expected_args.update({
+            "failure_analysis_profile": run.failure_analysis_profile,
+            "failure_analysis_max_samples": run.failure_analysis_max_samples,
+            "failure_analysis_max_bytes": run.failure_analysis_max_bytes,
+            "failure_counterfactual_thresholds": list(run.failure_counterfactual_thresholds),
+        })
     for key, expected in expected_args.items():
         _require_equal(args.get(key), expected, f"manifest.args.{key}", run)
     _validate_artifact_evidence(manifest.get("artifacts"), run)
@@ -964,6 +1018,7 @@ def validate_completed_run(run: ExperimentRun) -> dict[str, object]:
             raise IncompleteRunError(f"invalid stream reference at index {index}: {run.run_id}")
 
     rows: list[dict[str, object]] = []
+    failure_analysis_present: bool | None = None
     try:
         with trace_path.open("r", encoding="utf-8") as handle:
             for line_number, line in enumerate(handle, 1):
@@ -1038,10 +1093,42 @@ def validate_completed_run(run: ExperimentRun) -> dict[str, object]:
                     raise IncompleteRunError(
                         f"trace[{line_number}] retrieval profile fields must be all present or all absent"
                     )
+                has_failure_analysis = "failure_analysis" in row
+                failure = row.get("failure_analysis")
+                if has_failure_analysis and (not isinstance(failure, dict) or not failure):
+                    raise IncompleteRunError(f"trace[{line_number}].failure_analysis is malformed")
+                if isinstance(failure, dict):
+                    try:
+                        validate_failure_analysis(failure)
+                    except ValueError as exc:
+                        raise IncompleteRunError(
+                            f"trace[{line_number}].failure_analysis is malformed: {exc}"
+                        ) from exc
+                if failure_analysis_present is None:
+                    failure_analysis_present = has_failure_analysis
+                elif failure_analysis_present != has_failure_analysis:
+                    raise IncompleteRunError(
+                        f"trace[{line_number}] failure_analysis fields must be all present or all absent"
+                    )
+                if run.failure_analysis_profile != "off" and run.method != "NoAdapt" and not has_failure_analysis:
+                    raise IncompleteRunError(f"trace[{line_number}] lacks requested failure analysis evidence")
+                if run.failure_analysis_profile == "off" and has_failure_analysis:
+                    raise IncompleteRunError(f"trace[{line_number}] contains unexpected failure analysis evidence")
                 rows.append(row)
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
         raise IncompleteRunError(f"invalid trace: {trace_path}") from exc
     _require_equal(len(rows), num_samples, "trace row count", run)
+    if run.failure_analysis_profile == "replay_v1" and run.method != "NoAdapt":
+        try:
+            ReplaySidecarReader(
+                run.run_dir / "failure-analysis",
+                manifest_sha256=hashlib.sha256((run.run_dir / "manifest.json").read_bytes()).hexdigest(),
+                stream_fingerprint=computed_fingerprint,
+                source_fingerprint=manifest.get("git", {}).get("source", {}).get("fingerprint"),
+                run_id=run.run_id,
+            )
+        except (OSError, ValueError) as exc:
+            raise IncompleteRunError(f"invalid requested replay sidecar: {run.run_id}") from exc
     _validate_summary(summary, manifest, rows, run)
     return {"manifest": manifest, "summary": summary, "stream": stream}
 
@@ -1137,6 +1224,10 @@ def _parser() -> argparse.ArgumentParser:
                         help="Evaluator batch size; omit to use the per-dataset default.")
     parser.add_argument("--stream-block-size", type=int, default=64)
     parser.add_argument("--artifact-provenance", choices=SUPPORTED_ARTIFACT_PROVENANCE, default="fast")
+    parser.add_argument("--failure-analysis-profile", choices=("off", "trace_v1", "replay_v1"), default="off")
+    parser.add_argument("--failure-analysis-max-samples", type=int, default=1000)
+    parser.add_argument("--failure-analysis-max-bytes", type=int, default=256 * 1024 * 1024)
+    parser.add_argument("--failure-counterfactual-thresholds", default="0.50,0.75,1.00")
     parser.add_argument("--execute", action="store_true", help="Run commands; planning JSON is the default.")
     parser.add_argument("--resume", action="store_true", help="Skip only runs with manifest.json and summary.json.")
     return parser
@@ -1149,6 +1240,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(
             "--execute/--resume requires an explicit --device cpu, --device mps, or --device cuda"
         )
+    try:
+        failure_thresholds = parse_counterfactual_thresholds(args.failure_counterfactual_thresholds)
+    except ValueError as exc:
+        parser.error(str(exc))
     runs = build_experiment_matrix(
         datasets=args.dataset or DEFAULT_DATASETS,
         streams=args.stream or DEFAULT_STREAMS,
@@ -1162,6 +1257,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         config_dir=args.config_dir,
         artifact_provenance=args.artifact_provenance,
         data_root=args.data_root,
+        failure_analysis_profile=args.failure_analysis_profile,
+        failure_analysis_max_samples=args.failure_analysis_max_samples,
+        failure_analysis_max_bytes=args.failure_analysis_max_bytes,
+        failure_counterfactual_thresholds=failure_thresholds,
     )
     commands = [build_command(
         run, python_executable=args.python_executable, data_root=args.data_root,

@@ -15,6 +15,7 @@ from typing import Any
 
 import torch
 
+from evaluation.gradient_diagnostics import trace_payload_from_retrieval
 from memory.structured_memory import RetrievalBatch, StructuredGradientMemory
 from models.ModelForBySampleTTA import CLIPModelForBySampleTTA
 from routing.online_prototypes import OnlinePrototypeRouter
@@ -32,6 +33,7 @@ _ROUTER_DEFAULTS = {
     "include_current": True,
     "capacity_scope": "per_class_context",
     "retrieval_profile": "off",
+    "failure_analysis_profile": "off",
 }
 
 
@@ -77,6 +79,10 @@ def validate_latent_ramen_config(config: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("optimizer must be a non-empty string")
     if not isinstance(cfg["retrieval_profile"], str) or cfg["retrieval_profile"] not in {"off", "causal_sync_v1"}:
         raise ValueError("retrieval_profile must be 'off' or 'causal_sync_v1'")
+    if not isinstance(cfg["failure_analysis_profile"], str) or cfg["failure_analysis_profile"] not in {
+        "off", "trace_v1", "replay_v1"
+    }:
+        raise ValueError("failure_analysis_profile must be 'off', 'trace_v1', or 'replay_v1'")
     return cfg
 
 
@@ -120,6 +126,181 @@ def aggregate_class_balanced_gradients(retrieval: RetrievalBatch, beta: float) -
     return gradients, counts
 
 
+def _failure_analysis_profile(args: Any, cfg: Mapping[str, Any]) -> str:
+    """Read the public evaluator argument while retaining config-only callers."""
+    value = getattr(args, "failure_analysis_profile", cfg["failure_analysis_profile"])
+    if value not in {"off", "trace_v1", "replay_v1"}:
+        raise ValueError("failure_analysis_profile must be 'off', 'trace_v1', or 'replay_v1'")
+    return value
+
+
+def _counterfactual_thresholds(args: Any) -> tuple[float, ...]:
+    """Validate immutable replay thresholds without depending on evaluator code."""
+    raw = getattr(args, "failure_counterfactual_thresholds", (0.50, 0.75, 1.00))
+    if isinstance(raw, str):
+        raw = raw.split(",")
+    try:
+        values = tuple(float(value) for value in raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("failure_counterfactual_thresholds must be finite values in [0, 1]") from exc
+    if not values or len(set(values)) != len(values) or any(not math.isfinite(value) or not 0 <= value <= 1 for value in values):
+        raise ValueError("failure_counterfactual_thresholds must be unique finite values in [0, 1]")
+    if values != (0.50, 0.75, 1.00):
+        raise ValueError(
+            "failure_counterfactual_thresholds must equal the preregistered tuple "
+            "(0.50, 0.75, 1.00)"
+        )
+    return values
+
+
+def _single_failure_payload(support: Any, beta: float, *, item_id: torch.Tensor,
+                            batch_position: int, future_support_count: int = 0,
+                            future_support_weight_fraction: float = 0.0,
+                            schedule: str = "causal",
+                            legal_candidates: list[dict[str, int | float]] | None = None,
+                            profile: str = "trace_v1", replay_item: dict[str, torch.Tensor] | None = None) -> dict[str, Any]:
+    """Convert one exact retrieval into a trace-safe, model-visible payload."""
+    trace = trace_payload_from_retrieval(support, beta)
+    payload = {key: value[0].detach().clone() for key, value in trace.items()}
+    if schedule not in {"causal", "atomic"}:
+        raise ValueError("failure-analysis schedule must be causal or atomic")
+    payload.update({
+        "query_item_id": item_id.detach().clone(),
+        "batch_position": batch_position,
+        "future_support_count": future_support_count,
+        "future_support_weight_fraction": future_support_weight_fraction,
+        # This is production provenance, not an evaluator label.  It makes
+        # replay rows self-describing for F5 schedule diagnostics.
+        "schedule": schedule,
+        # F3's canonical scalar is the fraction of aggregate coordinates
+        # without strong class-local SignSGD consensus.  Keep its definition
+        # alongside every exact query retrieval so offline analysis never
+        # guesses between the several related diagnostic summaries.
+        "conflict_metric": "fraction_low_consensus_coordinates_v1",
+        "conflict": trace["fraction_low_consensus_coordinates"][0].detach().clone(),
+    })
+    if legal_candidates is not None:
+        payload["legal_candidates"] = legal_candidates
+    if profile == "replay_v1" and replay_item is not None:
+        # Opaque evaluator-only material: it is deliberately separate from
+        # the scalar trace payload, so JSON trace writers never see gradients.
+        payload["replay"] = replay_item
+    # Internal-only tensors are consumed for evaluator counterfactuals and
+    # deliberately stripped by the public trace formatter below.
+    payload["_consensus_strength"] = trace["consensus_strength"][0].detach().clone()
+    return payload
+
+
+def _failure_analysis_method_payloads(entries: Any) -> list[dict[str, Any]]:
+    """Split trace-safe fields from opaque replay vectors for the evaluator."""
+    def serialisable(value: Any) -> Any:
+        if isinstance(value, torch.Tensor):
+            return value.detach().cpu().tolist()
+        if isinstance(value, dict):
+            return {key: serialisable(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [serialisable(item) for item in value]
+        return value
+
+    if not isinstance(entries, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for entry in entries:
+        trace = serialisable({
+            key: value for key, value in entry.items()
+            if key not in {"replay", "counterfactuals"} and not key.startswith("_")
+        })
+        replay = entry.get("replay")
+        item: list[dict[str, Any]] = []
+        if isinstance(replay, dict):
+            item_id = entry.get("query_item_id")
+            item.append({
+                "item_id": serialisable(item_id),
+                "feature": replay.get("query_feature"),
+                "gradient": replay.get("query_gradient"),
+                "predicted_class": serialisable(replay.get("predicted_class")),
+                "context": serialisable(replay.get("context")),
+                "entropy": serialisable(replay.get("entropy")),
+                "admitted": serialisable(replay.get("admitted_to_memory")),
+            })
+        query = {
+            "item_id": serialisable(entry.get("query_item_id")), "legal_candidates": serialisable(entry.get("legal_candidates", [])),
+            "retrieved_support_ids": serialisable(entry.get("support_item_ids")), "retrieved_weights": serialisable(entry.get("support_weights")),
+            "reset_state_verified": bool(entry.get("reset_state_verified", False)),
+        }
+        result.append({"trace": trace, "query": query, "item": item,
+                       "counterfactuals": serialisable(entry.get("counterfactuals", [])),
+                       "reset_state_verified": bool(entry.get("reset_state_verified", False))})
+    return result
+
+
+def evaluate_replay_counterfactuals(model: Any, x: torch.Tensor, actual_logits: torch.Tensor,
+                                    actual_aggregate: torch.Tensor,
+                                    entries: list[dict[str, Any]], thresholds: tuple[float, ...]) -> None:
+    """Evaluate fixed consensus masks from the same reset per-sample state.
+
+    The actual prediction has already been captured by the caller.  This
+    helper only mutates evaluator-only payloads and always leaves the model at
+    its pretrained state.  A warm feature pass before setting gradients is
+    required because the by-sample norm modules initialise ``recent_B`` there.
+    """
+    variants: list[list[dict[str, Any]]] = [[] for _ in entries]
+    parity_error = torch.full((len(entries),), float("inf"), device=actual_logits.device)
+    verified = False
+    try:
+        # Rebuild the exact unmasked production update from base state before
+        # trusting any masked replay.  This is the counterfactual's causal
+        # anchor, not merely a reset call that may be incomplete in a model.
+        model.reset_parameters()
+        with torch.no_grad():
+            model.featurize(x)
+        model.set_by_sample_grad(actual_aggregate)
+        model.step_and_zero_grad()
+        with torch.no_grad():
+            replay_logits = model(x)
+        parity_error = (replay_logits - actual_logits).abs().amax(dim=-1)
+        verified = bool(torch.allclose(replay_logits, actual_logits, rtol=0., atol=0.))
+        model.reset_parameters()
+        if not verified:
+            # Fail closed: the model cannot substantiate its baseline reset,
+            # so exposing masked alternatives would be misleading.
+            for index, entry in enumerate(entries):
+                entry["counterfactuals"] = []
+                entry["reset_state_verified"] = False
+                entry["actual_prediction"] = actual_logits[index].argmax(dim=-1).detach().clone()
+                entry["actual_entropy"] = softmax_entropy(actual_logits, reduction="none")[index].detach().clone()
+                entry["reset_parity_error"] = parity_error[index].detach().clone()
+            return
+        for threshold in thresholds:
+            strengths = torch.stack([
+                entry.get("_consensus_strength", torch.ones_like(actual_aggregate[index]))
+                for index, entry in enumerate(entries)
+            ]).to(device=actual_aggregate.device, dtype=actual_aggregate.dtype)
+            masked = actual_aggregate * (strengths >= threshold).to(actual_aggregate.dtype)
+            # This initializes BySampleLayerNorm/BatchNorm.recent_B after the
+            # reset, before set_by_sample_grad slices their gradients.
+            with torch.no_grad():
+                model.featurize(x)
+            model.set_by_sample_grad(masked)
+            model.step_and_zero_grad()
+            with torch.no_grad():
+                logits = model(x)
+                predictions = logits.argmax(dim=-1)
+                entropy = softmax_entropy(logits, reduction="none")
+            for index in range(len(entries)):
+                variants[index].append({"threshold": threshold, "prediction": predictions[index], "entropy": entropy[index]})
+            model.reset_parameters()
+    except Exception:
+        model.reset_parameters()
+        raise
+    for index, (entry, values) in enumerate(zip(entries, variants)):
+        entry["counterfactuals"] = values
+        entry["reset_state_verified"] = verified
+        entry["actual_prediction"] = actual_logits[index].argmax(dim=-1).detach().clone()
+        entry["actual_entropy"] = softmax_entropy(actual_logits, reduction="none")[index].detach().clone()
+        entry["reset_parity_error"] = parity_error[index].detach().clone()
+
+
 def update_and_retrieve_causal_batch(
     memory: StructuredGradientMemory,
     features: torch.Tensor,
@@ -132,7 +313,8 @@ def update_and_retrieve_causal_batch(
     topk: int,
     include_current: bool,
     beta: float,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    failure_analysis_profile: str = "off",
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[dict[str, Any]]]:
     """Insert and retrieve one stream item at a time.
 
     Per-sample gradients may be computed in a batch, but evidence from item
@@ -142,10 +324,13 @@ def update_and_retrieve_causal_batch(
     are read from the memory's O(1) counter immediately after each causal
     insertion; they are not reconstructed by scanning live tensors.
     """
+    if failure_analysis_profile not in {"off", "trace_v1", "replay_v1"}:
+        raise ValueError("unknown failure_analysis_profile")
     retrieved = []
     active_class_counts = []
     memory_sizes = []
     memory_bytes = []
+    failure_payloads: list[dict[str, Any]] = []
     for index in range(features.shape[0]):
         item_slice = slice(index, index + 1)
         memory.add(
@@ -156,6 +341,12 @@ def update_and_retrieve_causal_batch(
             entropies[item_slice],
             item_ids=item_ids[item_slice],
         )
+        candidates = None
+        if failure_analysis_profile != "off":
+            candidates = memory.legal_candidate_snapshot(
+                contexts[item_slice], schedule="causal", selection="class_balanced",
+                include_current=include_current, current_item_ids=item_ids[item_slice],
+            )[0]
         support = memory.query(
             features[item_slice],
             contexts[item_slice],
@@ -168,12 +359,26 @@ def update_and_retrieve_causal_batch(
         active_class_counts.append(item_active_classes)
         memory_sizes.append(memory.size)
         memory_bytes.append(memory.retained_bytes)
-    return (
+        if failure_analysis_profile != "off":
+            replay_item = None if failure_analysis_profile != "replay_v1" else {
+                "query_feature": features[index].detach().clone(),
+                "query_gradient": gradients[index].detach().clone(),
+                "predicted_class": predicted_classes[index].detach().clone(),
+                "context": contexts[index].detach().clone(),
+                "entropy": entropies[index].detach().clone(),
+                "admitted_to_memory": torch.tensor(True, device=features.device),
+            }
+            failure_payloads.append(_single_failure_payload(
+                support, beta, item_id=item_ids[index], batch_position=index,
+                legal_candidates=candidates, schedule="causal", profile=failure_analysis_profile, replay_item=replay_item,
+            ))
+    result = (
         torch.cat(retrieved, dim=0),
         torch.cat(active_class_counts, dim=0),
         torch.tensor(memory_sizes, device=features.device, dtype=torch.long),
         torch.tensor(memory_bytes, device=features.device, dtype=torch.long),
     )
+    return result if failure_analysis_profile == "off" else (*result, failure_payloads)
 
 
 def update_and_retrieve_profiled_causal_batch(
@@ -220,6 +425,8 @@ class LatentRamen(TTABase):
     def __init__(self, model, datasets, args):
         super().__init__()
         self.cfg = validate_latent_ramen_config(args.config)
+        self.failure_analysis_profile = _failure_analysis_profile(args, self.cfg)
+        self.failure_counterfactual_thresholds = _counterfactual_thresholds(args)
         self.num_classes = datasets.num_classes
         self.device = next(model.parameters()).device
         self.model = CLIPModelForBySampleTTA(model, datasets.classes, self.cfg, args)
@@ -259,8 +466,11 @@ class LatentRamen(TTABase):
             admission_normalized_entropy = (entropies / math.log(self.num_classes)).clamp(0.0, 1.0)
             item_ids = torch.arange(self.counter, self.counter + batch_size, device=self.device, dtype=torch.long)
             self.counter += batch_size
-            profile = self.cfg["retrieval_profile"] == "causal_sync_v1"
-            if profile:
+            # Timing and replay instrumentation are intentionally separate;
+            # replay keeps the ordinary production query path observable.
+            profile = self.cfg["retrieval_profile"] == "causal_sync_v1" and self.failure_analysis_profile == "off"
+            failure_analysis = None
+            if profile and self.failure_analysis_profile == "off":
                 (retrieved_gradients, active_classes, memory_sizes, memory_bytes, retrieval_elapsed_ms,
                  retrieval_candidate_count, retrieval_eligible_candidate_count,
                  retrieval_returned_support_count) = update_and_retrieve_profiled_causal_batch(
@@ -268,10 +478,15 @@ class LatentRamen(TTABase):
                     topk=self.cfg["topk"], include_current=self.cfg["include_current"], beta=self.cfg["beta"],
                 )
             else:
-                retrieved_gradients, active_classes, memory_sizes, memory_bytes = update_and_retrieve_causal_batch(
+                retrieval = update_and_retrieve_causal_batch(
                     self.memory, features, gradients, predicted_classes, routing.context_ids, entropies, item_ids,
                     topk=self.cfg["topk"], include_current=self.cfg["include_current"], beta=self.cfg["beta"],
+                    failure_analysis_profile=self.failure_analysis_profile,
                 )
+                if self.failure_analysis_profile != "off":
+                    retrieved_gradients, active_classes, memory_sizes, memory_bytes, failure_analysis = retrieval
+                else:
+                    retrieved_gradients, active_classes, memory_sizes, memory_bytes = retrieval
             self.model.set_by_sample_grad(retrieved_gradients)
             active_contexts = contexts_before_batch + routing.spawned.long().cumsum(dim=0)
             self.last_diagnostics = self._diagnostics(
@@ -284,11 +499,17 @@ class LatentRamen(TTABase):
                 retrieval_candidate_count=retrieval_candidate_count if profile else None,
                 retrieval_eligible_candidate_count=retrieval_eligible_candidate_count if profile else None,
                 retrieval_returned_support_count=retrieval_returned_support_count if profile else None,
+                failure_analysis=failure_analysis,
+                failure_analysis_profile=self.failure_analysis_profile,
             )
 
         self.model.step_and_zero_grad()
         with torch.no_grad():
             output = self.model(x)
+        if self.failure_analysis_profile == "replay_v1":
+            evaluate_replay_counterfactuals(
+                self.model, x, output, retrieved_gradients, failure_analysis, self.failure_counterfactual_thresholds
+            )
         # Adaptation is per sample/batch.  Router and memory deliberately
         # persist; their reset is owned by ``reset`` below.
         self.model.reset_parameters()
@@ -297,6 +518,10 @@ class LatentRamen(TTABase):
     def get_diagnostics(self) -> dict[str, Any]:
         """Return evidence fields without exposing mutable router state."""
         return dict(self.last_diagnostics)
+
+    def get_failure_analysis_payload(self) -> list[dict[str, Any]]:
+        """Return evaluator-facing trace/replay payloads after one forward."""
+        return _failure_analysis_method_payloads(self.last_diagnostics.get("failure_analysis"))
 
     def diagnostics(self) -> dict[str, Any]:
         """Backward-compatible alias for interactive inspection."""
@@ -324,6 +549,8 @@ class LatentRamen(TTABase):
         retrieval_candidate_count=None,
         retrieval_eligible_candidate_count=None,
         retrieval_returned_support_count=None,
+        failure_analysis=None,
+        failure_analysis_profile="off",
     ) -> dict[str, Any]:
         result: dict[str, Any] = {
             "memory_size": self.memory.size if memory_sizes is None else memory_sizes,
@@ -345,6 +572,9 @@ class LatentRamen(TTABase):
             "admission_normalized_entropy": admission_normalized_entropy,
             "admitted_to_memory": admitted_to_memory,
         }
+        if failure_analysis_profile != "off":
+            result["failure_analysis_profile"] = failure_analysis_profile
+            result["failure_analysis"] = failure_analysis
         if routing is not None:
             result.update({
                 "inferred_context": routing.context_ids.detach().clone(),

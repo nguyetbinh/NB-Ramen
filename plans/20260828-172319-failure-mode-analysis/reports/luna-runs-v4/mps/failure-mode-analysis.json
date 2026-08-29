@@ -1,0 +1,235 @@
+{
+  "consensus_ramen_decision": {
+    "evidence_count": 0,
+    "missing_conditions": [
+      "conflict_direction_across_multiple_structured_streams",
+      "structured_stream_evidence",
+      "conflict_direction_across_fixed_seeds",
+      "stable_harmful_vs_beneficial_conflict_direction",
+      "completed_f4_oracle_recovery"
+    ],
+    "seed_count": 0,
+    "status": "INSUFFICIENT",
+    "stream_count": 0
+  },
+  "counterfactual": {
+    "best_preregistered_upper_bound": {
+      "label": "best_of_preregistered_evaluator_only_oracle_upper_bound",
+      "status": "computed",
+      "threshold": "0.50"
+    },
+    "status": "computed",
+    "variants": {
+      "0.50": {
+        "accuracy_delta_vs_adapted": 0.0,
+        "adapted_accuracy": 0.5,
+        "count": 4,
+        "counterfactual_accuracy": 0.5,
+        "harmful_event_count": 0,
+        "harmful_recovery_count": 0,
+        "harmful_recovery_rate": null,
+        "harmful_recovery_status": "insufficient",
+        "new_harm_count": 0,
+        "new_harm_eligible_count": 2,
+        "new_harm_rate": 0.0,
+        "new_harm_status": "computed",
+        "status": "computed"
+      },
+      "0.75": {
+        "accuracy_delta_vs_adapted": 0.0,
+        "adapted_accuracy": 0.5,
+        "count": 4,
+        "counterfactual_accuracy": 0.5,
+        "harmful_event_count": 0,
+        "harmful_recovery_count": 0,
+        "harmful_recovery_rate": null,
+        "harmful_recovery_status": "insufficient",
+        "new_harm_count": 0,
+        "new_harm_eligible_count": 2,
+        "new_harm_rate": 0.0,
+        "new_harm_status": "computed",
+        "status": "computed"
+      },
+      "1.00": {
+        "accuracy_delta_vs_adapted": 0.0,
+        "adapted_accuracy": 0.5,
+        "count": 4,
+        "counterfactual_accuracy": 0.5,
+        "harmful_event_count": 0,
+        "harmful_recovery_count": 0,
+        "harmful_recovery_rate": null,
+        "harmful_recovery_status": "insufficient",
+        "new_harm_count": 0,
+        "new_harm_eligible_count": 2,
+        "new_harm_rate": 0.0,
+        "new_harm_status": "computed",
+        "status": "computed"
+      }
+    }
+  },
+  "entropy_admission": {
+    "count": 4,
+    "groups": {
+      "high_correct": {
+        "count": 1,
+        "gradient_cosine": {
+          "count": 0,
+          "reason": "too few finite observations",
+          "status": "insufficient"
+        },
+        "gradient_sign_agreement": {
+          "count": 0,
+          "reason": "too few finite observations",
+          "status": "insufficient"
+        },
+        "mean_retrieved_distance": {
+          "count": 1,
+          "mean": 0.22866584360599518,
+          "status": "computed"
+        },
+        "retrieval_frequency": {
+          "count": 1,
+          "mean": 0.5,
+          "status": "computed"
+        },
+        "storage_rate": {
+          "count": 1,
+          "status": "computed",
+          "value": 1.0
+        },
+        "total_downstream_weight": {
+          "count": 1,
+          "status": "computed",
+          "value": 0.1789561752229929
+        }
+      },
+      "high_wrong": {
+        "count": 3,
+        "gradient_cosine": {
+          "count": 0,
+          "reason": "too few finite observations",
+          "status": "insufficient"
+        },
+        "gradient_sign_agreement": {
+          "count": 0,
+          "reason": "too few finite observations",
+          "status": "insufficient"
+        },
+        "mean_retrieved_distance": {
+          "count": 3,
+          "mean": 0.23625893394152322,
+          "status": "computed"
+        },
+        "retrieval_frequency": {
+          "count": 3,
+          "mean": 0.6666666666666666,
+          "status": "computed"
+        },
+        "storage_rate": {
+          "count": 3,
+          "status": "computed",
+          "value": 1.0
+        },
+        "total_downstream_weight": {
+          "count": 3,
+          "status": "computed",
+          "value": 0.526602677302435
+        }
+      },
+      "low_correct": {
+        "count": 0,
+        "reason": "empty entropy/correctness group",
+        "status": "insufficient"
+      },
+      "low_wrong": {
+        "count": 0,
+        "reason": "empty entropy/correctness group",
+        "status": "insufficient"
+      }
+    },
+    "status": "computed",
+    "threshold": 0.5
+  },
+  "gradient_conflict": {
+    "beneficial_count": 1,
+    "harmful_count": 0,
+    "metric": "fraction_low_consensus_coordinates_v1",
+    "reason": "both beneficial and harmful exact F0 outcome groups required",
+    "status": "insufficient"
+  },
+  "open_set": {
+    "reason": "ID-only and all-support replay gradients absent",
+    "status": "unavailable"
+  },
+  "oracle_gaps": {
+    "count": 4,
+    "legal_oracle_rate": 0.5,
+    "memory_insufficiency_rate": 0.5,
+    "oracle": "correctly_pseudolabeled_legal_support_v1",
+    "retrieval_gap": 0.0,
+    "retrieved_oracle_rate": 0.5,
+    "status": "computed"
+  },
+  "paired_outcomes": {
+    "A": 0.0,
+    "H": 0.25,
+    "HarmRate": 0.0,
+    "HelpRate": 0.3333333333333333,
+    "accuracy_delta": 0.25,
+    "adapted_accuracy": 0.5,
+    "base_accuracy": 0.25,
+    "count": 4,
+    "counts": {
+      "beneficial": 1,
+      "harmful": 0,
+      "safe": 1,
+      "unresolved": 2
+    },
+    "identity_h_minus_a": 0.25,
+    "status": "computed"
+  },
+  "provenance": {
+    "adapted": {
+      "manifest_sha256": "14fb924c6f87a4f0c0053708a85cfacd526ce5cafc2a421f93f7150ae457f638",
+      "run_id": "luna-v4-mps-cifar100c-block-s0-b1-n4-causalramen-replay-v1",
+      "source_fingerprint": "414629fd1e7bed991bb2a47fb1da1b93e49f55f081b3d684161f4e948ea65f84",
+      "stream_fingerprint": "d9dd816b694e5dc8f187cec82fcd85899843fd135b89aaecd45e9615e04c37ba"
+    },
+    "baseline": {
+      "manifest_sha256": "6da57bf6735e684b0a34269a7d1571d1c50fd9b742e51ddfcff0e7a9b6b37f1e",
+      "run_id": "luna-v4-mps-cifar100c-block-s0-b1-n4-noadapt-replay-v1",
+      "source_fingerprint": "414629fd1e7bed991bb2a47fb1da1b93e49f55f081b3d684161f4e948ea65f84",
+      "stream_fingerprint": "d9dd816b694e5dc8f187cec82fcd85899843fd135b89aaecd45e9615e04c37ba"
+    },
+    "verified": true
+  },
+  "schema_version": 1,
+  "status": "computed",
+  "temporal_schedule": {
+    "atomic_count": 0,
+    "causal_count": 4,
+    "count": 4,
+    "metrics": {
+      "batch_position": {
+        "count": 4,
+        "mean": 0.0,
+        "status": "computed"
+      },
+      "future_support_count": {
+        "count": 4,
+        "mean": 0.0,
+        "status": "computed"
+      },
+      "future_support_weight_fraction": {
+        "count": 4,
+        "mean": 0.0,
+        "status": "computed"
+      }
+    },
+    "paired_schedule_comparison": {
+      "reason": "paired atomic/causal outcomes not supplied",
+      "status": "insufficient"
+    },
+    "status": "computed"
+  }
+}

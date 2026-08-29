@@ -15,10 +15,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from evaluation.evidence import (  # noqa: E402
+    FAILURE_ANALYSIS_REQUIRED_FIELDS,
     SUMMARY_SCHEMA_VERSION,
     TRACE_REQUIRED_FIELDS,
     TRACE_SCHEMA_VERSION,
 )
+from evaluation.failure_analysis_artifacts import ReplaySidecarReader, sha256_file  # noqa: E402
 from main import ordered_stream_test  # noqa: E402
 from streams import (  # noqa: E402
     build_single_domain_stream,
@@ -92,6 +94,35 @@ class MixedMemoryAvailabilityMethod(DiagnosticMethod):
         logits = super().__call__(images)
         self._diagnostics["memory_bytes"] = [64, None]
         return logits
+
+
+class FailureAnalysisMethod(DiagnosticMethod):
+    def __call__(self, images):
+        logits = super().__call__(images)
+        self._failure_payloads = []
+        for position in range(len(images)):
+            trace = {field: 0 for field in FAILURE_ANALYSIS_REQUIRED_FIELDS
+                     if field not in {"producer_query_timestep", "evaluator_sample_identity"}}
+            trace.update({
+                "query_item_id": 100 + position,
+                "batch_position": position,
+                "support_item_ids": [], "support_predicted_classes": [],
+                "support_distances": [], "support_entropies": [], "support_weights": [],
+                "support_recencies": [], "support_valid_mask": [],
+                "schedule": "causal",
+                "conflict_metric": "fraction_low_consensus_coordinates_v1",
+                "conflict": 0.0,
+            })
+            self._failure_payloads.append({
+                "trace": trace,
+                "item": {"item_id": 100 + position, "feature": images[position].clone()},
+                "query": {"item_id": 100 + position, "legal_candidates": []},
+                "counterfactuals": [{"threshold": 0.5, "prediction": int(position % 2)}],
+            })
+        return logits
+
+    def get_failure_analysis_payload(self):
+        return self._failure_payloads
 
 
 class OrderedStreamEvidenceTests(unittest.TestCase):
@@ -178,6 +209,7 @@ class OrderedStreamEvidenceTests(unittest.TestCase):
 
         rows = [json.loads(line) for line in paths["trace"].read_text(encoding="utf-8").splitlines()]
         self.assertEqual(len(stream.references), len(rows))
+
         expected_contexts = []
         for timestep, ((domain_idx, sample_idx), row) in enumerate(zip(stream.references, rows)):
             label = self.datasets.datasets[domain_idx].targets[sample_idx]
@@ -238,6 +270,40 @@ class OrderedStreamEvidenceTests(unittest.TestCase):
         self.assertEqual("samples_per_second", summary["throughput"]["unit"])
         self.assertEqual("unavailable", summary["retrieval_latency"]["status"])
         self.assertEqual(stream.fingerprint, summary["stream_fingerprint"])
+
+    def test_replay_payload_attaches_identity_and_joins_labels_only_after_forward(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self._paths(directory)
+            stream = build_stream(self.datasets, mode="iid_mixed", seed=3)
+            args = self._args("iid_mixed")
+            args.tta_algo = "Ramen"
+            args.failure_analysis_profile = "replay_v1"
+            args.failure_analysis_max_samples = 10
+            args.failure_analysis_max_bytes = 65536
+            args.failure_counterfactual_thresholds = (0.5, 0.75, 1.0)
+            ordered_stream_test(self.datasets, FailureAnalysisMethod(), args, paths, stream)
+
+            trace_rows = [json.loads(line) for line in paths["trace"].read_text().splitlines()]
+            self.assertTrue(all("failure_analysis" in row for row in trace_rows))
+            for timestep, row in enumerate(trace_rows):
+                failure = row["failure_analysis"]
+                self.assertEqual(timestep, failure["producer_query_timestep"])
+                self.assertEqual(0, failure["segment_index"])
+                self.assertEqual(row["sample_idx"], failure["evaluator_sample_identity"]["sample_idx"])
+                self.assertNotIn("ground_truth_class", failure)
+
+            manifest = json.loads(paths["manifest"].read_text())
+            reader = ReplaySidecarReader(
+                paths["run_dir"] / "failure-analysis",
+                manifest_sha256=sha256_file(paths["manifest"]),
+                stream_fingerprint=stream.fingerprint,
+                source_fingerprint=manifest.get("git", {}).get("source", {}).get("fingerprint"),
+            )
+            queries = reader.rows("queries")
+            self.assertEqual([row["ground_truth_class"] for row in trace_rows],
+                             [row["ground_truth_class"] for row in queries])
+            self.assertTrue(all("segment_index" in row and "producer_query_timestep" in row for row in queries))
+            self.assertTrue(all("counterfactuals" in row for row in queries))
 
     def test_mixed_stream_emits_complete_evidence_and_only_final_reset(self):
         stream = build_stream(self.datasets, "iid_mixed", seed=9)

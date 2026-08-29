@@ -19,12 +19,15 @@ class BySampleLayerNorm(nn.Module):
         self.batch_first = batch_first
 
         # Save pretrained affine parameters in buffer, they won't be updated
-        self.register_buffer('weight', layernorm_module.weight.data)
-        self.register_buffer('bias', layernorm_module.bias.data)
+        self.register_buffer('weight', layernorm_module.weight.detach().clone())
+        self.register_buffer('bias', layernorm_module.bias.detach().clone())
 
         # Weight and bias by sample ...
-        self.weight_by_sample = nn.Parameter(self.weight.expand(max_batch_size, -1).contiguous())
-        self.bias_by_sample = nn.Parameter(self.bias.expand(max_batch_size, -1).contiguous())
+        # ``expand(1, -1)`` is already contiguous, so calling ``contiguous``
+        # alone may return the base buffer itself.  The trainable parameter
+        # must never share storage with the pretrained reset anchor.
+        self.weight_by_sample = nn.Parameter(self.weight.expand(max_batch_size, -1).clone())
+        self.bias_by_sample = nn.Parameter(self.bias.expand(max_batch_size, -1).clone())
         self.recent_B = None
 
         # skip affine transform, use our implementation instead
@@ -78,12 +81,12 @@ class BySampleBatchNorm(nn.Module):
         self.max_batch_size = max_batch_size
 
         # Save pretrained affine parameters in buffer, they won't be updated
-        self.register_buffer('weight', batchnorm_module.weight.data)
-        self.register_buffer('bias', batchnorm_module.bias.data)
+        self.register_buffer('weight', batchnorm_module.weight.detach().clone())
+        self.register_buffer('bias', batchnorm_module.bias.detach().clone())
 
         # Weight and bias by sample ...
-        self.weight_by_sample = nn.Parameter(self.weight.expand(max_batch_size, -1).contiguous())
-        self.bias_by_sample = nn.Parameter(self.bias.expand(max_batch_size, -1).contiguous())
+        self.weight_by_sample = nn.Parameter(self.weight.expand(max_batch_size, -1).clone())
+        self.bias_by_sample = nn.Parameter(self.bias.expand(max_batch_size, -1).clone())
         self.recent_B = None
 
         # skip affine transform, use our implementation instead
@@ -164,20 +167,52 @@ class ModelForBySampleTTA:
 
     @torch.no_grad()
     def set_by_sample_grad(self, grad_matrix):
+        if not isinstance(grad_matrix, torch.Tensor):
+            raise TypeError('grad_matrix must be a torch.Tensor')
+        if grad_matrix.ndim != 2:
+            raise ValueError(
+                f'grad_matrix must be 2-dimensional, got {grad_matrix.ndim} dimensions')
+
+        by_sample_modules = [
+            module for module in self.model.modules()
+            if isinstance(module, (BySampleLayerNorm, BySampleBatchNorm))
+        ]
+
+        expected_width = 0
+        required_batch_size = 0
+        for module in by_sample_modules:
+            recent_B = module.recent_B
+            if recent_B is None:
+                raise RuntimeError(
+                    'Cannot set by-sample gradients before a forward pass initializes recent_B')
+            if not isinstance(recent_B, int) or not 0 < recent_B <= module.max_batch_size:
+                raise ValueError(
+                    f'Invalid recent_B={recent_B!r} for {module.__class__.__name__}; '
+                    f'expected an integer between 1 and {module.max_batch_size}')
+
+            required_batch_size = max(required_batch_size, recent_B)
+            expected_width += module.weight_by_sample.shape[1] + module.bias_by_sample.shape[1]
+
+        if grad_matrix.shape[0] < required_batch_size:
+            raise ValueError(
+                f'grad_matrix has {grad_matrix.shape[0]} rows, but at least '
+                f'{required_batch_size} rows are required')
+        if grad_matrix.shape[1] != expected_width:
+            raise ValueError(
+                f'grad_matrix has width {grad_matrix.shape[1]}, but expected {expected_width}')
 
         idx = 0
-
-        for module in self.model.modules():
-            if isinstance(module, (BySampleLayerNorm, BySampleBatchNorm)):
-                module.weight_by_sample.grad[:module.recent_B].copy_(
-                    grad_matrix[:module.recent_B, idx: idx + module.weight_by_sample.shape[1]])
-                idx += module.weight_by_sample.shape[1]
-
-                module.bias_by_sample.grad[:module.recent_B].copy_(
-                    grad_matrix[:module.recent_B, idx: idx + module.bias_by_sample.shape[1]])
-                idx += module.bias_by_sample.shape[1]
-
-        assert idx == grad_matrix.shape[1]  # make sure all items are used
+        for module in by_sample_modules:
+            recent_B = module.recent_B
+            for parameter in (module.weight_by_sample, module.bias_by_sample):
+                width = parameter.shape[1]
+                if parameter.grad is None:
+                    # Optimizer.zero_grad() may release the buffer.  Allocate the
+                    # complete shape so rows outside the current batch remain valid.
+                    parameter.grad = torch.zeros_like(parameter)
+                parameter.grad[:recent_B].copy_(
+                    grad_matrix[:recent_B, idx: idx + width])
+                idx += width
 
     @torch.no_grad()
     def reset_parameters(self):

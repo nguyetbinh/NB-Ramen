@@ -3,3 +3,13 @@
 .venv/
 evidence/
 log/
+
+# Local failure-analysis replay runs contain raw features/gradients and
+# machine-specific manifests. Commit only the aggregate reports beside them.
+plans/20260828-172319-failure-mode-analysis/reports/luna-runs*/cpu/*/
+plans/20260828-172319-failure-mode-analysis/reports/luna-runs*/mps/*/
+plans/20260828-172319-failure-mode-analysis/reports/f4-parity-fix-*/
+plans/20260828-172319-failure-mode-analysis/reports/luna-runs/
+plans/20260828-172319-failure-mode-analysis/reports/luna-runs-v2/
+plans/20260828-172319-failure-mode-analysis/reports/luna-runs-v3/
+plans/20260828-172319-failure-mode-analysis/reports/**/*.csv

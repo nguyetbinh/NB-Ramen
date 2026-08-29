@@ -57,6 +57,22 @@ RETRIEVAL_PROFILE_TRACE_FIELDS = (
     "retrieval_returned_support_count",
     "retrieval_active_class_count",
 )
+# This optional family is deliberately opaque to the generic evidence layer:
+# method-specific scalar provenance evolves independently, while its presence
+# is atomic and never mixed within one adapted trace.
+FAILURE_ANALYSIS_TRACE_FIELD = "failure_analysis"
+FAILURE_ANALYSIS_REQUIRED_FIELDS = (
+    "query_item_id", "producer_query_timestep", "evaluator_sample_identity", "batch_position",
+    "support_item_ids", "support_predicted_classes", "support_distances", "support_entropies",
+    "support_weights", "support_recencies", "support_valid_mask", "support_count",
+    "active_support_classes", "production_aggregate_norm", "consensus_mean", "consensus_p10",
+    "consensus_p50", "fraction_low_consensus_coordinates", "pairwise_cosine_mean",
+    "pairwise_sign_agreement_mean", "pairwise_class_gradient_count", "future_support_count",
+    "future_support_weight_fraction",
+    # F3/F5 provenance is part of every production failure-analysis row.
+    "schedule", "conflict_metric", "conflict",
+)
+CANONICAL_CONFLICT_METRIC = "fraction_low_consensus_coordinates_v1"
 REFERENCE_IDENTITY_FIELDS = (
     "dataset",
     "model",
@@ -323,6 +339,7 @@ class JsonlTraceWriter:
         self.run_id = str(run_id)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._handle = self.path.open("x", encoding="utf-8")
+        self._failure_analysis_present: Optional[bool] = None
 
     def write(self, record: Mapping[str, Any]) -> dict[str, Any]:
         if self._handle.closed:
@@ -362,6 +379,14 @@ class JsonlTraceWriter:
             for field in RETRIEVAL_PROFILE_TRACE_FIELDS[2:]:
                 if not _is_nonnegative_integer(row[field]):
                     raise ValueError(f"{field} must be a non-negative integer")
+        if FAILURE_ANALYSIS_TRACE_FIELD in row:
+            failure = row[FAILURE_ANALYSIS_TRACE_FIELD]
+            validate_failure_analysis(failure)
+        has_failure_analysis = FAILURE_ANALYSIS_TRACE_FIELD in row
+        if self._failure_analysis_present is None:
+            self._failure_analysis_present = has_failure_analysis
+        elif self._failure_analysis_present != has_failure_analysis:
+            raise ValueError("failure_analysis trace fields must be all present or all absent")
         memory_bytes = row["memory_bytes"]
         if memory_bytes is not None and (
             not isinstance(memory_bytes, int)
@@ -466,6 +491,24 @@ def _is_finite_number(value: Any, *, minimum: float | None = None,
         and (minimum is None or value >= minimum)
         and (maximum is None or value <= maximum)
     )
+
+
+def validate_failure_analysis(value: Any) -> None:
+    """Validate the atomic, production provenance needed for F3 and F5."""
+    if not isinstance(value, Mapping) or not value:
+        raise ValueError("failure_analysis must be a nonempty object")
+    missing = [field for field in FAILURE_ANALYSIS_REQUIRED_FIELDS if field not in value]
+    if missing:
+        raise ValueError("failure_analysis missing required fields: " + ", ".join(missing))
+    nulls = [field for field in FAILURE_ANALYSIS_REQUIRED_FIELDS if value[field] is None]
+    if nulls:
+        raise ValueError("failure_analysis required fields must not be null: " + ", ".join(nulls))
+    if value["schedule"] not in {"causal", "atomic"}:
+        raise ValueError("failure_analysis.schedule must be causal or atomic")
+    if value["conflict_metric"] != CANONICAL_CONFLICT_METRIC:
+        raise ValueError("failure_analysis.conflict_metric is not canonical")
+    if not _is_finite_number(value["conflict"], minimum=0.0, maximum=1.0):
+        raise ValueError("failure_analysis.conflict must be a finite probability")
 
 
 def _require_matching_probability(value: Any, expected: float, field: str) -> None:
