@@ -15,6 +15,8 @@ from src.runtime.experiment_matrix import (
     main as matrix_main,
     make_run_id,
     preflight,
+    SUPPORTED_METHODS,
+    SUPPORTED_STREAMS,
     validate_completed_run,
 )
 from src.evaluation.evidence import FAILURE_ANALYSIS_REQUIRED_FIELDS, SUMMARY_SCHEMA_VERSION, TRACE_SCHEMA_VERSION
@@ -88,6 +90,7 @@ def _write_valid_evidence(run):
         "reference_trace": str(run.reference_trace) if run.reference_trace else None,
         "artifact_provenance": run.artifact_provenance,
         "data_root": str(run.data_root),
+        "analysis_role": run.analysis_role,
     }
     if run.failure_analysis_profile != "off":
         args.update({
@@ -601,6 +604,28 @@ class ExperimentMatrixTests(unittest.TestCase):
             with self.assertRaisesRegex(IncompleteRunError, "manifest.args.batch_size"):
                 validate_completed_run(atomic)
 
+    def test_resume_rejects_manifest_analysis_role_tampering_for_closed_and_open_runs(self):
+        cases = (
+            {"datasets": ("DomainNet",), "analysis_role": "analysis"},
+            {"datasets": ("CIFAR100C",), "open_set": True, "ood_ratio": 0.1,
+             "analysis_role": "final", "device": "cpu"},
+        )
+        for options in cases:
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as temporary_directory:
+                run = build_experiment_matrix(
+                    streams=("block",), methods=("NoAdapt",), seeds=(0,),
+                    evidence_dir=temporary_directory, data_root=temporary_directory, **options,
+                )[0]
+                _write_valid_evidence(run)
+                manifest_path = run.run_dir / "manifest.json"
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest["args"]["analysis_role"] = (
+                    "final" if run.analysis_role == "analysis" else "analysis"
+                )
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                with self.assertRaisesRegex(IncompleteRunError, "manifest.args.analysis_role"):
+                    validate_completed_run(run)
+
     def test_matrix_cli_plans_nondefault_batch_size(self):
         with tempfile.TemporaryDirectory() as temporary_directory, contextlib.redirect_stdout(io.StringIO()) as output:
             result = matrix_main([
@@ -900,15 +925,89 @@ class ExperimentMatrixTests(unittest.TestCase):
                 datasets=("DomainNet",), streams=("block",), methods=("NoAdapt",), seeds=(1, 1),
             )
 
-    def test_huge_seed_is_rejected_before_planning_an_invalid_run_id(self):
+    def test_overlong_run_ids_are_compacted_with_full_identity_hashes(self):
         huge_seed = 10 ** 200
-        with self.assertRaisesRegex(ValueError, "maximum is 128"):
-            make_run_id("CIFAR100C", "iid_mixed", huge_seed, "NoAdapt")
-        with self.assertRaisesRegex(ValueError, "maximum is 128"):
-            build_experiment_matrix(
-                datasets=("CIFAR100C",), streams=("iid_mixed",), methods=("NoAdapt",),
-                seeds=(huge_seed,),
-            )
+        first = make_run_id("CIFAR100C", "iid_mixed", huge_seed, "NoAdapt")
+        second = make_run_id("CIFAR100C", "iid_mixed", huge_seed + 1, "NoAdapt")
+        self.assertLessEqual(len(first), 128)
+        self.assertIn("-h-", first)
+        self.assertEqual(first, make_run_id("CIFAR100C", "iid_mixed", huge_seed, "NoAdapt"))
+        self.assertNotEqual(first, second)
+        planned = build_experiment_matrix(
+            datasets=("CIFAR100C",), streams=("iid_mixed",), methods=("NoAdapt",),
+            seeds=(huge_seed,),
+        )
+        self.assertLessEqual(len(planned[0].run_id), 128)
+        self.assertIn("-h-", planned[0].run_id)
+
+    def test_f5_and_open_set_run_ids_fit_the_path_segment_limit(self):
+        f5_id = make_run_id(
+            "CIFAR100C", "block", 0, "StructuredAtomicRamen", device="cpu",
+            max_eval_samples=32, stream_block_size=16, batch_size=4,
+            config_hash="491d76737805", artifact_provenance="exact",
+            data_root="/Users/admin/data", failure_analysis_profile="replay_v1",
+        )
+        self.assertEqual(
+            "cifar100c-block-seed-0-structuredatomicramen-dev-cpu-n32-bs-4-blk-16-"
+            "cfg-491d76737805-prov-exact-fa-e11de190-data-6dbea801cbad",
+            f5_id,
+        )
+        self.assertLessEqual(len(f5_id), 128)
+
+        open_set_id = make_run_id(
+            "CIFAR100C", "block", 0, "StructuredAtomicRamen", device="cpu",
+            max_eval_samples=32, stream_block_size=16, batch_size=4,
+            config_hash="491d76737805", artifact_provenance="exact",
+            data_root="/Users/admin/data", failure_analysis_profile="replay_v1",
+            open_set=True, ood_ratio=0.3, analysis_role="final",
+        )
+        changed_ratio_id = make_run_id(
+            "CIFAR100C", "block", 0, "StructuredAtomicRamen", device="cpu",
+            max_eval_samples=32, stream_block_size=16, batch_size=4,
+            config_hash="491d76737805", artifact_provenance="exact",
+            data_root="/Users/admin/data", failure_analysis_profile="replay_v1",
+            open_set=True, ood_ratio=0.5, analysis_role="final",
+        )
+        self.assertLessEqual(len(open_set_id), 128)
+        self.assertIn("-h-", open_set_id)
+        self.assertEqual(open_set_id, make_run_id(
+            "CIFAR100C", "block", 0, "StructuredAtomicRamen", device="cpu",
+            max_eval_samples=32, stream_block_size=16, batch_size=4,
+            config_hash="491d76737805", artifact_provenance="exact",
+            data_root="/Users/admin/data", failure_analysis_profile="replay_v1",
+            open_set=True, ood_ratio=0.3, analysis_role="final",
+        ))
+        self.assertNotEqual(open_set_id, changed_ratio_id)
+
+    def test_closed_set_final_role_has_a_distinct_path_safe_identity(self):
+        analysis_id = make_run_id("CIFAR100C", "block", 0, "NoAdapt")
+        final_id = make_run_id("CIFAR100C", "block", 0, "NoAdapt", analysis_role="final")
+        self.assertNotEqual(analysis_id, final_id)
+        self.assertIn("-role-final-", final_id)
+        self.assertLessEqual(len(analysis_id), 128)
+        self.assertLessEqual(len(final_id), 128)
+
+    def test_every_supported_replay_matrix_cell_has_a_path_safe_run_id(self):
+        common = {
+            "streams": SUPPORTED_STREAMS,
+            "methods": SUPPORTED_METHODS,
+            "seeds": (0,),
+            "device": "cpu",
+            "data_root": "/Users/admin/data",
+            "max_eval_samples": 32,
+            "batch_size": 4,
+            "stream_block_size": 16,
+            "artifact_provenance": "exact",
+            "failure_analysis_profile": "replay_v1",
+        }
+        closed_runs = build_experiment_matrix(datasets=("CIFAR100C", "DomainNet"), **common)
+        open_runs = build_experiment_matrix(
+            datasets=("CIFAR100C",), open_set=True, ood_ratio=0.3,
+            analysis_role="final", **common,
+        )
+        for runs in (closed_runs, open_runs):
+            self.assertTrue(all(len(run.run_id) <= 128 for run in runs))
+            self.assertEqual(len(runs), len({run.run_id for run in runs}))
 
     def test_commands_use_run_identity_and_small_budget_windows(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

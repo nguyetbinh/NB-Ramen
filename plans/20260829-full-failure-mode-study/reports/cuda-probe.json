@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "status": "explicit_cuda_unavailable",
+  "fallback": false,
+  "python": "/Users/admin/miniconda3/envs/nb-ramen/bin/python",
+  "torch_version": "2.4.1",
+  "cuda_available": false,
+  "cuda_device_count": 0,
+  "probe_exit_code": 0,
+  "matrix_exit_code": 1,
+  "child_main_exit_code": 2,
+  "dataset": "CIFAR100C",
+  "stream": "block",
+  "method": "NoAdapt",
+  "seed": 0,
+  "max_eval_samples": 1,
+  "batch_size": 1,
+  "device": "cuda",
+  "artifact_provenance": "exact",
+  "evidence_dir": "/Users/admin/Documents/NB-Ramen/evidence/full-study-20260829/cuda-probe",
+  "run_id": "cifar100c-block-seed-0-noadapt-dev-cuda-n1-bs-1-blk-1-cfg-a05da3c15a1d-prov-exact-data-6dbea801cbad",
+  "error": "CUDA was requested but torch.cuda.is_available() is false",
+  "commands": {
+    "availability_probe": "/Users/admin/miniconda3/envs/nb-ramen/bin/python -c 'import json,sys,torch; print(json.dumps({\"python\":sys.executable,\"torch_version\":torch.__version__,\"cuda_available\":bool(torch.cuda.is_available()),\"cuda_device_count\":int(torch.cuda.device_count())},sort_keys=True))'",
+    "matrix": ["/Users/admin/miniconda3/envs/nb-ramen/bin/python", "-m", "src.runtime.experiment_matrix", "--dataset", "CIFAR100C", "--stream", "block", "--method", "NoAdapt", "--seed", "0", "--device", "cuda", "--data-root", "/Users/admin/data", "--config-dir", "/Users/admin/Documents/NB-Ramen/cfg", "--evidence-dir", "/Users/admin/Documents/NB-Ramen/evidence/full-study-20260829/cuda-probe", "--max-eval-samples", "1", "--batch-size", "1", "--stream-block-size", "1", "--artifact-provenance", "exact", "--python", "/Users/admin/miniconda3/envs/nb-ramen/bin/python", "--execute"]
+  },
+  "git_head": "28dff41ce937ff2d06ca4191e09e4b00d89e2863"
+}

@@ -92,7 +92,10 @@ CONFIG_HASH_LENGTH = 12
 MISSING_CONFIG_HASH = "missing"
 SUPPORTED_DEVICES = ("auto", "cpu", "cuda", "mps")
 SUPPORTED_ARTIFACT_PROVENANCE = ("fast", "exact")
+OPEN_SET_SPLIT = "open-set-cifar100-split-v1"
+OPEN_SET_OOD_RATIOS = (0, 0.1, 0.3, 0.5)
 MAX_RUN_ID_LENGTH = 128
+RUN_ID_IDENTITY_HASH_LENGTH = 32
 SUMMARY_REQUIRED_FIELDS = (
     "schema_version", "run_id", "num_samples", "micro_accuracy",
     "macro_domain_accuracy", "worst_domain_accuracy", "domain_accuracies",
@@ -134,6 +137,10 @@ class ExperimentRun:
     failure_analysis_max_samples: int = 1000
     failure_analysis_max_bytes: int = 256 * 1024 * 1024
     failure_counterfactual_thresholds: tuple[float, ...] = (0.50, 0.75, 1.00)
+    open_set: bool = False
+    known_class_split: str | None = None
+    ood_ratio: float = 0
+    analysis_role: str = "analysis"
 
     @property
     def run_dir(self) -> Path:
@@ -225,6 +232,21 @@ def _seed_token(seed: int) -> str:
     return f"neg{abs(seed)}" if seed < 0 else str(seed)
 
 
+def _compact_run_id(readable_id: str, identity: dict[str, object]) -> str:
+    """Keep short IDs readable and make overlong IDs collision-resistant.
+
+    The readable form remains the compatibility contract for IDs that fit in a
+    path segment.  When it does not, retain its descriptive prefix and bind
+    the complete semantic identity into a 128-bit SHA-256 prefix.
+    """
+    if len(readable_id) <= MAX_RUN_ID_LENGTH:
+        return readable_id
+    identity_json = json.dumps(identity, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    identity_hash = hashlib.sha256(identity_json.encode("utf-8")).hexdigest()[:RUN_ID_IDENTITY_HASH_LENGTH]
+    prefix_length = MAX_RUN_ID_LENGTH - len("-h-") - len(identity_hash)
+    return readable_id[:prefix_length].rstrip("-") + "-h-" + identity_hash
+
+
 def make_run_id(
     dataset: str,
     stream_mode: str,
@@ -242,6 +264,10 @@ def make_run_id(
     failure_analysis_max_samples: int = 1000,
     failure_analysis_max_bytes: int = 256 * 1024 * 1024,
     failure_counterfactual_thresholds: Sequence[float] = (0.50, 0.75, 1.00),
+    open_set: bool = False,
+    known_class_split: str = OPEN_SET_SPLIT,
+    ood_ratio: float = 0,
+    analysis_role: str = "analysis",
 ) -> str:
     """Return a stable, conservative ID suitable for use as one path segment."""
     thresholds = parse_counterfactual_thresholds(failure_counterfactual_thresholds)
@@ -259,11 +285,19 @@ def make_run_id(
         json.dumps([failure_analysis_profile, failure_analysis_max_samples, failure_analysis_max_bytes,
                     list(thresholds)], separators=(",", ":")).encode()
     ).hexdigest()[:8]
+    if analysis_role not in {"analysis", "final"}:
+        raise ValueError("analysis_role must be analysis or final")
+    if open_set and (known_class_split != OPEN_SET_SPLIT or ood_ratio not in OPEN_SET_OOD_RATIOS):
+        raise ValueError("invalid preregistered open-set contract")
     tokens = (dataset, stream_mode, "seed", _seed_token(seed), method, "dev", device, budget,
               *(("bs", batch_size) if batch_size is not None and batch_size != default_batch_size else ()),
               *(("blk", stream_block_size) if stream_block_size != 64 else ()),
               "cfg", config_hash, "prov", artifact_provenance,
               *(("fa", analysis_token) if failure_analysis_profile != "off" else ()),
+              *(("os", hashlib.sha256(
+                  json.dumps((known_class_split, ood_ratio, analysis_role), separators=(",", ":")).encode()
+              ).hexdigest()[:12]) if open_set else ()),
+              *(("role", analysis_role) if analysis_role != "analysis" and not open_set else ()),
               "data", data_root_hash)
     normalized = []
     for token in tokens:
@@ -273,11 +307,39 @@ def make_run_id(
             raise ValueError("run ID component cannot be empty")
         normalized.append(value)
     run_id = "-".join(normalized)
-    if len(run_id) > MAX_RUN_ID_LENGTH:
-        raise ValueError(
-            f"generated run ID is {len(run_id)} characters; maximum is {MAX_RUN_ID_LENGTH}"
-        )
-    return run_id
+    identity = {
+        "dataset": dataset,
+        "stream_mode": stream_mode,
+        "seed": seed,
+        "method": method,
+        "device": device,
+        "max_eval_samples": max_eval_samples,
+        "stream_block_size": stream_block_size,
+        # Explicitly requesting the dataset default has always been the same
+        # planned identity as omitting the option.
+        "batch_size_override": (
+            batch_size if batch_size is not None and batch_size != default_batch_size else None
+        ),
+        "config_hash": config_hash,
+        "artifact_provenance": artifact_provenance,
+        "data_root": canonical_data_root,
+        "analysis_role": analysis_role,
+        "failure_analysis": (
+            None if failure_analysis_profile == "off" else {
+                "profile": failure_analysis_profile,
+                "max_samples": failure_analysis_max_samples,
+                "max_bytes": failure_analysis_max_bytes,
+                "counterfactual_thresholds": list(thresholds),
+            }
+        ),
+        "open_set": (
+            None if not open_set else {
+                "known_class_split": known_class_split,
+                "ood_ratio": ood_ratio,
+            }
+        ),
+    }
+    return _compact_run_id(run_id, identity)
 
 
 def build_experiment_matrix(
@@ -297,6 +359,10 @@ def build_experiment_matrix(
     failure_analysis_max_samples: int = 1000,
     failure_analysis_max_bytes: int = 256 * 1024 * 1024,
     failure_counterfactual_thresholds: Sequence[float] = (0.50, 0.75, 1.00),
+    open_set: bool = False,
+    known_class_split: str = OPEN_SET_SPLIT,
+    ood_ratio: float = 0,
+    analysis_role: str = "analysis",
 ) -> list[ExperimentRun]:
     """Build the grid in execution order, with NoAdapt first in each cell."""
     datasets = tuple(datasets)
@@ -335,6 +401,12 @@ def build_experiment_matrix(
         raise ValueError("stream_block_size must be a positive integer")
     if stream_block_size != 64 and max_eval_samples is None:
         raise ValueError("nondefault stream_block_size requires max_eval_samples")
+    if open_set and (datasets != ("CIFAR100C",) or known_class_split != OPEN_SET_SPLIT or ood_ratio not in OPEN_SET_OOD_RATIOS):
+        raise ValueError("open-set matrix is fixed to CIFAR100C and preregistered split/ratios")
+    if open_set and device == "auto":
+        raise ValueError("open-set matrix requires an explicit device")
+    if analysis_role not in {"analysis", "final"}:
+        raise ValueError("analysis_role must be analysis or final")
 
     # The paired baseline must execute first even if callers provide methods in
     # another order.  Remaining methods retain their requested relative order.
@@ -360,6 +432,8 @@ def build_experiment_matrix(
                     failure_analysis_max_samples=failure_analysis_max_samples,
                     failure_analysis_max_bytes=failure_analysis_max_bytes,
                     failure_counterfactual_thresholds=thresholds,
+                    open_set=open_set, known_class_split=known_class_split,
+                    ood_ratio=ood_ratio, analysis_role=analysis_role,
                 )
                 baseline_trace = root / baseline_id / "trace.jsonl"
                 for method in ordered_methods:
@@ -379,6 +453,8 @@ def build_experiment_matrix(
                             failure_analysis_max_samples=failure_analysis_max_samples,
                             failure_analysis_max_bytes=failure_analysis_max_bytes,
                             failure_counterfactual_thresholds=thresholds,
+                            open_set=open_set, known_class_split=known_class_split,
+                            ood_ratio=ood_ratio, analysis_role=analysis_role,
                         ),
                         model=MODEL_BY_DATASET[dataset],
                         batch_size=dataset_batch_size,
@@ -399,6 +475,8 @@ def build_experiment_matrix(
                         failure_analysis_max_samples=failure_analysis_max_samples,
                         failure_analysis_max_bytes=failure_analysis_max_bytes,
                         failure_counterfactual_thresholds=thresholds,
+                        open_set=open_set, known_class_split=known_class_split if open_set else None,
+                        ood_ratio=ood_ratio, analysis_role=analysis_role,
                     ))
     run_ids = [run.run_id for run in runs]
     if len(run_ids) != len(set(run_ids)):
@@ -471,6 +549,11 @@ def build_command(
             "--failure-analysis-max-bytes", str(run.failure_analysis_max_bytes),
             "--failure-counterfactual-thresholds", ",".join(str(value) for value in run.failure_counterfactual_thresholds),
         ))
+    # Pass the selected role explicitly for every matrix run.
+    command.extend(("--analysis-role", run.analysis_role))
+    if run.open_set:
+        command.extend(("--open-set", "--known-class-split", str(run.known_class_split),
+                        "--ood-ratio", str(run.ood_ratio)))
     return command
 
 
@@ -958,6 +1041,12 @@ def validate_completed_run(run: ExperimentRun) -> dict[str, object]:
         "artifact_provenance": run.artifact_provenance,
         "data_root": str(run.data_root),
     }
+    expected_args["analysis_role"] = run.analysis_role
+    if run.open_set:
+        expected_args.update({
+            "open_set": True, "known_class_split": run.known_class_split,
+            "ood_ratio": run.ood_ratio,
+        })
     if run.failure_analysis_profile != "off":
         expected_args.update({
             "failure_analysis_profile": run.failure_analysis_profile,
@@ -1040,9 +1129,20 @@ def validate_completed_run(run: ExperimentRun) -> dict[str, object]:
                 if len(rows) >= len(references):
                     raise IncompleteRunError(f"trace has more rows than the exported stream: {run.run_id}")
                 expected_domain, expected_sample = references[len(rows)]
-                for field in ("sample_idx", "ground_truth_domain", "ground_truth_class", "prediction"):
+                for field in ("sample_idx", "ground_truth_domain", "prediction"):
                     if not _is_int(row[field], minimum=0):
                         raise IncompleteRunError(f"trace[{line_number}].{field} must be a non-negative integer")
+                if run.open_set:
+                    open_set = row.get("open_set")
+                    if not isinstance(open_set, dict) or set(open_set) != {
+                        "original_label", "is_ood", "known_label_or_minus_one", "split_version", "ood_ratio"
+                    }:
+                        raise IncompleteRunError(f"trace[{line_number}].open_set must be atomic")
+                    _require_equal(open_set.get("split_version"), run.known_class_split, "trace open-set split", run)
+                    _require_equal(open_set.get("ood_ratio"), run.ood_ratio, "trace open-set ratio", run)
+                    _require_equal(row["ground_truth_class"], open_set.get("known_label_or_minus_one"), "trace open-set label", run)
+                elif not _is_int(row["ground_truth_class"], minimum=0):
+                    raise IncompleteRunError(f"trace[{line_number}].ground_truth_class must be a non-negative integer")
                 _require_equal(row["sample_idx"], expected_sample, f"trace[{line_number}].sample_idx", run)
                 _require_equal(
                     row["ground_truth_domain"], expected_domain,
@@ -1228,6 +1328,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--failure-analysis-max-samples", type=int, default=1000)
     parser.add_argument("--failure-analysis-max-bytes", type=int, default=256 * 1024 * 1024)
     parser.add_argument("--failure-counterfactual-thresholds", default="0.50,0.75,1.00")
+    parser.add_argument("--open-set", action="store_true")
+    parser.add_argument("--known-class-split", default=OPEN_SET_SPLIT)
+    parser.add_argument("--ood-ratio", type=float, choices=OPEN_SET_OOD_RATIOS, default=0)
+    parser.add_argument("--analysis-role", choices=("analysis", "final"), default="analysis")
     parser.add_argument("--execute", action="store_true", help="Run commands; planning JSON is the default.")
     parser.add_argument("--resume", action="store_true", help="Skip only runs with manifest.json and summary.json.")
     return parser
@@ -1261,6 +1365,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         failure_analysis_max_samples=args.failure_analysis_max_samples,
         failure_analysis_max_bytes=args.failure_analysis_max_bytes,
         failure_counterfactual_thresholds=failure_thresholds,
+        open_set=args.open_set, known_class_split=args.known_class_split,
+        ood_ratio=args.ood_ratio, analysis_role=args.analysis_role,
     )
     commands = [build_command(
         run, python_executable=args.python_executable, data_root=args.data_root,

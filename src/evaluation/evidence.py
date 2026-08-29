@@ -57,6 +57,10 @@ RETRIEVAL_PROFILE_TRACE_FIELDS = (
     "retrieval_returned_support_count",
     "retrieval_active_class_count",
 )
+OPEN_SET_TRACE_FIELD = "open_set"
+OPEN_SET_TRACE_FIELDS = (
+    "original_label", "is_ood", "known_label_or_minus_one", "split_version", "ood_ratio",
+)
 # This optional family is deliberately opaque to the generic evidence layer:
 # method-specific scalar provenance evolves independently, while its presence
 # is atomic and never mixed within one adapted trace.
@@ -87,6 +91,7 @@ REFERENCE_IDENTITY_FIELDS = (
     "artifacts",
     "reference_config",
     "reference_config_path",
+    "analysis_role",
 )
 _CACHE_PATH_PARTS = frozenset({
     "__pycache__", ".cache", ".mypy_cache", ".pytest_cache", ".ruff_cache",
@@ -340,6 +345,7 @@ class JsonlTraceWriter:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._handle = self.path.open("x", encoding="utf-8")
         self._failure_analysis_present: Optional[bool] = None
+        self._open_set_present: Optional[bool] = None
 
     def write(self, record: Mapping[str, Any]) -> dict[str, Any]:
         if self._handle.closed:
@@ -379,6 +385,23 @@ class JsonlTraceWriter:
             for field in RETRIEVAL_PROFILE_TRACE_FIELDS[2:]:
                 if not _is_nonnegative_integer(row[field]):
                     raise ValueError(f"{field} must be a non-negative integer")
+        open_set_present = OPEN_SET_TRACE_FIELD in row
+        if self._open_set_present is None:
+            self._open_set_present = open_set_present
+        elif self._open_set_present != open_set_present:
+            raise ValueError("open_set trace fields must be all present or all absent")
+        if open_set_present:
+            value = row[OPEN_SET_TRACE_FIELD]
+            if not isinstance(value, Mapping) or set(value) != set(OPEN_SET_TRACE_FIELDS):
+                raise ValueError("open_set trace fields must be an atomic evaluator-only family")
+            if not _is_nonnegative_integer(value["original_label"]) or not isinstance(value["is_ood"], bool):
+                raise ValueError("open_set original_label/is_ood is malformed")
+            if value["known_label_or_minus_one"] != -1 and not _is_nonnegative_integer(value["known_label_or_minus_one"]):
+                raise ValueError("open_set known_label_or_minus_one is malformed")
+            if value["is_ood"] != (value["known_label_or_minus_one"] == -1):
+                raise ValueError("open_set evaluator labels disagree")
+            if not isinstance(value["split_version"], str) or not _is_finite_number(value["ood_ratio"], minimum=0.0, maximum=1.0):
+                raise ValueError("open_set split metadata is malformed")
         if FAILURE_ANALYSIS_TRACE_FIELD in row:
             failure = row[FAILURE_ANALYSIS_TRACE_FIELD]
             validate_failure_analysis(failure)
@@ -678,6 +701,15 @@ def _validate_reference_run_identity(
     for field in scalar_fields:
         if args.get(field) != expected_identity[field]:
             raise ValueError(f"reference manifest {field} does not match the current run")
+    expected_open_set = expected_identity.get("open_set") is True
+    if (args.get("open_set") is True) != expected_open_set:
+        raise ValueError("reference manifest open-set mode does not match the current run")
+    if expected_open_set:
+        for field in ("known_class_split", "ood_ratio"):
+            if args.get(field) != expected_identity.get(field):
+                raise ValueError(f"reference manifest {field} does not match the current run")
+    if args.get("analysis_role") != expected_identity["analysis_role"]:
+        raise ValueError("reference manifest analysis_role does not match the current run")
     if args.get("tta_algo") != "NoAdapt":
         raise ValueError("reference trace must come from a NoAdapt baseline")
     expected_device = expected_identity["device"]
@@ -728,6 +760,7 @@ def verify_reference_trace_stream_fingerprint(
         raise ValueError("expected stream fingerprint must be a non-empty string")
     if not isinstance(expected_identity, Mapping):
         raise ValueError("expected reference identity is required")
+    expected_open_set = expected_identity.get("open_set") is True
 
     trace_path = Path(reference_path)
     if trace_path.name != "trace.jsonl":
@@ -885,7 +918,21 @@ def verify_reference_trace_stream_fingerprint(
                     raise ValueError(
                         f"reference trace row {line_number} domain does not match its stream"
                     )
-                if not _is_nonnegative_integer(row["ground_truth_class"]):
+                if expected_open_set:
+                    value = row.get(OPEN_SET_TRACE_FIELD)
+                    known_label = value.get("known_label_or_minus_one") if isinstance(value, Mapping) else None
+                    if not isinstance(value, Mapping) or set(value) != set(OPEN_SET_TRACE_FIELDS) \
+                            or not _is_nonnegative_integer(value.get("original_label")) \
+                            or not isinstance(value.get("is_ood"), bool) \
+                            or (known_label != -1 and not _is_nonnegative_integer(known_label)) \
+                            or value["is_ood"] != (known_label == -1) \
+                            or row["ground_truth_class"] != known_label \
+                            or value.get("split_version") != expected_identity.get("known_class_split") \
+                            or value.get("ood_ratio") != expected_identity.get("ood_ratio"):
+                        raise ValueError(
+                            f"reference trace row {line_number} has invalid open-set evaluator labels"
+                        )
+                elif OPEN_SET_TRACE_FIELD in row or not _is_nonnegative_integer(row["ground_truth_class"]):
                     raise ValueError(
                         f"reference trace row {line_number} has an invalid ground_truth_class"
                     )

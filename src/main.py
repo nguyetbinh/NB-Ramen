@@ -19,6 +19,7 @@ from pathlib import Path
 
 from models.get_pretrained_model import get_pretrained_model
 from datasets import get_dataset_class
+from datasets.open_set import OPEN_SET_SPLIT, OpenSetCIFAR100C
 from methods import get_method_class
 from streams import build_single_domain_stream, build_stream, truncate_stream
 from streams.legacy import build_legacy_torch_iid_stream
@@ -213,7 +214,7 @@ def _reference_run_identity(args, artifacts):
             'negative-adaptation references require --artifact-provenance fast or exact'
         )
     reference_config, reference_config_path = _load_noadapt_reference_config(args)
-    return {
+    identity = {
         'dataset': args.dataset,
         'model': args.model,
         'device': str(args.device),
@@ -227,13 +228,23 @@ def _reference_run_identity(args, artifacts):
         'artifacts': artifacts,
         'reference_config': reference_config,
         'reference_config_path': reference_config_path,
+        'analysis_role': getattr(args, 'analysis_role', 'analysis'),
     }
+    if getattr(args, 'open_set', False):
+        identity.update({
+            'open_set': True, 'known_class_split': getattr(args, 'known_class_split', OPEN_SET_SPLIT),
+            'ood_ratio': getattr(args, 'ood_ratio', 0),
+        })
+    return identity
 
 
 def ordered_stream_test(
     datasets, tta_model, args, evidence_paths, stream_dataset, segments=None,
     reference_identity=None,
 ):
+    open_set = bool(getattr(args, 'open_set', False))
+    known_class_split = getattr(args, 'known_class_split', OPEN_SET_SPLIT)
+    ood_ratio = getattr(args, 'ood_ratio', 0)
     try:
         args.failure_counterfactual_thresholds = parse_counterfactual_thresholds(
             getattr(args, 'failure_counterfactual_thresholds', (0.50, 0.75, 1.00))
@@ -328,7 +339,9 @@ def ordered_stream_test(
                 with torch.no_grad():
                     pred = torch.argmax(logits, dim=1)
                     entropy = -(logits.softmax(dim=1) * logits.log_softmax(dim=1)).sum(dim=1)
-                    correct = pred.eq(label)
+                    # Unknown labels are deliberately -1, so they never become
+                    # method-visible class targets or accuracy successes.
+                    correct = pred.eq(label) & label.ge(0)
                     is_correct = correct.cpu().int()
                     dataset_num_corrects.index_add_(0, domain_idx, is_correct)
 
@@ -367,6 +380,10 @@ def ordered_stream_test(
                 entropies = entropy.detach().cpu().tolist()
                 domains = domain_idx.tolist()
                 samples = sample_idx.tolist()
+                open_set_metadata = (
+                    [stream_dataset.evaluator_metadata(timestep + offset) for offset in range(batch_size)]
+                    if open_set else [None] * batch_size
+                )
                 admission_predictions = diagnostics['admission_prediction']
                 admission_entropies = diagnostics['admission_normalized_entropy']
                 admissions = diagnostics['admitted_to_memory']
@@ -411,6 +428,16 @@ def ordered_stream_test(
                         'memory_bytes': diagnostics['memory_bytes'][offset],
                         'latency_ms': latency_ms,
                     }
+                    if open_set_metadata[offset] is not None:
+                        evaluator = open_set_metadata[offset]
+                        # This join occurs only after tta_model(image) returned.
+                        row['open_set'] = {
+                            'original_label': int(evaluator['original_label']),
+                            'is_ood': bool(evaluator['is_ood']),
+                            'known_label_or_minus_one': int(evaluator['known_label_or_minus_one']),
+                            'split_version': known_class_split,
+                            'ood_ratio': ood_ratio,
+                        }
                     if admission_available == {True}:
                         row.update({
                             'admission_prediction': admission_predictions[offset],
@@ -435,6 +462,10 @@ def ordered_stream_test(
                             query.update(identity)
                             # This evaluator-only join occurs after the method returned.
                             query['ground_truth_class'] = int(labels[offset])
+                            if open_set_metadata[offset] is not None:
+                                # Keep evaluator labels out of the method payload and make
+                                # the replay query bind to the exact trace family.
+                                query['open_set'] = dict(row['open_set'])
                             query['counterfactuals'] = payload.get('counterfactuals', [])
                             supplied_items = payload.get('item', [])
                             supplied_items = supplied_items if isinstance(supplied_items, (list, tuple)) else [supplied_items]
@@ -446,6 +477,11 @@ def ordered_stream_test(
                                     # receive labels until after their forward call returned.
                                     item.update(identity)
                                     item['ground_truth_class'] = int(labels[offset])
+                                    if open_set_metadata[offset] is not None:
+                                        # The item is this post-forward query's memory
+                                        # insertion, so its evaluator identity is the same
+                                        # immutable open-set record as the trace row.
+                                        item['open_set'] = dict(row['open_set'])
                                     joined_items.append(item)
                             analysis_writer.write(items=joined_items, query=query)
                     trace_writer.write(row)
@@ -612,6 +648,19 @@ def ordered_stream_test(
         },
         'stream_fingerprint': stream_dataset.fingerprint,
     }
+    if open_set:
+        # Trace rows are evaluator-owned; this aggregate intentionally does not
+        # add labels to method diagnostics.
+        rows = []
+        with evidence_paths['trace'].open(encoding='utf-8') as trace_file:
+            rows = [json.loads(line) for line in trace_file if line.strip()]
+        id_rows = [row for row in rows if not row['open_set']['is_ood']]
+        ood_rows = [row for row in rows if row['open_set']['is_ood']]
+        summary['open_set'] = {
+            'split_version': known_class_split, 'ood_ratio': ood_ratio,
+            'id_sample_count': len(id_rows), 'ood_sample_count': len(ood_rows),
+            'id_accuracy': (sum(row['correct'] for row in id_rows) / len(id_rows)) if id_rows else None,
+        }
     if analysis_enabled:
         summary['failure_analysis'] = {
             'profile': failure_profile,
@@ -665,6 +714,9 @@ def ordered_stream_test(
 
 
 def main(args):
+    open_set = bool(getattr(args, 'open_set', False))
+    known_class_split = getattr(args, 'known_class_split', OPEN_SET_SPLIT)
+    ood_ratio = getattr(args, 'ood_ratio', 0)
     evidence_paths = _evidence_paths(args)
     print('-' * 80)
     print(args)
@@ -683,6 +735,8 @@ def main(args):
 
     print("Loading datasets...")
     datasets = get_dataset_class(args.dataset)(root=args.data_root, transform=preprocess)
+    if open_set:
+        datasets = OpenSetCIFAR100C(datasets, known_class_split)
     print(f"dataset includes environments: \n{datasets.environments}")
     artifacts = _revalidate_artifact_provenance(args, artifacts)
     reference_identity = (
@@ -714,6 +768,8 @@ def main(args):
                 novel_release_fraction=args.stream_novel_release_fraction,
                 correlation_strength=args.stream_correlation_strength,
                 burst_size=args.stream_burst_size,
+                ood_ratio=ood_ratio if open_set else None,
+                open_set_split_version=known_class_split if open_set else None,
             )
     elif args.tta_mode == 'single':
         stream_dataset, segments = build_single_domain_stream(datasets, args.stream_seed)
@@ -748,6 +804,9 @@ def main(args):
             'name': args.dataset,
             'environments': list(datasets.environments),
             'original_domain_lengths': [len(dataset) for dataset in datasets],
+            'open_set': ({'split_version': known_class_split,
+                          'known_class_ids': list(datasets.known_class_ids),
+                          'unknown_class_ids': list(datasets.unknown_class_ids)} if open_set else None),
         },
         stream=stream_dataset.metadata,
         artifacts=artifacts,
@@ -806,6 +865,10 @@ def args_parser():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--dataset', type=str, default='CIFAR10C')
+    parser.add_argument('--open-set', action='store_true', default=False)
+    parser.add_argument('--known-class-split', choices=[OPEN_SET_SPLIT], default=OPEN_SET_SPLIT)
+    parser.add_argument('--ood-ratio', type=float, choices=[0, 0.1, 0.3, 0.5], default=0)
+    parser.add_argument('--analysis-role', choices=['analysis', 'final'], default='analysis')
 
     parser.add_argument('--data_root', type=str, default='~/data')
 
@@ -883,6 +946,15 @@ def args_parser():
     args = parser.parse_args()
 
     args.data_root = str(Path(args.data_root).expanduser().resolve())
+
+    if args.open_set and args.dataset != 'CIFAR100C':
+        parser.error('--open-set currently supports only CIFAR100C')
+    if not args.open_set and args.ood_ratio != 0:
+        parser.error('--ood-ratio requires --open-set')
+    if args.open_set and args.tta_mode != 'mixed':
+        parser.error('--open-set requires --tta_mode mixed')
+    if args.open_set and args.device_request == 'auto':
+        parser.error('--open-set requires an explicit --device; device fallback is not permitted')
 
     if args.cuda and args.device_request not in ('auto', 'cuda'):
         parser.error('--cuda cannot be combined with a non-CUDA --device')

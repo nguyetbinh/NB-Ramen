@@ -1,0 +1,29 @@
+{
+  "preregistered_counterfactual_thresholds": [0.5, 0.75, 1.0],
+  "cells": [
+    {
+      "report": "plans/20260829-full-failure-mode-study/reports/mps-primary/block-seed-0.json",
+      "baseline_run_dir": "evidence/full-study-20260829/mps-primary/cifar100c-block-seed-0-noadapt-dev-mps-n64-bs-1-blk-32-cfg-a05da3c15a1d-prov-exact-fa-cf2983d5-data-6dbea801cbad",
+      "adapted_run_dir": "evidence/full-study-20260829/mps-primary/cifar100c-block-seed-0-causalramen-dev-mps-n64-bs-1-blk-32-cfg-491d76737805-prov-exact-fa-cf2983d5-data-6dbea801cbad",
+      "run_identity": {"device": "mps", "dataset": "CIFAR100C", "stream": "block", "seed": 0, "method": "CausalRamen", "analysis_role": "analysis", "failure_counterfactual_thresholds": [0.5, 0.75, 1.0]}
+    },
+    {
+      "report": "plans/20260829-full-failure-mode-study/reports/mps-primary/block-seed-1.json",
+      "baseline_run_dir": "evidence/full-study-20260829/mps-primary/cifar100c-block-seed-1-noadapt-dev-mps-n64-bs-1-blk-32-cfg-a05da3c15a1d-prov-exact-fa-cf2983d5-data-6dbea801cbad",
+      "adapted_run_dir": "evidence/full-study-20260829/mps-primary/cifar100c-block-seed-1-causalramen-dev-mps-n64-bs-1-blk-32-cfg-491d76737805-prov-exact-fa-cf2983d5-data-6dbea801cbad",
+      "run_identity": {"device": "mps", "dataset": "CIFAR100C", "stream": "block", "seed": 1, "method": "CausalRamen", "analysis_role": "analysis", "failure_counterfactual_thresholds": [0.5, 0.75, 1.0]}
+    },
+    {
+      "report": "plans/20260829-full-failure-mode-study/reports/mps-primary/recurring-seed-0.json",
+      "baseline_run_dir": "evidence/full-study-20260829/mps-primary/cifar100c-recurring-seed-0-noadapt-dev-mps-n64-bs-1-blk-32-cfg-a05da3c15a1d-prov-exact-fa-cf2983d5-data-6dbea801cbad",
+      "adapted_run_dir": "evidence/full-study-20260829/mps-primary/cifar100c-recurring-seed-0-causalramen-dev-mps-n64-bs-1-blk-32-cfg-491d76737805-prov-exact-fa-cf2983d5-data-6dbea801cbad",
+      "run_identity": {"device": "mps", "dataset": "CIFAR100C", "stream": "recurring", "seed": 0, "method": "CausalRamen", "analysis_role": "analysis", "failure_counterfactual_thresholds": [0.5, 0.75, 1.0]}
+    },
+    {
+      "report": "plans/20260829-full-failure-mode-study/reports/mps-primary/recurring-seed-1.json",
+      "baseline_run_dir": "evidence/full-study-20260829/mps-primary/cifar100c-recurring-seed-1-noadapt-dev-mps-n64-bs-1-blk-32-cfg-a05da3c15a1d-prov-exact-fa-cf2983d5-data-6dbea801cbad",
+      "adapted_run_dir": "evidence/full-study-20260829/mps-primary/cifar100c-recurring-seed-1-causalramen-dev-mps-n64-bs-1-blk-32-cfg-491d76737805-prov-exact-fa-cf2983d5-data-6dbea801cbad",
+      "run_identity": {"device": "mps", "dataset": "CIFAR100C", "stream": "recurring", "seed": 1, "method": "CausalRamen", "analysis_role": "analysis", "failure_counterfactual_thresholds": [0.5, 0.75, 1.0]}
+    }
+  ]
+}

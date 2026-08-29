@@ -124,7 +124,7 @@ class EvidenceTests(unittest.TestCase):
         )
 
     @staticmethod
-    def _reference_evidence(directory):
+    def _reference_evidence(directory, *, open_set=False):
         run_dir = Path(directory) / "baseline"
         run_dir.mkdir()
         data_root = str(Path(directory).resolve())
@@ -160,6 +160,17 @@ class EvidenceTests(unittest.TestCase):
             }
             for index, (domain, sample) in enumerate(((0, 0), (1, 3)))
         ]
+        if open_set:
+            trace_rows[0].update(
+                ground_truth_class=-1,
+                correct=False,
+                open_set={"original_label": 99, "is_ood": True, "known_label_or_minus_one": -1,
+                          "split_version": "open-set-cifar100-split-v1", "ood_ratio": 0.1},
+            )
+            trace_rows[1]["open_set"] = {
+                "original_label": 1, "is_ood": False, "known_label_or_minus_one": 1,
+                "split_version": "open-set-cifar100-split-v1", "ood_ratio": 0.1,
+            }
         trace_path.write_text(
             "".join(json.dumps(row) + "\n" for row in trace_rows), encoding="utf-8"
         )
@@ -176,16 +187,16 @@ class EvidenceTests(unittest.TestCase):
             "schema_version": SUMMARY_SCHEMA_VERSION,
             "run_id": "baseline",
             "num_samples": 2,
-            "micro_accuracy": 1.0,
-            "macro_domain_accuracy": 1.0,
-            "worst_domain_accuracy": 1.0,
-            "domain_accuracies": {"domain-0": 1.0, "domain-1": 1.0},
+            "micro_accuracy": 0.5 if open_set else 1.0,
+            "macro_domain_accuracy": 0.5 if open_set else 1.0,
+            "worst_domain_accuracy": 0.0 if open_set else 1.0,
+            "domain_accuracies": {"domain-0": 0.0 if open_set else 1.0, "domain-1": 1.0},
             "domain_sample_counts": {"domain-0": 1, "domain-1": 1},
             "sliding_window": {
                 "window_size": 1,
                 "stride": 1,
                 "values": [
-                    {"start_timestep": 0, "end_timestep": 0, "accuracy": 1.0},
+                    {"start_timestep": 0, "end_timestep": 0, "accuracy": 0.0 if open_set else 1.0},
                     {"start_timestep": 1, "end_timestep": 1, "accuracy": 1.0},
                 ],
             },
@@ -201,12 +212,20 @@ class EvidenceTests(unittest.TestCase):
                 "stream_block_size": 64,
                 "artifact_provenance": "exact", "tta_algo": "NoAdapt",
                 "config_path": config_path,
+                "analysis_role": "analysis",
             },
             "config": reference_config,
             "device": "cpu",
             "dataset": {"name": "DomainNet", "environments": ["domain-0", "domain-1"]},
             "artifacts": artifacts,
         }
+        if open_set:
+            manifest["args"].update({"open_set": True, "known_class_split": "open-set-cifar100-split-v1",
+                                     "ood_ratio": 0.1, "analysis_role": "analysis"})
+            manifest["dataset"]["open_set"] = {
+                "split_version": "open-set-cifar100-split-v1",
+                "known_class_ids": list(range(80)), "unknown_class_ids": list(range(80, 100)),
+            }
         (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
         identity = {
             "dataset": "DomainNet", "model": "clip_vitbase16", "device": "cpu",
@@ -215,7 +234,11 @@ class EvidenceTests(unittest.TestCase):
             "stream_block_size": 64,
             "artifact_provenance": "exact", "artifacts": artifacts,
             "reference_config": reference_config, "reference_config_path": config_path,
+            "analysis_role": "analysis",
         }
+        if open_set:
+            identity.update({"open_set": True, "known_class_split": "open-set-cifar100-split-v1",
+                             "ood_ratio": 0.1, "analysis_role": "analysis"})
         return trace_path, fingerprint, trace_rows, stream, identity
 
     @staticmethod
@@ -555,6 +578,16 @@ class EvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "lacks sibling stream evidence"):
                 self._verify_reference(trace_path, fingerprint, identity)
 
+    def test_reference_trace_accepts_bound_open_set_unknown_label_and_rejects_tampering(self):
+        with tempfile.TemporaryDirectory() as directory:
+            trace_path, fingerprint, rows, _, identity = self._reference_evidence(directory, open_set=True)
+            self._verify_reference(trace_path, fingerprint, identity)
+
+            rows[0]["open_set"]["ood_ratio"] = 0.3
+            trace_path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "open-set evaluator labels"):
+                self._verify_reference(trace_path, fingerprint, identity)
+
     def test_reference_trace_requires_noadapt_and_current_run_identity(self):
         mutations = {
             "adapted method": lambda manifest: manifest["args"].__setitem__("tta_algo", "Ramen"),
@@ -566,6 +599,7 @@ class EvidenceTests(unittest.TestCase):
             "different batch size": lambda manifest: manifest["args"].__setitem__("batch_size", 99),
             "different window": lambda manifest: manifest["args"].__setitem__("metric_window_size", 99),
             "different block size": lambda manifest: manifest["args"].__setitem__("stream_block_size", 32),
+            "different analysis role": lambda manifest: manifest["args"].__setitem__("analysis_role", "final"),
             "different config": lambda manifest: manifest.__setitem__("config", {"lr": 0.5}),
             "different provenance mode": lambda manifest: (
                 manifest["args"].__setitem__("artifact_provenance", "fast"),
@@ -600,6 +634,10 @@ class EvidenceTests(unittest.TestCase):
             trace_path, fingerprint, _, _, identity = self._reference_evidence(directory)
             with self.assertRaisesRegex(ValueError, "expected reference identity is required"):
                 verify_reference_trace_stream_fingerprint(trace_path, fingerprint)
+
+            final_identity = {**identity, "analysis_role": "final"}
+            with self.assertRaisesRegex(ValueError, "analysis_role"):
+                self._verify_reference(trace_path, fingerprint, final_identity)
 
     def test_reference_trace_rejects_alternate_and_symlinked_files(self):
         with tempfile.TemporaryDirectory() as directory:

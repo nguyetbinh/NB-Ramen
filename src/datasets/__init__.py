@@ -1,5 +1,6 @@
 from .corruption import CORRUPTION_DATASETS, get_corruption_dataset_class
 from .domainbed import DOMAINBED_DATASETS, get_domainbed_dataset_class
+from .open_set import OpenSetCIFAR100C
 
 
 def get_dataset_class(dataset_name):
