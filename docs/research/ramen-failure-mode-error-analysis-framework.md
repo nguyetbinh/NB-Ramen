@@ -1019,10 +1019,16 @@ preregistered consensus-mask counterfactuals
 strict provenance and checksum validation
 temporal summaries
 representation-probe utilities
-CPU/MPS mechanics pilot
+semantic open-set evaluator protocol and ID-gradient oracle
+verified cross-cell study aggregation
+CPU/MPS bounded study and schedule-only F5 comparison
 ```
 
-The four-sample pilot reports one beneficial event and zero harmful events, so it cannot test the central harmful-versus-beneficial conflict hypothesis.
+The completed primary matrix uses two seeds over block and recurring streams,
+with 64 samples in each baseline/adapted cell. All eight cells share one source,
+model, dataset, method configuration, and evaluator contract. The separate
+semantic open-set matrix also completed all eight requested MPS cells under one
+source identity.
 
 `ConsensusRamen` remains unimplemented, which is the correct current state.
 
@@ -1030,20 +1036,22 @@ The four-sample pilot reports one beneficial event and zero harmful events, so i
 
 ## 35. Not yet established
 
-The branch does **not** yet establish:
+The bounded study does **not** yet establish:
 
 ```text
 a true F1 memory-usefulness gap
 a true F2 retrieval-usefulness gap
-an entropy-to-gradient-usefulness relationship
-a valid grouped CIFAR-C domain-probe result
 a replicated harmful-vs-beneficial conflict direction
-F3 harmful-event recovery across seeds/streams
-an open-set gradient-contamination result
+a safe F3 intervention whose recovery exceeds new harm
+a class-conditioned domain-probe result with adequate coverage
+that open-set gradient contamination causes harmful ID adaptation
 a publication-level CUDA result
 ```
 
-These are the next evidence targets.
+Entropy/gradient compatibility, grouped domain decodability, and open-set
+contamination were measured, but none supplied the stable, adequately covered
+causal evidence required for method development. These remain evidence targets
+rather than missing runtime capabilities.
 
 ---
 
@@ -1078,6 +1086,29 @@ $$
 $$
 
 This is still a **research hypothesis**. The purpose of the `failure-analysis` branch is to decide whether it deserves to become a method.
+
+## 36. Bounded study result (2026-08-30)
+
+The diagnostic runtime, verified offline analyzers, and bounded CPU/MPS study
+are implemented. The study includes two seeds over block and recurring
+streams, entropy/gradient compatibility, fixed-threshold reset replay, an
+atomic/causal batch-size-four comparison, frozen-feature domain probes, and a
+fixed 80/20 semantic open-set protocol. CUDA was explicitly unavailable on the
+host and no fallback result was recorded.
+
+The implementation contract, evaluator-only boundary, exact commands, verified
+report locations, and limitations are documented in
+[Ramen Failure-Mode Analysis Runtime and Study Record](ramen-failure-mode-analysis-runtime.md).
+The complete tables and decision are in the
+[Full Ramen Failure-Mode Study Result](../../plans/20260829-full-failure-mode-study/reports/full-study-results.md).
+
+The aggregate decision is `INSUFFICIENT`. Harmful updates had greater conflict
+in both block seeds but lower conflict in recurring seed 1; recurring seed 0
+had no harmful event. The evaluator-only replay oracle recovered harmful cases
+but introduced enough new harm that no threshold improved accuracy. Semantic
+OOD contamination increased GDC and SDR, but harmful ID events were too sparse
+to establish causality. The GO conditions in Section 32 are therefore not met and
+`ConsensusRamen` remains unimplemented.
 
 ---
 

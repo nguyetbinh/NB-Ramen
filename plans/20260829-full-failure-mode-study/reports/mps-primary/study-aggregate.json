@@ -1,0 +1,120 @@
+{
+  "cell_count": 4,
+  "cells": [
+    {
+      "adapted_run_dir": "evidence/full-study-20260829/mps-primary/cifar100c-block-seed-0-causalramen-dev-mps-n64-bs-1-blk-32-cfg-491d76737805-prov-exact-fa-cf2983d5-data-6dbea801cbad",
+      "baseline_run_dir": "evidence/full-study-20260829/mps-primary/cifar100c-block-seed-0-noadapt-dev-mps-n64-bs-1-blk-32-cfg-a05da3c15a1d-prov-exact-fa-cf2983d5-data-6dbea801cbad",
+      "f3_direction": 1,
+      "f4_harmful_recovery": true,
+      "identity": {
+        "analysis_role": "analysis",
+        "dataset": "CIFAR100C",
+        "device": "mps",
+        "method": "CausalRamen",
+        "seed": 0,
+        "stream": "block"
+      },
+      "report": "plans/20260829-full-failure-mode-study/reports/mps-primary/block-seed-0.json"
+    },
+    {
+      "adapted_run_dir": "evidence/full-study-20260829/mps-primary/cifar100c-block-seed-1-causalramen-dev-mps-n64-bs-1-blk-32-cfg-491d76737805-prov-exact-fa-cf2983d5-data-6dbea801cbad",
+      "baseline_run_dir": "evidence/full-study-20260829/mps-primary/cifar100c-block-seed-1-noadapt-dev-mps-n64-bs-1-blk-32-cfg-a05da3c15a1d-prov-exact-fa-cf2983d5-data-6dbea801cbad",
+      "f3_direction": 1,
+      "f4_harmful_recovery": true,
+      "identity": {
+        "analysis_role": "analysis",
+        "dataset": "CIFAR100C",
+        "device": "mps",
+        "method": "CausalRamen",
+        "seed": 1,
+        "stream": "block"
+      },
+      "report": "plans/20260829-full-failure-mode-study/reports/mps-primary/block-seed-1.json"
+    },
+    {
+      "adapted_run_dir": "evidence/full-study-20260829/mps-primary/cifar100c-recurring-seed-0-causalramen-dev-mps-n64-bs-1-blk-32-cfg-491d76737805-prov-exact-fa-cf2983d5-data-6dbea801cbad",
+      "baseline_run_dir": "evidence/full-study-20260829/mps-primary/cifar100c-recurring-seed-0-noadapt-dev-mps-n64-bs-1-blk-32-cfg-a05da3c15a1d-prov-exact-fa-cf2983d5-data-6dbea801cbad",
+      "f3_direction": null,
+      "f4_harmful_recovery": false,
+      "identity": {
+        "analysis_role": "analysis",
+        "dataset": "CIFAR100C",
+        "device": "mps",
+        "method": "CausalRamen",
+        "seed": 0,
+        "stream": "recurring"
+      },
+      "report": "plans/20260829-full-failure-mode-study/reports/mps-primary/recurring-seed-0.json"
+    },
+    {
+      "adapted_run_dir": "evidence/full-study-20260829/mps-primary/cifar100c-recurring-seed-1-causalramen-dev-mps-n64-bs-1-blk-32-cfg-491d76737805-prov-exact-fa-cf2983d5-data-6dbea801cbad",
+      "baseline_run_dir": "evidence/full-study-20260829/mps-primary/cifar100c-recurring-seed-1-noadapt-dev-mps-n64-bs-1-blk-32-cfg-a05da3c15a1d-prov-exact-fa-cf2983d5-data-6dbea801cbad",
+      "f3_direction": -1,
+      "f4_harmful_recovery": true,
+      "identity": {
+        "analysis_role": "analysis",
+        "dataset": "CIFAR100C",
+        "device": "mps",
+        "method": "CausalRamen",
+        "seed": 1,
+        "stream": "recurring"
+      },
+      "report": "plans/20260829-full-failure-mode-study/reports/mps-primary/recurring-seed-1.json"
+    }
+  ],
+  "consensus_ramen_decision": {
+    "evidence_count": 3,
+    "missing_conditions": [
+      "stable_harmful_vs_beneficial_conflict_direction",
+      "two_integer_seeds_within_each_of_two_structured_streams"
+    ],
+    "seed_count": 2,
+    "status": "INSUFFICIENT",
+    "stream_count": 2
+  },
+  "device": "mps",
+  "evidence_counts": {
+    "declared_cells": 4,
+    "eligible_consensus_cells": 3,
+    "structured_cells": 4
+  },
+  "schema_version": 1,
+  "status": "INSUFFICIENT",
+  "status_matrix": {
+    "F0": {
+      "computed": 4,
+      "insufficient": 0,
+      "unavailable": 0
+    },
+    "F1": {
+      "computed": 4,
+      "insufficient": 0,
+      "unavailable": 0
+    },
+    "F2": {
+      "computed": 4,
+      "insufficient": 0,
+      "unavailable": 0
+    },
+    "F3": {
+      "computed": 3,
+      "insufficient": 1,
+      "unavailable": 0
+    },
+    "F4": {
+      "computed": 3,
+      "insufficient": 1,
+      "unavailable": 0
+    },
+    "F5": {
+      "computed": 0,
+      "insufficient": 4,
+      "unavailable": 0
+    },
+    "entropy": {
+      "computed": 4,
+      "insufficient": 0,
+      "unavailable": 0
+    }
+  }
+}

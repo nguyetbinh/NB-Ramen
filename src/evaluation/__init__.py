@@ -83,4 +83,16 @@ __all__ = [
     "worst_domain_accuracy",
     "write_run_manifest",
     "write_summary",
+    "aggregate_failure_analysis_study",
+    "load_and_aggregate_failure_analysis_study",
 ]
+
+
+def aggregate_failure_analysis_study(*args, **kwargs):
+    from .failure_analysis_study import aggregate_failure_analysis_study as implementation
+    return implementation(*args, **kwargs)
+
+
+def load_and_aggregate_failure_analysis_study(*args, **kwargs):
+    from .failure_analysis_study import load_and_aggregate_failure_analysis_study as implementation
+    return implementation(*args, **kwargs)

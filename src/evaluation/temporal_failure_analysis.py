@@ -12,7 +12,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 REPORT_SCHEMA_VERSION = 1
 _STATES = frozenset({"computed", "insufficient", "unavailable"})
-_NUMERIC_METRICS = ("memory_occupancy", "routing_nmi", "cache_purity", "future_support_weight_fraction", "future_support_count", "consensus_mean", "consensus_p10", "consensus_p50", "sign_disagreement", "retrieved_ood_fraction", "ood_ratio", "memory_oracle_gap", "retrieval_oracle_gap", "aggregation_oracle_gap")
+_NUMERIC_METRICS = ("memory_occupancy", "routing_nmi", "cache_purity", "future_support_weight_fraction", "future_support_count", "consensus_mean", "consensus_p10", "consensus_p50", "fraction_low_consensus_coordinates", "active_support_classes", "pairwise_sign_agreement_mean", "pairwise_cosine_mean", "sign_disagreement", "retrieved_ood_fraction", "ood_ratio", "memory_oracle_gap", "retrieval_oracle_gap", "aggregation_oracle_gap")
 
 
 def _state(status: str, **values: Any) -> dict[str, Any]:
@@ -29,6 +29,17 @@ def _outcome(row: Mapping[str, Any]) -> str | None:
     base, adapted = row.get("base_correct"), row.get("adapted_correct")
     if not isinstance(base, bool) or not isinstance(adapted, bool): return None
     return {(True, True): "safe", (False, True): "beneficial", (True, False): "harmful", (False, False): "unresolved"}[(base, adapted)]
+
+
+def _metric_value(row: Mapping[str, Any], metric: str) -> float | None:
+    """Read production diagnostics while retaining their report-only meaning."""
+    value = row.get(metric)
+    if metric == "active_support_classes" and isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return float(len(value))
+    if metric == "sign_disagreement" and value is None:
+        agreement = _finite(row.get("pairwise_sign_agreement_mean"))
+        return None if agreement is None else 1.0 - agreement
+    return _finite(value)
 
 
 def annotate_time_since_shift(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -55,7 +66,7 @@ def _summary(rows: Sequence[Mapping[str, Any]], *, minimum_count: int) -> dict[s
     count = len(rows); counts = {name: outcomes.count(name) for name in ("safe", "beneficial", "harmful", "unresolved")}
     values: dict[str, Any] = {}
     for metric in _NUMERIC_METRICS:
-        observed = [number for row in rows if (number := _finite(row.get(metric))) is not None]
+        observed = [number for row in rows if (number := _metric_value(row, metric)) is not None]
         values[metric] = _state("computed", count=len(observed), mean=statistics.mean(observed)) if observed else _state("unavailable", count=0, reason="metric absent")
     base_error = (counts["beneficial"] + counts["unresolved"]) / count
     return _state("computed", count=count, counts=counts, base_error=base_error,

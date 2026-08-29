@@ -23,17 +23,20 @@ try:
     from .failure_analysis_artifacts import ReplayArtifactError, ReplaySidecarReader, sha256_file
     from .evidence import validate_failure_analysis
     from ..streams import verify_stream_fingerprint
+    from .temporal_failure_analysis import annotate_time_since_shift, temporal_failure_report
 except ImportError:  # pragma: no cover - direct-file invocation
     from evaluation.causal_completion_analysis import _config_without_method
     from evaluation.failure_analysis_artifacts import ReplayArtifactError, ReplaySidecarReader, sha256_file
     from evaluation.evidence import validate_failure_analysis
     from streams import verify_stream_fingerprint
+    from evaluation.temporal_failure_analysis import annotate_time_since_shift, temporal_failure_report
 
 
 REPORT_SCHEMA_VERSION = 1
 IDENTITY_FIELDS = ("timestep", "sample_idx", "ground_truth_domain", "ground_truth_class")
 PREREGISTERED_COUNTERFACTUAL_THRESHOLDS = (0.50, 0.75, 1.00)
 CANONICAL_CONFLICT_METRIC = "fraction_low_consensus_coordinates_v1"
+GRADIENT_COMPATIBILITY_METRIC = "support_gradient_vs_current_query_raw_gradient_v1"
 _STATES = frozenset({"computed", "insufficient", "unavailable"})
 _SIDECAR_TRACE_DIAGNOSTIC_FIELDS = (
     "schedule", "conflict_metric", "conflict", "batch_position",
@@ -186,14 +189,30 @@ def entropy_admission_analysis(items: Iterable[Mapping[str, Any]], *, entropy_th
         else:
             storage = _state("computed", count=len(group), value=sum(admitted) / len(group))
         downstream = optional("downstream_weight")
+        def weighted_optional(field: str) -> dict[str, Any]:
+            observations = []
+            for item in group:
+                if field not in item or item[field] is None:
+                    continue
+                observations.append((_finite(item[field], f"item.{field}"),
+                                     _finite(item.get("downstream_weight"), "item.downstream_weight")))
+            denominator = sum(weight for _, weight in observations)
+            if denominator == 0.0:
+                return _state("insufficient", count=len(observations),
+                              reason="no positive downstream retrieval weight")
+            return _state("computed", count=len(observations),
+                          mean=sum(value * weight for value, weight in observations) / denominator)
         result[name] = {"count": len(group), "storage_rate": storage,
                         "retrieval_frequency": _mean(optional("retrieval_frequency")),
                         "total_downstream_weight": _state("insufficient", count=0, reason="too few finite observations") if not downstream
                         else _state("computed", count=len(downstream), value=sum(downstream)),
                         "mean_retrieved_distance": _mean(optional("mean_retrieved_distance")),
                         "gradient_sign_agreement": _mean(optional("gradient_sign_agreement")),
-                        "gradient_cosine": _mean(optional("gradient_cosine"))}
-    return _state("computed", count=len(values), threshold=threshold, groups=result)
+                        "gradient_cosine": _mean(optional("gradient_cosine")),
+                        "weighted_gradient_sign_agreement": weighted_optional("gradient_sign_agreement"),
+                        "weighted_gradient_cosine": weighted_optional("gradient_cosine")}
+    return _state("computed", count=len(values), threshold=threshold,
+                  gradient_compatibility_metric=GRADIENT_COMPATIBILITY_METRIC, groups=result)
 
 
 def gradient_conflict_association(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
@@ -214,6 +233,100 @@ def gradient_conflict_association(rows: Iterable[Mapping[str, Any]]) -> dict[str
     return _state("computed", metric=CANONICAL_CONFLICT_METRIC,
                   beneficial_count=len(values["beneficial"]), harmful_count=len(values["harmful"]),
                   beneficial_mean=beneficial, harmful_mean=harmful, harmful_minus_beneficial=harmful - beneficial)
+
+
+_F3_DISTRIBUTION_METRICS = (
+    ("consensus_mean", "consensus_mean"),
+    ("consensus_p10", "consensus_p10"),
+    ("consensus_p50", "consensus_p50"),
+    ("fraction_low_consensus_coordinates", "fraction_low_consensus_coordinates"),
+    ("active_support_classes", "active_support_classes"),
+    ("pairwise_sign_agreement_mean", "pairwise_sign_agreement_mean"),
+    ("pairwise_cosine_mean", "pairwise_cosine_mean"),
+)
+_F3_OUTCOMES = ("safe", "beneficial", "harmful", "unresolved")
+
+
+def _active_support_class_count(value: object) -> float | None:
+    """Normalise the producer's scalar or active-class collection to a count."""
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return float(len(value))
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) else None
+
+
+def _distribution(values: Sequence[float]) -> dict[str, Any]:
+    """Finite descriptive summary with an explicit empty-observation state."""
+    if not values:
+        return _state("insufficient", count=0, reason="no finite observations for outcome-conditioned metric")
+    ordered = sorted(values)
+
+    def quantile(probability: float) -> float:
+        position = (len(ordered) - 1) * probability
+        lower, upper = math.floor(position), math.ceil(position)
+        if lower == upper:
+            return ordered[lower]
+        return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+
+    return _state("computed", count=len(ordered), mean=statistics.mean(ordered),
+                  quantiles={"p10": quantile(.10), "p50": quantile(.50), "p90": quantile(.90)})
+
+
+def _gradient_conflict_distribution_core(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Describe all preregistered F3 diagnostics by exact F0 outcome.
+
+    Pairwise values are the production per-query pairwise summaries; a query
+    with fewer than two active classes naturally has no finite observation.
+    """
+    buckets: dict[str, dict[str, list[float]]] = {
+        outcome: {name: [] for _, name in _F3_DISTRIBUTION_METRICS}
+        for outcome in _F3_OUTCOMES
+    }
+    count = 0
+    for row in rows:
+        outcome = row.get("outcome")
+        if outcome not in buckets:
+            continue
+        count += 1
+        for source, name in _F3_DISTRIBUTION_METRICS:
+            value = row.get(source)
+            if source == "active_support_classes" and value is not None:
+                value = _active_support_class_count(value)
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+                buckets[outcome][name].append(float(value))
+    if count == 0:
+        return _state("insufficient", count=0, reason="no exact F0 outcome-conditioned query rows")
+    return _state("computed", count=count, outcomes={
+        outcome: {name: _distribution(values) for name, values in metrics.items()}
+        for outcome, metrics in buckets.items()
+    })
+
+
+def gradient_conflict_distributions(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Describe preregistered F3 diagnostics overall and across required strata."""
+    values = annotate_time_since_shift(rows)
+    result = _gradient_conflict_distribution_core(values)
+    axes = {
+        "stream": lambda row: row.get("stream", row.get("stream_mode")),
+        "time_since_shift": lambda row: row.get("time_since_shift"),
+        "memory_occupancy": lambda row: row.get("memory_occupancy"),
+        "domain": lambda row: row.get("ground_truth_domain", row.get("domain")),
+        "seed": lambda row: row.get("seed"),
+    }
+    strata: dict[str, list[dict[str, Any]]] = {}
+    for name, getter in axes.items():
+        groups: dict[str, tuple[Any, list[Mapping[str, Any]]]] = {}
+        for row in values:
+            value = getter(row)
+            if value is None:
+                continue
+            encoded = json.dumps(value, sort_keys=True, default=str)
+            groups.setdefault(encoded, (value, []))[1].append(row)
+        strata[name] = [{"value": value, **_gradient_conflict_distribution_core(group)}
+                        for _, (value, group) in sorted(groups.items())]
+        if not strata[name]:
+            strata[name] = [{"value": None, **_state("unavailable", count=0, reason="axis absent")}]
+    result["strata"] = strata
+    return result
 
 
 def consensus_ramen_decision(evidence: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
@@ -246,20 +359,62 @@ def consensus_ramen_decision(evidence: Iterable[Mapping[str, Any]]) -> dict[str,
 
 
 def open_set_gradient_analysis(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
-    """Summarise ID-only aggregate corruption; OOD labels remain evaluator-only."""
+    """Summarise evaluator-only ID-support reconstruction for ID queries."""
     measurements: list[dict[str, float]] = []
+    harmful: list[dict[str, float]] = []
+    non_harmful: list[dict[str, float]] = []
+    per_id_query: list[dict[str, Any]] = []
+    zero_id_support = 0
     for row in rows:
+        open_set = row.get("open_set")
+        reconstruction = row.get("open_set_reconstruction")
+        # Retain the small raw-fixture interface, but never infer an open-set
+        # label from a method payload. Verified replay rows always use the
+        # reconstruction path below.
         all_gradient, id_gradient = row.get("all_gradient"), row.get("id_gradient")
-        if all_gradient is None and id_gradient is None:
+        if reconstruction is not None:
+            if not isinstance(open_set, Mapping) or not isinstance(open_set.get("is_ood"), bool):
+                raise ValueError("open-set reconstruction has no evaluator label")
+            if open_set["is_ood"]:
+                continue
+            if reconstruction.get("zero_id_support") is True:
+                zero_id_support += 1
+                continue
+            all_gradient, id_gradient = reconstruction.get("all_gradient"), reconstruction.get("id_gradient")
+        elif all_gradient is None and id_gradient is None:
             continue
         if all_gradient is None or id_gradient is None:
             raise ValueError("open-set gradients must be complete per query")
-        measurements.append(gradient_direction_corruption(all_gradient, id_gradient))
+        measurement = gradient_direction_corruption(all_gradient, id_gradient)
+        if reconstruction is not None:
+            measurement.update({name: _finite(reconstruction[name], name) for name in
+                                ("retrieved_ood_count_fraction", "retrieved_ood_weight_fraction")})
+            per_id_query.append({
+                "timestep": row.get("timestep"), "sample_idx": row.get("sample_idx"),
+                "ground_truth_domain": row.get("ground_truth_domain"),
+                "outcome": row.get("outcome"), **measurement,
+            })
+        measurements.append(measurement)
+        if row.get("outcome") == "harmful":
+            harmful.append(measurement)
+        else:
+            non_harmful.append(measurement)
     if not measurements:
-        return _state("unavailable", reason="ID-only and all-support replay gradients absent")
-    return _state("computed", count=len(measurements),
-                  mean_gdc=statistics.mean(item["gdc"] for item in measurements),
-                  mean_sdr=statistics.mean(item["sdr"] for item in measurements))
+        return _state("insufficient" if zero_id_support else "unavailable",
+                      count=0, zero_id_support_count=zero_id_support,
+                      reason="no ID query has a non-zero ID-only replay aggregate")
+    result = _state("computed", count=len(measurements), zero_id_support_count=zero_id_support,
+                    mean_gdc=statistics.mean(item["gdc"] for item in measurements),
+                    mean_sdr=statistics.mean(item["sdr"] for item in measurements))
+    if "retrieved_ood_count_fraction" in measurements[0]:
+        result.update(mean_retrieved_ood_count_fraction=statistics.mean(item["retrieved_ood_count_fraction"] for item in measurements),
+                      mean_retrieved_ood_weight_fraction=statistics.mean(item["retrieved_ood_weight_fraction"] for item in measurements),
+                      harmful_id={"count": len(harmful), "mean_gdc": None if not harmful else statistics.mean(item["gdc"] for item in harmful),
+                                  "mean_sdr": None if not harmful else statistics.mean(item["sdr"] for item in harmful)},
+                      non_harmful_id={"count": len(non_harmful), "mean_gdc": None if not non_harmful else statistics.mean(item["gdc"] for item in non_harmful),
+                                         "mean_sdr": None if not non_harmful else statistics.mean(item["sdr"] for item in non_harmful)},
+                      per_id_query=per_id_query)
+    return result
 
 
 def counterfactual_recovery_analysis(rows: Iterable[Mapping[str, Any]], *, thresholds: Sequence[float] = PREREGISTERED_COUNTERFACTUAL_THRESHOLDS) -> dict[str, Any]:
@@ -389,9 +544,11 @@ def analyze_failure_modes(base_rows: Iterable[Mapping[str, Any]], adapted_rows: 
             "oracle_gaps": _state("unavailable", reason="replay query rows absent") if queries is None else oracle_gap_analysis(queries),
             "entropy_admission": _state("unavailable", reason="memory item rows absent") if items is None else entropy_admission_analysis(items),
             "gradient_conflict": _state("unavailable", reason="conflict rows absent") if queries is None else gradient_conflict_association(queries),
+            "gradient_conflict_distributions": _state("unavailable", reason="conflict rows absent") if queries is None else gradient_conflict_distributions(queries),
             "open_set": _state("unavailable", reason="raw replay gradients absent") if queries is None else open_set_gradient_analysis(queries),
             "counterfactual": _state("unavailable", reason="counterfactual replay rows absent") if queries is None else counterfactual_recovery_analysis(queries),
-            "temporal_schedule": _state("unavailable", reason="schedule rows absent") if queries is None else temporal_schedule_summary(queries, atomic_rows=atomic_rows, causal_rows=causal_rows)}
+            "temporal_schedule": _state("unavailable", reason="schedule rows absent") if queries is None else temporal_schedule_summary(queries, atomic_rows=atomic_rows, causal_rows=causal_rows),
+            "temporal": _state("unavailable", reason="verified query rows absent") if queries is None else temporal_failure_report(queries)}
 
 
 def _join_query_outcomes(base_rows: Iterable[Mapping[str, Any]], adapted_rows: Iterable[Mapping[str, Any]],
@@ -523,6 +680,33 @@ def _nested_supports(ids: Any, weights: Any, valid: Any = None, predicted: Any =
              None if distances is None else _finite(distances, "retrieved distance"))]
 
 
+def _replay_gradient(item: Mapping[str, Any], reader: ReplaySidecarReader, *, label: str) -> list[float]:
+    """Read one finite, non-zero raw gradient from the checksummed sidecar."""
+    descriptor = item.get("gradient")
+    if not isinstance(descriptor, Mapping):
+        raise ValueError(f"{label} gradient descriptor is absent or ambiguous")
+    try:
+        values = reader.tensor(descriptor, kind="gradient").reshape(-1).tolist()
+        gradient = [_finite(value, f"{label} gradient") for value in values]
+    except (ReplayArtifactError, TypeError, ValueError) as exc:
+        raise ValueError(f"{label} gradient descriptor is malformed") from exc
+    if not gradient or not any(value != 0.0 for value in gradient):
+        raise ValueError(f"{label} gradient is zero or empty")
+    return gradient
+
+
+def _gradient_compatibility(support_gradient: Sequence[float], query_gradient: Sequence[float]) -> dict[str, float]:
+    """Compare a retrieved raw support gradient to the current query raw gradient.
+
+    ``gradient_cosine`` and ``gradient_sign_agreement`` use the exact saved
+    raw gradients, before class-balanced aggregation or SignSGD.  The latter
+    is one minus ``sign_disagreement_rate`` so that larger values mean better
+    compatibility.  Both vectors must be finite, non-zero, and equal width.
+    """
+    return {"gradient_cosine": cosine_similarity(support_gradient, query_gradient),
+            "gradient_sign_agreement": 1.0 - sign_disagreement_rate(support_gradient, query_gradient)}
+
+
 def _validate_sidecar_trace_diagnostics(query: Mapping[str, Any], trace_row: Mapping[str, Any]) -> None:
     """Reject a sidecar that tries to supply F3/F5 diagnostics inconsistent with its trace.
 
@@ -542,6 +726,121 @@ def _validate_sidecar_trace_diagnostics(query: Mapping[str, Any], trace_row: Map
             raise ValueError(f"sidecar F3/F5 diagnostic {field} disagrees with evaluator trace")
 
 
+_OPEN_SET_FIELDS = ("original_label", "is_ood", "known_label_or_minus_one", "split_version", "ood_ratio")
+
+
+def _validated_open_set(value: Any, *, label: str) -> dict[str, Any]:
+    """Validate the atomic evaluator-only open-set identity record."""
+    if not isinstance(value, Mapping) or set(value) != set(_OPEN_SET_FIELDS):
+        raise ValueError(f"{label} open_set evidence is missing or malformed")
+    original, known, ratio = value["original_label"], value["known_label_or_minus_one"], value["ood_ratio"]
+    if (not isinstance(original, int) or isinstance(original, bool) or original < 0
+            or not isinstance(value["is_ood"], bool)
+            or not isinstance(known, int) or isinstance(known, bool) or known < -1
+            or not isinstance(value["split_version"], str) or not value["split_version"]
+            or not isinstance(ratio, (int, float)) or isinstance(ratio, bool) or not math.isfinite(ratio) or not 0 <= ratio <= 1
+            or value["is_ood"] != (known == -1)):
+        raise ValueError(f"{label} open_set evidence is malformed")
+    return dict(value)
+
+
+def _nested_open_supports(ids: Any, weights: Any, valid: Any, *, class_index: int | None = None) -> list[tuple[int, Any, float]]:
+    """Strict class-preserving flattening for exact production aggregation."""
+    sequence = lambda value: isinstance(value, Sequence) and not isinstance(value, (str, bytes))
+    if sequence(ids):
+        if not sequence(weights) or not sequence(valid) or len(ids) != len(weights) or len(ids) != len(valid):
+            raise ValueError("open-set support IDs, weights, and valid masks must have identical shapes")
+        result: list[tuple[int, Any, float]] = []
+        for index, item_id in enumerate(ids):
+            # The first nested dimension is Ramen's class-balanced bucket.
+            bucket = index if class_index is None else class_index
+            result.extend(_nested_open_supports(item_id, weights[index], valid[index], class_index=bucket))
+        return result
+    if sequence(weights) or sequence(valid):
+        raise ValueError("open-set support IDs, weights, and valid masks must have identical shapes")
+    if not isinstance(valid, bool):
+        raise ValueError("open-set support valid mask must be boolean")
+    weight = _finite(weights, "open-set retrieved weight")
+    if weight < 0:
+        raise ValueError("open-set retrieved weight must be non-negative")
+    if not valid:
+        if ids != -1:
+            # Padding IDs are immutable provenance too: a non-padding ID with
+            # a false mask could otherwise conceal a missing support label.
+            raise ValueError("open-set invalid support must use the padding item_id")
+        return []
+    if ids == -1 or isinstance(ids, (Mapping, list)) or ids is None:
+        raise ValueError("open-set valid support item_id is invalid")
+    if class_index is None:
+        raise ValueError("open-set supports must retain class-balanced buckets")
+    return [(class_index, ids, weight)]
+
+
+def _open_set_reconstruction(query: Mapping[str, Any], items: Mapping[tuple[Any, Any], Mapping[str, Any]],
+                             trace_row: Mapping[str, Any], reader: ReplaySidecarReader) -> dict[str, Any]:
+    """Rebuild all/ID aggregates from artifact-bound item gradients only."""
+    query_open = _validated_open_set(query.get("open_set"), label="sidecar query")
+    trace_open = _validated_open_set(trace_row.get("open_set"), label="trace")
+    if query_open != trace_open:
+        raise ValueError("sidecar query open_set evidence disagrees with evaluator trace")
+    # The sidecar is opaque method output, while the validated trace is the
+    # production provenance authority.  Do not permit a sidecar to substitute
+    # a different support set or its alpha weights for this oracle replay.
+    if (query.get("retrieved_support_ids") != trace_row.get("support_item_ids")
+            or query.get("retrieved_weights") != trace_row.get("support_weights")):
+        raise ValueError("open-set sidecar supports or production weights disagree with evaluator trace")
+    if "support_valid_mask" not in trace_row:
+        raise ValueError("open-set evaluator trace has no production support mask")
+    if "support_valid_mask" in query and query["support_valid_mask"] != trace_row["support_valid_mask"]:
+        raise ValueError("open-set sidecar support mask disagrees with evaluator trace")
+    supports = _nested_open_supports(query.get("retrieved_support_ids"), query.get("retrieved_weights"),
+                                     trace_row["support_valid_mask"])
+    if not supports:
+        raise ValueError("open-set replay has no valid retrieved supports")
+    segment = _segment(query, label="open-set query")
+    all_by_class: dict[int, list[float]] = {}
+    id_by_class: dict[int, list[float]] = {}
+    ood_count = 0
+    ood_weight = total_weight = 0.0
+    width: int | None = None
+    for bucket, support_id, weight in supports:
+        key = _candidate_key(support_id, segment)
+        item = items.get(key)
+        if item is None:
+            raise ValueError("open-set retrieved support does not resolve to exactly one item")
+        item_open = _validated_open_set(item.get("open_set"), label="sidecar item")
+        if (item_open["split_version"], item_open["ood_ratio"]) != (trace_open["split_version"], trace_open["ood_ratio"]):
+            raise ValueError("open-set support split or ratio disagrees with evaluator trace")
+        descriptor = item.get("gradient")
+        if not isinstance(descriptor, Mapping):
+            raise ValueError("open-set retrieved support gradient is absent")
+        gradient = [float(value) for value in reader.tensor(descriptor, kind="gradient").reshape(-1).tolist()]
+        if not gradient or any(not math.isfinite(value) for value in gradient):
+            raise ValueError("open-set retrieved support gradient is malformed")
+        if width is None:
+            width = len(gradient)
+        elif len(gradient) != width:
+            raise ValueError("open-set retrieved support gradients have inconsistent dimensions")
+        weighted = [weight * value for value in gradient]
+        all_by_class[bucket] = [left + right for left, right in zip(all_by_class.get(bucket, [0.0] * len(gradient)), weighted)]
+        total_weight += weight
+        if item_open["is_ood"]:
+            ood_count += 1; ood_weight += weight
+        else:
+            id_by_class[bucket] = [left + right for left, right in zip(id_by_class.get(bucket, [0.0] * len(gradient)), weighted)]
+    def aggregate(values: Mapping[int, list[float]]) -> list[float]:
+        if not values:
+            return []
+        return [sum(vector[index] for vector in values.values()) / len(values) for index in range(width or 0)]
+    all_gradient, id_gradient = aggregate(all_by_class), aggregate(id_by_class)
+    if not any(value != 0.0 for value in all_gradient):
+        raise ValueError("open-set all-support aggregate is zero")
+    return {"all_gradient": all_gradient, "id_gradient": id_gradient,
+            "zero_id_support": not id_gradient or not any(value != 0.0 for value in id_gradient),
+            "retrieved_ood_count_fraction": ood_count / len(supports),
+            "retrieved_ood_weight_fraction": 0.0 if total_weight == 0 else ood_weight / total_weight}
+
+
 def _verified_trace_run(run_dir: str) -> tuple[Path, Mapping[str, Any], list[dict[str, Any]], dict[str, Any]]:
     """Validate baseline-compatible manifest, stream, and evaluator trace evidence."""
     root = Path(run_dir)
@@ -558,6 +857,8 @@ def _verified_trace_run(run_dir: str) -> tuple[Path, Mapping[str, Any], list[dic
     args = manifest.get("args")
     if not isinstance(args, Mapping):
         raise ValueError("manifest args are malformed")
+    if args.get("analysis_role") not in {"analysis", "final"}:
+        raise ValueError("manifest args.analysis_role must be 'analysis' or 'final'")
     has_failure_analysis = ["failure_analysis" in row for row in trace]
     if any(has_failure_analysis) and not all(has_failure_analysis):
         raise ValueError("failure_analysis trace fields must be all present or all absent")
@@ -626,6 +927,7 @@ def _pair_contract(root: Path, manifest: Mapping[str, Any], identity: Mapping[st
         raise ValueError("manifest pairing device is missing")
     if args.get("device") != device:
         raise ValueError("manifest pairing device disagrees with args.device")
+    analysis_role = args["analysis_role"]
     evaluator = {}
     for field in _PAIR_EVALUATOR_ARGUMENTS:
         if field not in args:
@@ -647,6 +949,7 @@ def _pair_contract(root: Path, manifest: Mapping[str, Any], identity: Mapping[st
         raise ValueError("manifest pairing reference binding is missing or malformed")
     return {
         "device": device,
+        "analysis_role": analysis_role,
         "evaluator_config": evaluator,
         "model_artifact_sha256": model_digest,
         "dataset_artifact_digest": dataset_digest,
@@ -680,7 +983,7 @@ def _validate_verified_compatibility(left_root: Path, left_manifest: Mapping[str
     """Fail closed unless verified runs share their non-method evaluator identity."""
     left = _pair_contract(left_root, left_manifest, left_identity)
     right = _pair_contract(right_root, right_manifest, right_identity)
-    for field in ("device", "evaluator_config", "model_artifact_sha256", "dataset_artifact_digest",
+    for field in ("device", "analysis_role", "evaluator_config", "model_artifact_sha256", "dataset_artifact_digest",
                   "stream_fingerprint", "source_fingerprint"):
         if left[field] != right[field]:
             raise ValueError(f"{left_name} and {right_name} verified run {field} mismatch")
@@ -709,11 +1012,18 @@ def _validate_verified_pair(base_root: Path, base_manifest: Mapping[str, Any], b
                                     adapted_root, adapted_manifest, adapted_identity,
                                     left_name="baseline", right_name="adapted",
                                     reference_mode="bind-right-to-left")
+    base_method = base_manifest["args"].get("tta_algo")
+    adapted_method = adapted_manifest["args"].get("tta_algo")
+    if base_method != "NoAdapt":
+        raise ValueError("verified baseline run must use NoAdapt")
+    if not isinstance(adapted_method, str) or not adapted_method or adapted_method == "NoAdapt":
+        raise ValueError("verified adapted run must use a non-NoAdapt method")
 
 
 def _verified_run_rows(run_dir: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     """Read a completed adapted run and turn its replay sidecar into rows."""
     root, manifest, trace, identity = _verified_trace_run(run_dir)
+    args = manifest["args"]
     manifest_path = root / "manifest.json"
     stream_fingerprint, source, run_id = identity["stream_fingerprint"], identity["source_fingerprint"], identity["run_id"]
     try:
@@ -737,13 +1047,42 @@ def _verified_run_rows(run_dir: str) -> tuple[list[dict[str, Any]], list[dict[st
         if key in items:
             raise ValueError("ambiguous sidecar item reference")
         items[key] = item
+    trace_open_set = ["open_set" in row for row in trace]
+    if any(trace_open_set) and not all(trace_open_set):
+        raise ValueError("open-set evaluator trace fields must be all present or all absent")
+    is_open_set = bool(trace_open_set and trace_open_set[0])
+    if is_open_set:
+        if args.get("open_set") is not True:
+            raise ValueError("open-set evaluator trace disagrees with manifest")
+        for index, row in enumerate(trace):
+            _validated_open_set(row.get("open_set"), label=f"trace row {index}")
+        for item in items.values():
+            item_trace = trace_by_identity.get(_query_identity(item))
+            if item_trace is None or item.get("ground_truth_class") != item_trace.get("ground_truth_class"):
+                raise ValueError("open-set sidecar item does not match evaluator trace identity")
+            if _validated_open_set(item.get("open_set"), label="sidecar item") != item_trace["open_set"]:
+                raise ValueError("sidecar item open_set evidence disagrees with evaluator trace")
+    else:
+        if args.get("open_set") is True:
+            raise ValueError("open-set manifest requires evaluator trace labels")
+        if any("open_set" in row for row in items.values()):
+            raise ValueError("closed-set replay sidecar must not contain evaluator open_set labels")
     queries: list[dict[str, Any]] = []
-    retrieval_stats: dict[tuple[Any, Any], dict[str, Any]] = defaultdict(lambda: {"count": 0, "weight": 0.0, "distances": []})
+    retrieval_stats: dict[tuple[Any, Any], dict[str, Any]] = defaultdict(
+        lambda: {"count": 0, "weight": 0.0, "distances": [], "gradient_cosines": [],
+                 "gradient_sign_agreements": [], "compatibility_weights": []}
+    )
     for query in reader.rows("queries"):
         trace_row = trace_by_identity.get(_query_identity(query))
         if trace_row is None or query.get("ground_truth_class") != trace_row.get("ground_truth_class"):
             raise ValueError("sidecar query does not match evaluator trace")
         _validate_sidecar_trace_diagnostics(query, trace_row)
+        if is_open_set:
+            # Reconstruct before adding any evaluator annotations to the
+            # opaque method row; this is strictly offline and fail-closed.
+            open_set_reconstruction = _open_set_reconstruction(query, items, trace_row, reader)
+        elif "open_set" in query:
+            raise ValueError("closed-set replay query must not contain evaluator open_set labels")
         segment = _segment(query, label="sidecar query")
         legal = query.get("legal_candidates")
         retrieved_ids, weights = query.get("retrieved_support_ids"), query.get("retrieved_weights")
@@ -764,7 +1103,17 @@ def _verified_run_rows(run_dir: str) -> tuple[list[dict[str, Any]], list[dict[st
                 raise ValueError("legal candidate evaluator pseudo-label evidence is absent")
             converted_legal.append({"item_id": key, "correct_pseudolabel": item["predicted_class"] == item["ground_truth_class"]})
         retrieved: list[dict[str, Any]] = []
-        for support_id, weight, support_prediction, distance in _nested_supports(retrieved_ids, weights, valid, predicted, distances):
+        flattened_supports = _nested_supports(retrieved_ids, weights, valid, predicted, distances)
+        query_gradient: list[float] | None = None
+        if flattened_supports:
+            query_item_id = query.get("item_id")
+            if query_item_id is None:
+                raise ValueError("replay query has no current item reference for gradient compatibility")
+            query_item = items.get(_candidate_key(query_item_id, segment))
+            if query_item is None:
+                raise ValueError("replay query current item does not resolve for gradient compatibility")
+            query_gradient = _replay_gradient(query_item, reader, label="current query item")
+        for support_id, weight, support_prediction, distance in flattened_supports:
             key = _candidate_key(support_id, segment)
             if key not in legal_keys:
                 raise ValueError("retrieved support is missing from legal candidates")
@@ -773,12 +1122,19 @@ def _verified_run_rows(run_dir: str) -> tuple[list[dict[str, Any]], list[dict[st
                 raise ValueError("retrieved support predicted class disagrees with item")
             if not isinstance(item.get("ground_truth_class"), int):
                 raise ValueError("retrieved support evaluator pseudo-label evidence is absent")
-            support = {"item_id": key, "correct_pseudolabel": item["predicted_class"] == item["ground_truth_class"], "weight": weight}
+            compatibility = _gradient_compatibility(
+                _replay_gradient(item, reader, label="retrieved support item"), query_gradient or []
+            )
+            support = {"item_id": key, "correct_pseudolabel": item["predicted_class"] == item["ground_truth_class"],
+                       "weight": weight, **compatibility}
             if distance is not None:
                 support["distance"] = distance
             retrieved.append(support)
             retrieval_stats[key]["count"] += 1
             retrieval_stats[key]["weight"] += weight
+            retrieval_stats[key]["gradient_cosines"].append(compatibility["gradient_cosine"])
+            retrieval_stats[key]["gradient_sign_agreements"].append(compatibility["gradient_sign_agreement"])
+            retrieval_stats[key]["compatibility_weights"].append(weight)
             if distance is not None:
                 retrieval_stats[key]["distances"].append(distance)
         variants: dict[float, bool] = {}
@@ -795,9 +1151,21 @@ def _verified_run_rows(run_dir: str) -> tuple[list[dict[str, Any]], list[dict[st
         if isinstance(failure_trace, Mapping):
             merged.update(failure_trace)
         # Evaluator-side joins are authoritative over opaque method payloads.
+        legal_oracle_available = any(item["correct_pseudolabel"] for item in converted_legal)
+        retrieved_oracle_available = any(item["correct_pseudolabel"] for item in retrieved)
+        # These values are evaluator-side report annotations only.  They are
+        # attached after the method trace has been validated and are never fed
+        # back into routing, retrieval, or adaptation.
         merged.update(legal_candidates=converted_legal, retrieved_supports=retrieved,
                       base_correct=None, adapted_correct=trace_row["correct"],
-                      counterfactual_predictions=variants, reset_state_verified=query.get("reset_state_verified") is True)
+                      counterfactual_predictions=variants, reset_state_verified=query.get("reset_state_verified") is True,
+                      run_id=identity["run_id"], seed=args["seed"], stream=args["stream_mode"],
+                      batch_size=args["batch_size"], memory_occupancy=trace_row.get("memory_size"),
+                      memory_oracle_gap=float(not legal_oracle_available),
+                      retrieval_oracle_gap=float(legal_oracle_available) - float(retrieved_oracle_available))
+        if is_open_set:
+            merged["open_set"] = _validated_open_set(trace_row["open_set"], label="trace")
+            merged["open_set_reconstruction"] = open_set_reconstruction
         queries.append(merged)
     if len(queries) != len(trace):
         raise ValueError("completed sidecar must cover every trace row")
@@ -812,12 +1180,69 @@ def _verified_run_rows(run_dir: str) -> tuple[list[dict[str, Any]], list[dict[st
         if "admitted" not in enriched and "admitted_to_memory" in enriched:
             enriched["admitted"] = enriched["admitted_to_memory"]
         stats = retrieval_stats[key]
+        enriched["gradient_compatibility_metric"] = GRADIENT_COMPATIBILITY_METRIC
+        enriched["downstream_retrieval_count"] = stats["count"]
         enriched["retrieval_frequency"] = stats["count"] / query_count
         enriched["downstream_weight"] = stats["weight"]
         if stats["distances"]:
             enriched["mean_retrieved_distance"] = statistics.mean(stats["distances"])
+        if stats["gradient_cosines"]:
+            enriched["gradient_cosine"] = statistics.mean(stats["gradient_cosines"])
+            enriched["gradient_sign_agreement"] = statistics.mean(stats["gradient_sign_agreements"])
+            total_compatibility_weight = sum(stats["compatibility_weights"])
+            if total_compatibility_weight > 0.0:
+                enriched["weighted_gradient_cosine"] = sum(
+                    value * weight for value, weight in zip(stats["gradient_cosines"], stats["compatibility_weights"])
+                ) / total_compatibility_weight
+                enriched["weighted_gradient_sign_agreement"] = sum(
+                    value * weight for value, weight in zip(stats["gradient_sign_agreements"], stats["compatibility_weights"])
+                ) / total_compatibility_weight
         enriched_items.append(enriched)
     return trace, queries, enriched_items, identity
+
+
+def analyze_verified_run_dirs(
+    baseline_run_dir: str,
+    adapted_run_dir: str,
+    *,
+    atomic_run_dir: str | None = None,
+    causal_run_dir: str | None = None,
+) -> dict[str, Any]:
+    """Recompute the canonical report directly from completed verified runs."""
+    base_root, base_manifest, base, base_identity = _verified_trace_run(baseline_run_dir)
+    adapted_root, adapted_manifest, adapted_trace, adapted_identity = _verified_trace_run(adapted_run_dir)
+    _validate_verified_pair(base_root, base_manifest, base_identity,
+                            adapted_root, adapted_manifest, adapted_identity)
+    adapted, queries, items, sidecar_identity = _verified_run_rows(adapted_run_dir)
+    if sidecar_identity != adapted_identity or adapted != adapted_trace:
+        raise AssertionError("verified adapted run changed while reading its replay sidecar")
+    base_by_key = {(r["timestep"], r["sample_idx"], r["ground_truth_domain"]): r for r in base}
+    for query in queries:
+        key = (query["timestep"], query["sample_idx"], query["ground_truth_domain"])
+        reference = base_by_key.get(key)
+        if reference is None or reference.get("ground_truth_class") != query.get("ground_truth_class"):
+            raise ValueError("baseline trace does not strictly pair adapted query")
+        query["base_correct"] = reference.get("correct")
+    atomic_rows = causal_rows = None
+    if atomic_run_dir or causal_run_dir:
+        if not atomic_run_dir or not causal_run_dir:
+            raise ValueError("F5 requires both atomic and causal run directories")
+        atomic_root, atomic_manifest, _, atomic_identity = _verified_trace_run(atomic_run_dir)
+        causal_root, causal_manifest, _, causal_identity = _verified_trace_run(causal_run_dir)
+        _validate_verified_compatibility(atomic_root, atomic_manifest, atomic_identity,
+                                         causal_root, causal_manifest, causal_identity,
+                                         left_name="atomic", right_name="causal",
+                                         reference_mode="same-optional-reference",
+                                         require_same_adaptation_config=True)
+        atomic_rows, _, _, atomic_sidecar_identity = _verified_run_rows(atomic_run_dir)
+        causal_rows, _, _, causal_sidecar_identity = _verified_run_rows(causal_run_dir)
+        if atomic_sidecar_identity != atomic_identity or causal_sidecar_identity != causal_identity:
+            raise AssertionError("verified F5 run changed while reading its replay sidecar")
+    report = analyze_failure_modes(base, adapted, query_rows=queries, items=items,
+                                   atomic_rows=atomic_rows, causal_rows=causal_rows)
+    report["provenance"] = {"verified": True, "baseline": base_identity, "adapted": adapted_identity}
+    report["consensus_ramen_decision"] = consensus_ramen_decision([])
+    return report
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -837,40 +1262,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         if verified:
             if not args.baseline_run_dir or not args.adapted_run_dir or args.base or args.adapted or args.queries or args.items:
                 raise ValueError("verified mode requires only --baseline-run-dir and --adapted-run-dir (plus optional F5 runs)")
-            base_root, base_manifest, base, base_identity = _verified_trace_run(args.baseline_run_dir)
-            adapted_root, adapted_manifest, adapted_trace, adapted_identity = _verified_trace_run(args.adapted_run_dir)
-            _validate_verified_pair(base_root, base_manifest, base_identity,
-                                    adapted_root, adapted_manifest, adapted_identity)
-            adapted, queries, items, sidecar_identity = _verified_run_rows(args.adapted_run_dir)
-            if sidecar_identity != adapted_identity or adapted != adapted_trace:
-                raise AssertionError("verified adapted run changed while reading its replay sidecar")
-            base_by_key = {(r["timestep"], r["sample_idx"], r["ground_truth_domain"]): r for r in base}
-            for query in queries:
-                key = (query["timestep"], query["sample_idx"], query["ground_truth_domain"])
-                reference = base_by_key.get(key)
-                if reference is None or reference.get("ground_truth_class") != query.get("ground_truth_class"):
-                    raise ValueError("baseline trace does not strictly pair adapted query")
-                query["base_correct"] = reference.get("correct")
-            atomic_rows = causal_rows = None
-            if args.atomic_run_dir or args.causal_run_dir:
-                if not args.atomic_run_dir or not args.causal_run_dir:
-                    raise ValueError("F5 requires both --atomic-run-dir and --causal-run-dir")
-                atomic_root, atomic_manifest, _, atomic_identity = _verified_trace_run(args.atomic_run_dir)
-                causal_root, causal_manifest, _, causal_identity = _verified_trace_run(args.causal_run_dir)
-                _validate_verified_compatibility(atomic_root, atomic_manifest, atomic_identity,
-                                                causal_root, causal_manifest, causal_identity,
-                                                left_name="atomic", right_name="causal",
-                                                reference_mode="same-optional-reference",
-                                                require_same_adaptation_config=True)
-                atomic_rows, _, _, atomic_sidecar_identity = _verified_run_rows(args.atomic_run_dir)
-                causal_rows, _, _, causal_sidecar_identity = _verified_run_rows(args.causal_run_dir)
-                if atomic_sidecar_identity != atomic_identity or causal_sidecar_identity != causal_identity:
-                    raise AssertionError("verified F5 run changed while reading its replay sidecar")
-            report = analyze_failure_modes(base, adapted, query_rows=queries, items=items,
-                                           atomic_rows=atomic_rows, causal_rows=causal_rows)
-            report["provenance"] = {"verified": True,
-                                    "baseline": base_identity, "adapted": adapted_identity}
-            report["consensus_ramen_decision"] = consensus_ramen_decision([])
+            report = analyze_verified_run_dirs(
+                args.baseline_run_dir,
+                args.adapted_run_dir,
+                atomic_run_dir=args.atomic_run_dir,
+                causal_run_dir=args.causal_run_dir,
+            )
         else:
             if not args.base or not args.adapted:
                 raise ValueError("raw mode requires --base and --adapted")

@@ -13,10 +13,12 @@ from src.evaluation.failure_mode_analysis import (
     counterfactual_recovery_analysis,
     entropy_admission_analysis,
     gradient_conflict_association,
+    gradient_conflict_distributions,
     gradient_direction_corruption,
     open_set_gradient_analysis,
     oracle_gap_analysis,
     paired_outcome_decomposition,
+    analyze_verified_run_dirs,
 )
 from src.evaluation.evidence import FAILURE_ANALYSIS_REQUIRED_FIELDS
 from src.evaluation.failure_analysis_artifacts import ReplaySidecarWriter, sha256_file
@@ -34,12 +36,14 @@ class FailureModeAnalysisTests(unittest.TestCase):
     def _verified_run(self, root, name, correctness, *, schedule="causal", future=0, with_sidecar=True,
                       reset_state_verified=True, corrupt_failure_trace=False, device="cpu",
                       model_digest="a" * 64, dataset_digest="b" * 64,
-                      evaluator_overrides=None, reference_trace=None, manifest_mutator=None):
+                      evaluator_overrides=None, reference_trace=None, manifest_mutator=None,
+                      analysis_role="analysis", gradient_fixture=False):
         run = root / name
         run.mkdir()
         args = {"device": device, "dataset": "CIFAR100C", "model": "clip_vitbase16", "seed": 0,
                 "stream_seed": 0, "batch_size": 1, "max_eval_samples": 2,
                 "stream_mode": "block", "stream_block_size": 2, "reference_trace": reference_trace,
+                "analysis_role": analysis_role,
                 "tta_algo": "NoAdapt" if not with_sidecar else "CausalRamen",
                 "failure_analysis_profile": "off" if not with_sidecar else "replay_v1"}
         if evaluator_overrides:
@@ -62,7 +66,7 @@ class FailureModeAnalysisTests(unittest.TestCase):
         for timestep, correct in enumerate(correctness):
             trace = {"schema_version": 2, "run_id": name, "timestep": timestep, "sample_idx": 10 + timestep,
                      "ground_truth_domain": 0, "ground_truth_class": timestep,
-                     "prediction": timestep if correct else 9, "correct": correct}
+                     "prediction": timestep if correct else 9, "correct": correct, "memory_size": timestep + 1}
             if with_sidecar:
                 failure = {field: 0 for field in FAILURE_ANALYSIS_REQUIRED_FIELDS}
                 failure.update({
@@ -94,20 +98,33 @@ class FailureModeAnalysisTests(unittest.TestCase):
             manifest_sha256=sha256_file(run / "manifest.json"), stream_fingerprint=payload["fingerprint"],
             source_fingerprint="d" * 64, config={"counterfactual_thresholds": [0.5, 0.75, 1.0]},
             max_samples=2, max_bytes=100000)
-        for timestep in range(2):
-            writer.write(items=[{"item_id": 100 + timestep, "segment_index": timestep,
+        if gradient_fixture:
+            replay_items = [
+                {"item_id": 100, "segment_index": 0, "predicted_class": 0, "entropy": .1,
+                 "admitted": True, "ground_truth_class": 0, "feature": torch.tensor([1.0]),
+                 "gradient": torch.tensor([1.0, 1.0])},
+                {"item_id": 101, "segment_index": 0, "predicted_class": 0, "entropy": .8,
+                 "admitted": True, "ground_truth_class": 1, "feature": torch.tensor([1.0]),
+                 "gradient": torch.tensor([1.0, -1.0])},
+            ]
+            replay_queries = ((100, 101, 2.0), (101, 100, 1.0))
+        else:
+            replay_items = None
+            replay_queries = ((100, 100, 1.0), (101, 101, 1.0))
+        for timestep, (item_id, support_id, support_weight) in enumerate(replay_queries):
+            writer.write(items=(replay_items if timestep == 0 and replay_items is not None else [] if gradient_fixture else [{"item_id": 100 + timestep, "segment_index": timestep,
                                  "predicted_class": timestep, "entropy": .1, "admitted": True,
                                  "ground_truth_class": timestep,
-                                 "feature": torch.tensor([1.0])}], query={
-                "item_id": 100 + timestep, "segment_index": timestep,
+                                 "feature": torch.tensor([1.0]), "gradient": torch.tensor([1.0, 0.0])}]), query={
+                "item_id": item_id, "segment_index": 0 if gradient_fixture else timestep,
                 "producer_query_timestep": timestep,
                 "evaluator_sample_identity": {"sample_idx": 10 + timestep, "ground_truth_domain": 0},
-                "legal_candidates": [{"item_id": 100 + timestep}],
+                "legal_candidates": [{"item_id": 100}, {"item_id": 101}] if gradient_fixture else [{"item_id": 100 + timestep}],
                 # Matches the class-balanced Causal/Structured payload:
                 # [active class][rank], with padded invalid entries.
-                "retrieved_support_ids": [[100 + timestep, -1]], "retrieved_weights": [[1.0, 0.0]],
+                "retrieved_support_ids": [[support_id, -1]], "retrieved_weights": [[support_weight, 0.0]],
                 "retrieved_distances": [[0.0, 0.0]],
-                "support_valid_mask": [[True, False]], "support_predicted_classes": [[timestep, -1]],
+                "support_valid_mask": [[True, False]], "support_predicted_classes": [[0 if gradient_fixture else timestep, -1]],
                 "schedule": schedule, "conflict_metric": "fraction_low_consensus_coordinates_v1",
                 "conflict": .2 + .1 * timestep, "batch_position": timestep,
                 "future_support_count": future, "future_support_weight_fraction": float(future),
@@ -127,6 +144,39 @@ class FailureModeAnalysisTests(unittest.TestCase):
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         metadata["files"]["queries.jsonl"] = {"bytes": path.stat().st_size, "sha256": sha256_file(path)}
         metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    @staticmethod
+    def _mutate_sidecar_item(run, mutate):
+        path = run / "failure-analysis" / "items.jsonl"
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        mutate(rows)
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+        metadata_path = run / "failure-analysis" / "metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata["files"]["items.jsonl"] = {"bytes": path.stat().st_size, "sha256": sha256_file(path)}
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    def test_verified_replay_reconstructs_item_gradient_compatibility_and_rejects_tampering(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline = self._verified_run(root, "baseline", [True, False], with_sidecar=False)
+            adapted = self._verified_run(root, "adapted", [False, True], gradient_fixture=True)
+            report = analyze_verified_run_dirs(str(baseline), str(adapted))
+            entropy = report["entropy_admission"]
+            self.assertEqual("support_gradient_vs_current_query_raw_gradient_v1", entropy["gradient_compatibility_metric"])
+            for group in ("low_correct", "high_wrong"):
+                self.assertEqual("computed", entropy["groups"][group]["gradient_cosine"]["status"])
+                self.assertEqual(0.0, entropy["groups"][group]["gradient_cosine"]["mean"])
+                self.assertEqual(0.5, entropy["groups"][group]["gradient_sign_agreement"]["mean"])
+                self.assertEqual(0.0, entropy["groups"][group]["weighted_gradient_cosine"]["mean"])
+                self.assertEqual(0.5, entropy["groups"][group]["weighted_gradient_sign_agreement"]["mean"])
+
+            self._mutate_sidecar_item(adapted, lambda rows: rows[0]["gradient"].update(shape=[3]))
+            result = subprocess.run([sys.executable, "-m", "src.evaluation.failure_mode_analysis",
+                "--baseline-run-dir", str(baseline), "--adapted-run-dir", str(adapted)], capture_output=True, text=True)
+            self.assertEqual(2, result.returncode, result.stderr)
+            self.assertEqual("invalid", json.loads(result.stdout)["status"])
+
     def test_exact_paired_decomposition_and_identity(self):
         base = [row(0, True), row(1, False), row(2, True), row(3, False)]
         adapted = [row(0, True), row(1, True), row(2, False), row(3, False)]
@@ -225,6 +275,10 @@ class FailureModeAnalysisTests(unittest.TestCase):
             self.assertIn("completed_f4_oracle_recovery", report["consensus_ramen_decision"]["missing_conditions"])
             self.assertEqual("computed", report["oracle_gaps"]["status"])
             self.assertEqual("computed", report["counterfactual"]["variants"]["0.50"]["status"])
+            self.assertEqual("computed", report["gradient_conflict_distributions"]["status"])
+            self.assertEqual("computed", report["temporal"]["status"])
+            self.assertEqual([1.0, 2.0], [entry["value"] for entry in report["temporal"]["strata"]["memory_occupancy"]])
+            self.assertEqual("computed", report["temporal"]["paired_panels"]["status"])
             f5 = report["temporal_schedule"]["paired_schedule_comparison"]
             self.assertEqual("computed", f5["status"])
             self.assertEqual(0.5, f5["accuracy_delta"])
@@ -293,6 +347,48 @@ class FailureModeAnalysisTests(unittest.TestCase):
                         "--baseline-run-dir", str(baseline), "--adapted-run-dir", str(adapted)], capture_output=True, text=True)
                     self.assertEqual(2, result.returncode, result.stderr)
                     self.assertEqual("invalid", json.loads(result.stdout)["status"])
+
+    def test_verified_pairs_reject_analysis_role_mismatches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline = self._verified_run(root, "baseline", [True, False], with_sidecar=False)
+            adapted = self._verified_run(root, "adapted", [False, True], analysis_role="final")
+            result = subprocess.run([sys.executable, "-m", "src.evaluation.failure_mode_analysis",
+                "--baseline-run-dir", str(baseline), "--adapted-run-dir", str(adapted)], capture_output=True, text=True)
+            self.assertEqual(2, result.returncode, result.stderr)
+            self.assertEqual("invalid", json.loads(result.stdout)["status"])
+
+    def test_verified_pair_requires_noadapt_then_adaptation_method(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cases = (
+                ({"tta_algo": "CausalRamen"}, {"tta_algo": "CausalRamen"}),
+                ({"tta_algo": "NoAdapt"}, {"tta_algo": "NoAdapt"}),
+            )
+            for index, (base_args, adapted_args) in enumerate(cases):
+                with self.subTest(index=index):
+                    baseline = self._verified_run(root, f"baseline-method-{index}", [True, False],
+                                                  with_sidecar=False, evaluator_overrides=base_args)
+                    adapted = self._verified_run(root, f"adapted-method-{index}", [False, True],
+                                                 evaluator_overrides=adapted_args)
+                    result = subprocess.run([sys.executable, "-m", "src.evaluation.failure_mode_analysis",
+                        "--baseline-run-dir", str(baseline), "--adapted-run-dir", str(adapted)],
+                        capture_output=True, text=True)
+                    self.assertEqual(2, result.returncode, result.stderr)
+                    self.assertEqual("invalid", json.loads(result.stdout)["status"])
+
+    def test_atomic_causal_pair_rejects_analysis_role_mismatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline = self._verified_run(root, "baseline", [True, False], with_sidecar=False)
+            adapted = self._verified_run(root, "adapted", [False, True])
+            atomic = self._verified_run(root, "atomic", [False, False], schedule="atomic", analysis_role="analysis")
+            causal = self._verified_run(root, "causal", [True, False], schedule="causal", future=2, analysis_role="final")
+            result = subprocess.run([sys.executable, "-m", "src.evaluation.failure_mode_analysis",
+                "--baseline-run-dir", str(baseline), "--adapted-run-dir", str(adapted),
+                "--atomic-run-dir", str(atomic), "--causal-run-dir", str(causal)], capture_output=True, text=True)
+            self.assertEqual(2, result.returncode, result.stderr)
+            self.assertEqual("invalid", json.loads(result.stdout)["status"])
 
     def test_verified_pair_accepts_same_backend_v3_shape_and_bound_reference(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -399,6 +495,27 @@ class FailureModeAnalysisTests(unittest.TestCase):
         self.assertEqual("insufficient", missing["status"])
         absent = gradient_conflict_association([{"outcome": "harmful", "conflict": .8}])
         self.assertEqual("unavailable", absent["status"])
+
+    def test_f3_distributions_are_outcome_conditioned_and_explicit_when_insufficient(self):
+        rows = [
+            {"outcome": "harmful", "timestep": 0, "ground_truth_domain": "d1", "stream": "block", "seed": 7,
+             "memory_occupancy": 2, "consensus_mean": .2, "consensus_p10": .1, "consensus_p50": .15,
+             "fraction_low_consensus_coordinates": .8, "active_support_classes": [1, 2],
+             "pairwise_sign_agreement_mean": .3, "pairwise_cosine_mean": -.4},
+            {"outcome": "beneficial", "timestep": 1, "ground_truth_domain": "d1", "stream": "block", "seed": 7,
+             "memory_occupancy": 2, "consensus_mean": .9, "consensus_p10": .7, "consensus_p50": .8,
+             "fraction_low_consensus_coordinates": .1, "active_support_classes": 1,
+             "pairwise_sign_agreement_mean": .8, "pairwise_cosine_mean": .6},
+        ]
+        report = gradient_conflict_distributions(rows)
+        self.assertEqual("computed", report["status"])
+        harmful = report["outcomes"]["harmful"]
+        self.assertEqual(2.0, harmful["active_support_classes"]["mean"])
+        self.assertEqual(-.4, harmful["pairwise_cosine_mean"]["quantiles"]["p50"])
+        self.assertEqual("insufficient", report["outcomes"]["safe"]["consensus_mean"]["status"])
+        self.assertEqual("computed", report["strata"]["time_since_shift"][0]["status"])
+        self.assertEqual("block", report["strata"]["stream"][0]["value"])
+        self.assertEqual("insufficient", gradient_conflict_distributions([])["status"])
 
     def test_f5_requires_rows_that_explicitly_claim_opposite_schedules(self):
         atomic, causal = [row(0, True)], [row(0, False)]

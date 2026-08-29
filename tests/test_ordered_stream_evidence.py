@@ -184,6 +184,7 @@ class OrderedStreamEvidenceTests(unittest.TestCase):
                 "stream_block_size": 64,
                 "artifact_provenance": "exact", "tta_algo": "NoAdapt",
                 "config_path": config_path,
+                "analysis_role": "analysis",
             },
             "config": reference_config,
             "device": "cpu",
@@ -197,6 +198,7 @@ class OrderedStreamEvidenceTests(unittest.TestCase):
             "stream_block_size": 64,
             "artifact_provenance": "exact", "artifacts": artifacts,
             "reference_config": reference_config, "reference_config_path": config_path,
+            "analysis_role": "analysis",
         }
         return paths
 

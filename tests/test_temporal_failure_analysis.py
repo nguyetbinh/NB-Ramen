@@ -10,7 +10,7 @@ def row(timestep, domain, base, adapted, **extra):
 
 class TemporalFailureTests(unittest.TestCase):
     def test_shift_boundaries_and_paired_panels(self):
-        rows = [row(0, "a", True, True, consensus_mean=.8), row(1, "a", False, True, consensus_mean=.7),
+        rows = [row(0, "a", True, True, consensus_mean=.8, active_support_classes=[1, 2], pairwise_sign_agreement_mean=.8), row(1, "a", False, True, consensus_mean=.7, active_support_classes=[1], pairwise_sign_agreement_mean=.6),
                 row(2, "b", True, False, consensus_mean=.2), row(3, "b", False, False, consensus_mean=.1)]
         annotated = annotate_time_since_shift(rows)
         self.assertEqual([0, 1, 0, 1], [item["time_since_shift"] for item in annotated])
@@ -18,6 +18,10 @@ class TemporalFailureTests(unittest.TestCase):
         self.assertEqual("computed", report["status"])
         self.assertEqual(.5, report["paired_panels"]["series"][0]["task_failure"]["base_error"])
         self.assertEqual("computed", report["paired_panels"]["series"][0]["mechanism"]["consensus_mean"]["status"])
+        self.assertEqual({"timestep", "time_since_shift", "memory_occupancy", "domain", "seed", "stream", "batch_size", "ood_ratio"}, set(report["strata"]))
+        self.assertIn("memory_oracle_gap", report["paired_panels"]["series"][0]["task_failure"])
+        self.assertIn("future_support_weight_fraction", report["paired_panels"]["series"][0]["mechanism"])
+        self.assertAlmostEqual(.3, report["paired_panels"]["series"][0]["mechanism"]["sign_disagreement"]["mean"])
 
     def test_empty_and_small_strata(self):
         self.assertEqual("insufficient", temporal_failure_report([])["status"])
