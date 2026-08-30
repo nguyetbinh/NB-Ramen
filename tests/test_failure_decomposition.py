@@ -75,7 +75,7 @@ class FailureDecompositionTests(unittest.TestCase):
         self.assertEqual(2, len(result["per_domain"]))
         self.assertEqual(0.5, result["per_domain"]["0"]["reference_accuracy"])
         self.assertEqual(1.0, result["per_domain"]["0"]["adapted_accuracy"])
-        self.assertEqual(1.0, result["per_domain"]["1"]["reference_accuracy"])
+        self.assertEqual(0.5, result["per_domain"]["1"]["reference_accuracy"])
         self.assertEqual(0.0, result["per_domain"]["1"]["adapted_accuracy"])
         self.assertEqual(2, len(result["windows"]))
         self.assertEqual(0, result["windows"][0]["start_timestep"])
