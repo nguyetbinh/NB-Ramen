@@ -4,7 +4,7 @@
 
 **Branch:** `latent-soft-routing`  
 **Base:** `evidence` @ `b054063bf9036e561a9ffc5ef8f21608a2af0dd0`  
-**Status:** research proposal / diagnostic plan; not yet experimentally validated
+**Status:** oracle-soft implementation complete; minimal bounded Gate 1 did not pass
 
 ---
 
@@ -27,6 +27,39 @@ The core experimental question becomes:
 > Does context information improve Ramen when used as an additional relevance signal without excluding cross-context support?
 
 The cleanest first diagnostic is an **oracle soft-routing experiment** using ground-truth domain labels only as a relevance bonus. If oracle soft routing improves over `CausalRamen` while oracle hard routing does not, that would directly support the new hypothesis and explain the earlier negative result mechanistically.
+
+### Minimal Gate 1 update — 2026-09-04
+
+The reuse-first bounded check is complete on the canonical CIFAR-100-C block
+prefix (`n=200`, seed 0, MPS), with stream fingerprint
+`aa6c94d923ff8024119c10111c8c685f4cd2e72fb70d47fc5978ba593a70020b`.
+Existing `NoAdapt`, `CausalRamen`, and oracle-hard evidence was reused and
+strictly revalidated. Only `OracleSoftRankRamen` at `gamma=0` and
+`gamma=0.25` was needed for the soft check.
+
+| Method | Micro | Macro-domain | Worst-domain | Negative windows |
+|---|---:|---:|---:|---:|
+| NoAdapt | 30.5% | 32.03% | 23.44% | reference |
+| CausalRamen | 33.0% | 39.45% | 28.12% | 1/4 |
+| OracleHardRamen | 30.5% | 37.50% | 21.88% | 2/4 |
+| OracleSoftRankRamen, `gamma=0` | 33.0% | 39.45% | 28.12% | 1/4 |
+| OracleSoftRankRamen, `gamma=0.25` | 33.0% | 39.45% | 28.12% | 1/4 |
+
+The zero-strength run recovers the `CausalRamen` algorithmic trace exactly
+after excluding latency, method-identity routing fields, and the four
+soft-only zero diagnostics. At `gamma=0.25`,
+support selection changes on 73/200 queries, but only 2.47% of support slots
+change on average; all 200 predictions remain identical to `gamma=0`.
+Mean same-domain support rises only from 49.17% to 49.39%, while mean ESS
+changes from 23.83 to 23.80. Class coverage and returned support count are
+preserved.
+
+This is a bounded no-go, not a general proof that every soft-routing strength
+fails. It is sufficient for the requested minimal workflow: the preregistered
+nonzero point has a real but weak retrieval effect and no accuracy effect, so
+the branch does not proceed to `LatentSoftRamen` or a wider gamma sweep.
+Detailed provenance and artifact links are in the
+[`minimal Gate 1 report`](../../plans/20260904-latent-soft-routing/reports/minimal-gate1-report.md).
 
 ---
 
@@ -715,17 +748,18 @@ Optional:
 OracleSoftWeightRamen
 ```
 
-### Context-strength sweep
+### Minimal context-strength check
 
-Use a very small preregistered sweep rather than tuning continuously on the test result.
-
-Example:
+Reuse the validated canonical controls and run only the two values needed to
+check implementation identity and one nonzero intervention:
 
 ```text
-gamma in {0, 0.25, 0.5, 1.0}
+gamma in {0, 0.25}
 ```
 
-The scale should be normalized relative to the feature-distance term so the interpretation of `gamma` is meaningful.
+`gamma=0` must recover `CausalRamen`. `gamma=0.25` is a bounded pilot, not a
+tuned optimum. Do not run the broader sweep unless this nonzero point changes
+support selection without collapsing diversity and produces a positive signal.
 
 ### Primary quantities
 
@@ -972,9 +1006,11 @@ class_coverage
 ESS
 ```
 
-### Phase 5 — Run canonical 200-sample experiment
+### Phase 5 — Run minimal canonical 200-sample check
 
-No latent router changes yet.
+Reuse the canonical `CausalRamen` and oracle-hard artifacts. Run only
+`OracleSoftRankRamen` at `gamma=0` and `gamma=0.25`. No latent router changes
+yet.
 
 ### Phase 6 — Implement latent soft scorer only after Gate 1 passes
 
@@ -1092,11 +1128,11 @@ Ramen provides semantic similarity and prediction balance. The proposed extensio
 
 ---
 
-## 23. Immediate next experiment
+## 23. Executed minimal experiment
 
-The branch should not start with a new learned router.
+The branch did not start with a new learned router.
 
-The next experiment should be exactly:
+The completed bounded experiment was:
 
 ```text
 CIFAR-100-C canonical block, n=200, seed=0
@@ -1104,7 +1140,7 @@ CIFAR-100-C canonical block, n=200, seed=0
 CausalRamen
 OracleHardRamen
 OracleSoftRankRamen gamma=0
-OracleSoftRankRamen gamma>0 (small preregistered sweep)
+OracleSoftRankRamen gamma=0.25
 ```
 
 Primary evidence to collect:
@@ -1122,13 +1158,19 @@ class coverage
 ESS
 ```
 
-### Go condition
+### Evaluated go condition
 
-Continue to latent soft routing if a nonzero soft context preference improves the controlled baseline and does so without collapsing support diversity.
+Continue to latent soft routing if a nonzero soft context preference improves the controlled baseline and does so without collapsing support diversity. `gamma=0.25` preserved diversity but did not improve the baseline, so this condition was not met.
 
-### Stop / pivot condition
+Because this is one seed and one bounded prefix, a positive result first
+authorizes a broader oracle-soft check; it does not directly authorize a
+thesis-level latent-routing claim.
 
-If perfect domain information does not help even as a soft preference, do not invest further in domain-discovery routing. Shift the thesis toward another compatibility signal, such as gradient agreement, reliability, or causal support construction.
+### Applied stop / pivot condition
+
+The minimal workflow stops here. It does not run `gamma=0.5` or `gamma=1.0`
+and does not implement a latent router. Any expansion now requires a new
+decision justified by a hypothesis stronger than tuning gamma on this result.
 
 ---
 

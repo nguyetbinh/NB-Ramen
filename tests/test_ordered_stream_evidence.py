@@ -94,6 +94,45 @@ class MixedMemoryAvailabilityMethod(DiagnosticMethod):
         return logits
 
 
+class EvaluatorReconstructedSupportMethod(DiagnosticMethod):
+    """Expose selected IDs, but never receive evaluator domain context."""
+
+    def __init__(self):
+        super().__init__()
+        self.item_counter = 0
+
+    def set_oracle_domain_context(self, domains):
+        raise AssertionError("ordinary methods must not receive oracle domains")
+
+    def __call__(self, images):
+        logits = super().__call__(images)
+        ids, masks, counts = [], [], []
+        for offset in range(len(images)):
+            item_id = self.item_counter + offset
+            if item_id == 0:
+                ids.append([[-1, 0]])
+                masks.append([[False, True]])
+                counts.append(1)
+            else:
+                ids.append([[item_id - 1, item_id]])
+                masks.append([[True, True]])
+                counts.append(2)
+        self.item_counter += len(images)
+        self._diagnostics.update({
+            "returned_support_count": counts,
+            "active_class_count": [1] * len(images),
+            "class_coverage": [.5] * len(images),
+            "effective_sample_size": [float(value) for value in counts],
+            "support_item_ids": ids,
+            "support_valid_mask": masks,
+        })
+        return logits
+
+    def reset(self):
+        super().reset()
+        self.item_counter = 0
+
+
 class OrderedStreamEvidenceTests(unittest.TestCase):
     def setUp(self):
         self.datasets = TensorMultiDomainDataset()
@@ -237,7 +276,39 @@ class OrderedStreamEvidenceTests(unittest.TestCase):
         self.assertGreaterEqual(summary["forward_latency"]["median_per_sample_ms"], 0.0)
         self.assertEqual("samples_per_second", summary["throughput"]["unit"])
         self.assertEqual("unavailable", summary["retrieval_latency"]["status"])
+        self.assertEqual("unavailable", summary["support_composition_diagnostics"]["status"])
+        self.assertEqual("unavailable", summary["soft_routing_diagnostics"]["status"])
         self.assertEqual(stream.fingerprint, summary["stream_fingerprint"])
+
+    def test_evaluator_reconstructs_support_domains_without_oracle_hook_or_raw_trace_arrays(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self._paths(directory)
+            stream = build_stream(self.datasets, mode="block", seed=0, block_size=2)
+            method = EvaluatorReconstructedSupportMethod()
+            ordered_stream_test(self.datasets, method, self._args("block"), paths, stream)
+            rows = [json.loads(line) for line in paths["trace"].read_text().splitlines()]
+            summary_text = paths["summary"].read_text()
+            summary = json.loads(summary_text)
+        self.assertEqual([1.0, 1.0, .5, 1.0], [row["same_domain_ratio"] for row in rows])
+        self.assertEqual([0.0, 0.0, .5, 0.0], [row["cross_domain_ratio"] for row in rows])
+        self.assertTrue(all("support_item_ids" not in row and "support_valid_mask" not in row for row in rows))
+        self.assertNotIn("support_item_ids", summary_text)
+        self.assertNotIn("support_valid_mask", summary_text)
+        diagnostics = summary["support_composition_diagnostics"]
+        self.assertEqual("computed", diagnostics["status"])
+        self.assertEqual({"min": .5, "p50": 1.0, "p95": 1.0, "max": 1.0}, diagnostics["same_domain_ratio"])
+        self.assertEqual({"min": 1, "p50": 2.0, "p95": 2.0, "max": 2}, diagnostics["returned_support_count"])
+
+    def test_evaluator_support_domain_history_resets_with_method_segments(self):
+        stream, segments = build_single_domain_stream(self.datasets, seed=9)
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self._paths(directory)
+            ordered_stream_test(
+                self.datasets, EvaluatorReconstructedSupportMethod(), self._args("single_domain"),
+                paths, stream, segments,
+            )
+            rows = [json.loads(line) for line in paths["trace"].read_text().splitlines()]
+        self.assertTrue(all(row["same_domain_ratio"] == 1.0 for row in rows))
 
     def test_mixed_stream_emits_complete_evidence_and_only_final_reset(self):
         stream = build_stream(self.datasets, "iid_mixed", seed=9)

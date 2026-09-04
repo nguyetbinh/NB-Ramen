@@ -36,6 +36,47 @@ class EvidenceTests(unittest.TestCase):
                     "retrieval_returned_support_count": 1, "retrieval_active_class_count": 1,
                 })
 
+    def test_trace_writer_requires_atomic_valid_support_composition_extension(self):
+        base = {
+            "timestep": 0, "sample_idx": 0, "ground_truth_domain": 0,
+            "ground_truth_class": 0, "prediction": 0, "correct": True,
+            "predicted_entropy": 0.0, "inferred_context": 0, "memory_size": 1,
+            "num_active_contexts": 1, "memory_bytes": 32, "latency_ms": 1.0,
+        }
+        composition = {
+            "returned_support_count": 3, "active_class_count": 2,
+            "class_coverage": .5, "same_domain_ratio": .4,
+            "cross_domain_ratio": .6, "effective_sample_size": 2.1,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            with JsonlTraceWriter(Path(directory) / "trace.jsonl", "support") as writer:
+                with self.assertRaisesRegex(ValueError, "support composition trace fields"):
+                    writer.write({**base, "returned_support_count": 3})
+                with self.assertRaisesRegex(ValueError, "class_coverage"):
+                    writer.write({**base, **composition, "class_coverage": 1.1})
+                with self.assertRaisesRegex(ValueError, "disagree with support count"):
+                    writer.write({**base, **composition, "cross_domain_ratio": .5})
+                writer.write({**base, **composition})
+
+    def test_trace_writer_requires_atomic_valid_soft_routing_extension(self):
+        base = {
+            "timestep": 0, "sample_idx": 0, "ground_truth_domain": 0,
+            "ground_truth_class": 0, "prediction": 0, "correct": True,
+            "predicted_entropy": 0.0, "inferred_context": 0, "memory_size": 1,
+            "num_active_contexts": 1, "memory_bytes": 32, "latency_ms": 1.0,
+        }
+        soft = {
+            "context_strength": .25, "selection_change_ratio": .5,
+            "mean_context_bonus": .1, "mean_rank_displacement": 1.5,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            with JsonlTraceWriter(Path(directory) / "soft.jsonl", "soft") as writer:
+                with self.assertRaisesRegex(ValueError, "soft routing trace fields"):
+                    writer.write({**base, "context_strength": .25})
+                with self.assertRaisesRegex(ValueError, "selection_change_ratio"):
+                    writer.write({**base, **soft, "selection_change_ratio": 2.0})
+                writer.write({**base, **soft})
+
     @staticmethod
     def _git(repository, *arguments):
         subprocess.run(

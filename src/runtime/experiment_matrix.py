@@ -43,6 +43,8 @@ try:
         TRACE_REQUIRED_FIELDS,
         ADMISSION_TRACE_FIELDS,
         RETRIEVAL_PROFILE_TRACE_FIELDS,
+        SUPPORT_COMPOSITION_TRACE_FIELDS,
+        SOFT_ROUTING_TRACE_FIELDS,
         TRACE_SCHEMA_VERSION,
         compare_trace_negative_adaptation,
     )
@@ -57,6 +59,8 @@ except ImportError:  # ``runtime`` top-level package or direct-file invocation.
         TRACE_REQUIRED_FIELDS,
         ADMISSION_TRACE_FIELDS,
         RETRIEVAL_PROFILE_TRACE_FIELDS,
+        SUPPORT_COMPOSITION_TRACE_FIELDS,
+        SOFT_ROUTING_TRACE_FIELDS,
         TRACE_SCHEMA_VERSION,
         compare_trace_negative_adaptation,
     )
@@ -80,7 +84,10 @@ DEFAULT_METHODS = (
     "OracleLatentRamen",
     "LatentRamen",
 )
-SUPPORTED_METHODS = DEFAULT_METHODS + ("EntropyGatedLatentRamen",)
+SUPPORTED_METHODS = DEFAULT_METHODS + (
+    "EntropyGatedLatentRamen", "OracleHardRamen", "LatentHardRamen",
+    "OracleSoftRankRamen",
+)
 MODEL_BY_DATASET = {"CIFAR100C": "clip_vitbase16", "DomainNet": "clip_vitbase32"}
 BATCH_SIZE_BY_DATASET = {"CIFAR100C": 100, "DomainNet": 100}
 CONFIG_HASH_LENGTH = 12
@@ -548,6 +555,8 @@ def _validate_summary(
     _require_fields(summary, SUMMARY_REQUIRED_FIELDS, "summary", run)
     admission_presence = [all(field in row for field in ADMISSION_TRACE_FIELDS) for row in rows]
     profile_presence = [all(field in row for field in RETRIEVAL_PROFILE_TRACE_FIELDS) for row in rows]
+    support_presence = [all(field in row for field in SUPPORT_COMPOSITION_TRACE_FIELDS) for row in rows]
+    soft_presence = [all(field in row for field in SOFT_ROUTING_TRACE_FIELDS) for row in rows]
     if any(profile_presence) and not all(profile_presence):
         raise IncompleteRunError(f"trace contains mixed retrieval profile availability: {run.run_id}")
     configured_profile = run.config_data.get("retrieval_profile", "off")
@@ -555,6 +564,10 @@ def _validate_summary(
         raise IncompleteRunError(f"profiled run lacks complete retrieval profile evidence: {run.run_id}")
     if configured_profile != "causal_sync_v1" and any(profile_presence):
         raise IncompleteRunError(f"unprofiled run contains retrieval profile evidence: {run.run_id}")
+    if any(support_presence) and not all(support_presence):
+        raise IncompleteRunError(f"trace contains mixed support composition availability: {run.run_id}")
+    if any(soft_presence) and not all(soft_presence):
+        raise IncompleteRunError(f"trace contains mixed soft routing availability: {run.run_id}")
     if any(admission_presence) and not all(admission_presence):
         raise IncompleteRunError(f"trace contains mixed admission evidence availability: {run.run_id}")
     if all(admission_presence):
@@ -578,6 +591,41 @@ def _validate_summary(
         _require_equal(summary.get("admission_diagnostics"), expected_admission, "summary.admission_diagnostics", run)
     elif "admission_diagnostics" in summary:
         raise IncompleteRunError(f"summary admission diagnostics without trace evidence: {run.run_id}")
+    def diagnostic_percentile(data, fraction):
+        ordered = sorted(data); position = (len(ordered) - 1) * fraction
+        lower, upper = int(position), min(int(position) + 1, len(ordered) - 1)
+        return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+    def diagnostic_distribution(field):
+        data = [row[field] for row in rows]
+        return {"min": min(data), "p50": diagnostic_percentile(data, .5), "p95": diagnostic_percentile(data, .95), "max": max(data)}
+    support_summary = summary.get("support_composition_diagnostics")
+    if all(support_presence):
+        expected_support = {
+            "status": "computed",
+            "definition": "per-query composition of the support selected for adaptation; independent of synchronized retrieval timing instrumentation",
+            **{field: diagnostic_distribution(field) for field in SUPPORT_COMPOSITION_TRACE_FIELDS},
+        }
+        _require_equal(support_summary, expected_support, "summary.support_composition_diagnostics", run)
+    elif support_summary is not None:
+        expected_support = {
+            "status": "unavailable",
+            "reason": "method did not expose selected-support composition diagnostics",
+        }
+        _require_equal(support_summary, expected_support, "summary.support_composition_diagnostics", run)
+    soft_summary = summary.get("soft_routing_diagnostics")
+    if all(soft_presence):
+        expected_soft = {
+            "status": "computed",
+            "definition": "per-query influence of soft context-aware ranking relative to the gamma-zero ranking on identical memory",
+            **{field: diagnostic_distribution(field) for field in SOFT_ROUTING_TRACE_FIELDS},
+        }
+        _require_equal(soft_summary, expected_soft, "summary.soft_routing_diagnostics", run)
+    elif soft_summary is not None:
+        expected_soft = {
+            "status": "unavailable",
+            "reason": "method did not expose soft-routing influence diagnostics",
+        }
+        _require_equal(soft_summary, expected_soft, "summary.soft_routing_diagnostics", run)
     num_samples = len(rows)
     micro_accuracy = sum(row["correct"] for row in rows) / num_samples
     actual_micro = _require_probability(summary["micro_accuracy"], "summary.micro_accuracy", run)
@@ -1016,6 +1064,40 @@ def validate_completed_run(run: ExperimentRun) -> dict[str, object]:
                     raise IncompleteRunError(
                         f"trace[{line_number}] retrieval profile fields must be all present or all absent"
                     )
+                support_present = [field in row for field in SUPPORT_COMPOSITION_TRACE_FIELDS]
+                if any(support_present) and not all(support_present):
+                    raise IncompleteRunError(
+                        f"trace[{line_number}] support composition fields must be all present or all absent"
+                    )
+                if all(support_present):
+                    for field in ("returned_support_count", "active_class_count"):
+                        if not _is_int(row[field], minimum=0):
+                            raise IncompleteRunError(f"trace[{line_number}].{field} is malformed")
+                    for field in ("class_coverage", "same_domain_ratio", "cross_domain_ratio"):
+                        if not _is_finite_number(row[field], minimum=0.0, maximum=1.0):
+                            raise IncompleteRunError(f"trace[{line_number}].{field} is malformed")
+                    expected_ratio_sum = 1.0 if row["returned_support_count"] else 0.0
+                    if not math.isclose(
+                        row["same_domain_ratio"] + row["cross_domain_ratio"],
+                        expected_ratio_sum, rel_tol=0.0, abs_tol=1e-6,
+                    ):
+                        raise IncompleteRunError(
+                            f"trace[{line_number}] support domain ratios disagree with support count"
+                        )
+                    for field in ("effective_sample_size",):
+                        if not _is_finite_number(row[field], minimum=0.0):
+                            raise IncompleteRunError(f"trace[{line_number}].{field} is malformed")
+                soft_present = [field in row for field in SOFT_ROUTING_TRACE_FIELDS]
+                if any(soft_present) and not all(soft_present):
+                    raise IncompleteRunError(
+                        f"trace[{line_number}] soft routing fields must be all present or all absent"
+                    )
+                if all(soft_present):
+                    if not _is_finite_number(row["selection_change_ratio"], minimum=0.0, maximum=1.0):
+                        raise IncompleteRunError(f"trace[{line_number}].selection_change_ratio is malformed")
+                    for field in ("context_strength", "mean_context_bonus", "mean_rank_displacement"):
+                        if not _is_finite_number(row[field], minimum=0.0):
+                            raise IncompleteRunError(f"trace[{line_number}].{field} is malformed")
                 rows.append(row)
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
         raise IncompleteRunError(f"invalid trace: {trace_path}") from exc

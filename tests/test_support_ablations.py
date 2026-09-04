@@ -130,6 +130,42 @@ class SupportAblationTests(unittest.TestCase):
         self.assertTrue(torch.allclose(retrieved[2].squeeze(), expected))
         self.assertEqual([1, 1, 2], active_classes.tolist())
 
+    def test_causal_core_composition_uses_ramen_weights_and_exposes_raw_support(self):
+        memory = StructuredGradientMemory(2, 4, 1, 1, device="cpu", capacity_scope="per_class")
+        result = update_and_retrieve_support_causal_batch(
+            memory, torch.tensor([[0.], [1.]]), torch.tensor([[2.], [6.]]),
+            torch.tensor([0, 1]), torch.zeros(2, dtype=torch.long), torch.zeros(2),
+            torch.tensor([10, 11]), topk=1, include_current=True, beta=1.,
+            selection="class_balanced", return_composition=True,
+        )
+        *_, composition = result
+        self.assertEqual([1, 2], composition["returned_support_count"].tolist())
+        self.assertEqual([1, 2], composition["active_class_count"].tolist())
+        self.assertEqual([.5, 1.], composition["class_coverage"].tolist())
+        expected_ess = (1 + torch.exp(torch.tensor(-1.))).square() / (1 + torch.exp(torch.tensor(-2.)))
+        self.assertTrue(torch.allclose(composition["effective_sample_size"], torch.tensor([1., expected_ess])))
+        self.assertEqual((2, 2, 1), tuple(composition["support_item_ids"].shape))
+        self.assertEqual(torch.bool, composition["support_valid_mask"].dtype)
+        self.assertEqual([10], composition["support_item_ids"][0, 0, :].tolist())
+        self.assertFalse(composition["support_valid_mask"][0, 1, 0])
+
+        method = object.__new__(CausalRamen)
+        method.router = None
+        method.memory = memory
+        diagnostics = method._diagnostics(composition=composition)
+        self.assertEqual([1, 2], diagnostics["returned_support_count"].tolist())
+        self.assertTrue(torch.equal(composition["support_item_ids"], diagnostics["support_item_ids"]))
+
+    def test_causal_diagnostics_never_include_oracle_domain_metrics(self):
+        method = object.__new__(CausalRamen)
+        method.router = None
+        method.memory = StructuredGradientMemory(1, 2, 1, 1, device="cpu", capacity_scope="per_class")
+        diagnostics = method._diagnostics()
+        self.assertNotIn("oracle_context_source", diagnostics)
+        self.assertNotIn("same_domain_ratio", diagnostics)
+        self.assertNotIn("cross_domain_ratio", diagnostics)
+        self.assertNotIn("context_strength", diagnostics)
+
     def test_unbalanced_aggregation_keeps_ramen_weighting(self):
         memory = StructuredGradientMemory(1, 4, 1, 1, device="cpu", capacity_scope="per_class")
         memory.add(torch.tensor([[0.], [1.]]), torch.tensor([[2.], [6.]]), 0, 0,

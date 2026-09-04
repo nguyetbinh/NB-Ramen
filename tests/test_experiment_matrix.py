@@ -16,6 +16,7 @@ from src.runtime.experiment_matrix import (
     make_run_id,
     preflight,
     validate_completed_run,
+    SUPPORTED_METHODS,
 )
 from src.evaluation.evidence import SUMMARY_SCHEMA_VERSION, TRACE_SCHEMA_VERSION
 from src.runtime.artifact_provenance import (
@@ -351,6 +352,69 @@ class ExperimentMatrixTests(unittest.TestCase):
             )
         self.assertEqual(["NoAdapt", "EntropyGatedLatentRamen"], [run.method for run in runs])
         self.assertEqual(300, len(build_experiment_matrix(seeds=(0, 1, 2), max_eval_samples=1)))
+
+    def test_soft_routing_methods_are_supported_without_changing_default_matrix(self):
+        additions = ("OracleHardRamen", "LatentHardRamen", "OracleSoftRankRamen")
+        self.assertTrue(set(additions).issubset(SUPPORTED_METHODS))
+        with tempfile.TemporaryDirectory() as directory:
+            config_root = Path(directory) / "cfg"
+            (config_root / "CIFAR100C").mkdir(parents=True)
+            (config_root / "default").mkdir()
+            (config_root / "default" / "NoAdapt.yaml").write_text("optimizer: signsgd\n")
+            for method in additions:
+                (config_root / "CIFAR100C" / f"{method}.yaml").write_text("optimizer: signsgd\n")
+            runs = build_experiment_matrix(
+                datasets=("CIFAR100C",), streams=("block",), methods=additions,
+                seeds=(0,), evidence_dir=directory, data_root=directory, device="cpu",
+                config_dir=config_root,
+            )
+        self.assertEqual(["NoAdapt", *additions], [run.method for run in runs])
+        self.assertEqual([f"{method}.yaml" for method in additions], [run.config_path.name for run in runs[1:]])
+
+    def test_support_composition_resume_validation_is_optional_but_exact_when_present(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = build_experiment_matrix(
+                datasets=("CIFAR100C",), streams=("iid_mixed",), methods=("NoAdapt",), seeds=(0,),
+                evidence_dir=directory, data_root=directory, device="cpu",
+            )[0]
+            _write_valid_evidence(run)
+            # v2 evidence from before this optional extension remains resumable.
+            validate_completed_run(run)
+            trace_path = run.run_dir / "trace.jsonl"
+            row = json.loads(trace_path.read_text())
+            row.update({
+                "returned_support_count": 3, "active_class_count": 2, "class_coverage": .5,
+                "same_domain_ratio": .25, "cross_domain_ratio": .75,
+                "effective_sample_size": 2.5,
+            })
+            trace_path.write_text(json.dumps(row) + "\n")
+            summary_path = run.run_dir / "summary.json"
+            summary = json.loads(summary_path.read_text())
+            summary["support_composition_diagnostics"] = {
+                "status": "computed",
+                "definition": "per-query composition of the support selected for adaptation; independent of synchronized retrieval timing instrumentation",
+                **{field: {"min": row[field], "p50": float(row[field]), "p95": float(row[field]), "max": row[field]}
+                   for field in ("returned_support_count", "active_class_count", "class_coverage", "same_domain_ratio", "cross_domain_ratio", "effective_sample_size")},
+            }
+            summary_path.write_text(json.dumps(summary))
+            validate_completed_run(run)
+            row.update({
+                "context_strength": .5, "selection_change_ratio": .25,
+                "mean_context_bonus": .1, "mean_rank_displacement": 1.0,
+            })
+            trace_path.write_text(json.dumps(row) + "\n")
+            summary["soft_routing_diagnostics"] = {
+                "status": "computed",
+                "definition": "per-query influence of soft context-aware ranking relative to the gamma-zero ranking on identical memory",
+                **{field: {"min": row[field], "p50": float(row[field]), "p95": float(row[field]), "max": row[field]}
+                   for field in ("context_strength", "selection_change_ratio", "mean_context_bonus", "mean_rank_displacement")},
+            }
+            summary_path.write_text(json.dumps(summary))
+            validate_completed_run(run)
+            row["same_domain_ratio"] = 1.2
+            trace_path.write_text(json.dumps(row) + "\n")
+            with self.assertRaisesRegex(IncompleteRunError, "same_domain_ratio"):
+                validate_completed_run(run)
 
     def test_admission_evidence_summary_is_recomputed_and_tamper_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -23,7 +23,7 @@ from typing import Any
 
 import torch
 
-from memory.structured_memory import FlatRetrievalBatch, StructuredGradientMemory
+from memory.structured_memory import FlatRetrievalBatch, RetrievalBatch, StructuredGradientMemory
 from models.ModelForBySampleTTA import CLIPModelForBySampleTTA
 from routing.online_prototypes import OnlinePrototypeRouter
 
@@ -71,6 +71,43 @@ def aggregate_unbalanced_gradients(retrieval: FlatRetrievalBatch, beta: float) -
     return summed / counts.clamp_min(1).to(summed.dtype).unsqueeze(-1), counts
 
 
+def core_support_composition_diagnostics(
+    retrieval: RetrievalBatch, *, beta: float, num_classes: int
+) -> dict[str, torch.Tensor]:
+    """Return support-only diagnostics without using any oracle metadata.
+
+    ``support_item_ids`` and ``support_valid_mask`` retain the class-balanced
+    retrieval layout ``[batch, class, rank]`` so an evaluator with domain
+    labels can independently reconstruct support purity.  ESS uses exactly
+    the entropy/distance weights of ``aggregate_class_balanced_gradients``.
+    """
+    if beta < 0:
+        raise ValueError("beta must be non-negative")
+    if not isinstance(num_classes, int) or isinstance(num_classes, bool) or num_classes <= 0:
+        raise ValueError("num_classes must be a positive integer")
+    valid = retrieval.valid_mask
+    returned_support_count = valid.sum(dim=(1, 2)).to(torch.long)
+    active_class_count = valid.any(dim=2).sum(dim=1).to(torch.long)
+    distance_weights = torch.where(
+        valid, torch.exp(-float(beta) * retrieval.distances), torch.zeros_like(retrieval.distances)
+    )
+    weights = torch.exp(-retrieval.entropies) * distance_weights
+    weight_sum = weights.sum(dim=(1, 2))
+    effective_sample_size = torch.where(
+        returned_support_count > 0,
+        weight_sum.square() / weights.square().sum(dim=(1, 2)).clamp_min(torch.finfo(weights.dtype).tiny),
+        torch.zeros_like(weight_sum),
+    )
+    return {
+        "returned_support_count": returned_support_count,
+        "active_class_count": active_class_count,
+        "class_coverage": active_class_count.to(torch.float32) / float(num_classes),
+        "effective_sample_size": effective_sample_size,
+        "support_item_ids": retrieval.item_ids.detach().clone(),
+        "support_valid_mask": valid.detach().clone(),
+    }
+
+
 def causal_active_context_counts(contexts_before_batch: int, spawned: torch.Tensor) -> torch.Tensor:
     """Return the active-router-context count after each sequential item."""
     if not isinstance(contexts_before_batch, int) or isinstance(contexts_before_batch, bool) \
@@ -95,7 +132,10 @@ def update_and_retrieve_support_causal_batch(
     beta: float,
     selection: str,
     random_seed: int = 0,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    return_composition: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict[str, torch.Tensor]
+]:
     """Process a batch in stream order, preventing all future-item reads.
 
     Historical-only retrieval occurs before insertion.  This matters at full
@@ -104,6 +144,7 @@ def update_and_retrieve_support_causal_batch(
     afterwards, so externally visible state still advances one item at a time.
     """
     retrieved, support_counts, memory_sizes, memory_bytes = [], [], [], []
+    composition_metrics: dict[str, list[torch.Tensor]] = {}
     for index in range(features.shape[0]):
         current = slice(index, index + 1)
         kwargs: dict[str, Any] = {}
@@ -120,6 +161,12 @@ def update_and_retrieve_support_causal_batch(
                 current_item_ids=item_ids[current],
             )
             item_gradient, item_count = aggregate_class_balanced_gradients(support, beta)
+            if return_composition:
+                composition = core_support_composition_diagnostics(
+                    support, beta=beta, num_classes=memory.num_classes
+                )
+                for name, value in composition.items():
+                    composition_metrics.setdefault(name, []).append(value)
         else:
             support = memory.query_flat(
                 features[current], topk, selection=selection, include_current=include_current,
@@ -133,12 +180,17 @@ def update_and_retrieve_support_causal_batch(
         support_counts.append(item_count)
         memory_sizes.append(memory.size)
         memory_bytes.append(memory.retained_bytes)
-    return (
+    result = (
         torch.cat(retrieved, dim=0),
         torch.cat(support_counts, dim=0),
         torch.tensor(memory_sizes, device=features.device, dtype=torch.long),
         torch.tensor(memory_bytes, device=features.device, dtype=torch.long),
     )
+    if not return_composition:
+        return result
+    if selection != "class_balanced":
+        raise ValueError("core support composition requires class_balanced selection")
+    return (*result, {name: torch.cat(values, dim=0) for name, values in composition_metrics.items()})
 
 
 class SupportSelectionRamen(TTABase):
@@ -192,14 +244,20 @@ class SupportSelectionRamen(TTABase):
             entropies = softmax_entropy(logits, reduction="none")
             item_ids = torch.arange(self.counter, self.counter + batch_size, device=self.device, dtype=torch.long)
             self.counter += batch_size
-            retrieved, support_counts, memory_sizes, memory_bytes = update_and_retrieve_support_causal_batch(
+            result = update_and_retrieve_support_causal_batch(
                 self.memory, features, gradients, predicted_classes, contexts, entropies, item_ids,
                 topk=self.cfg["topk"], include_current=self.cfg["include_current"], beta=self.cfg["beta"],
                 selection=self.support_selection, random_seed=self.cfg.get("random_seed", 0),
+                return_composition=self.support_selection == "class_balanced",
             )
+            if self.support_selection == "class_balanced":
+                retrieved, support_counts, memory_sizes, memory_bytes, composition = result
+            else:
+                retrieved, support_counts, memory_sizes, memory_bytes = result
+                composition = None
             self.model.set_by_sample_grad(retrieved)
             self.last_diagnostics = self._diagnostics(
-                routing, contexts, support_counts, memory_sizes, memory_bytes, active_contexts
+                routing, contexts, support_counts, memory_sizes, memory_bytes, active_contexts, composition
             )
         self.model.step_and_zero_grad()
         with torch.no_grad():
@@ -223,9 +281,9 @@ class SupportSelectionRamen(TTABase):
 
     def _diagnostics(
         self, routing=None, contexts=None, support_counts=None, memory_sizes=None, memory_bytes=None,
-        active_contexts=None,
+        active_contexts=None, composition=None,
     ):
-        return {
+        diagnostics = {
             "support_selection": self.support_selection,
             "memory_size": self.memory.size if memory_sizes is None else memory_sizes.detach().clone(),
             "memory_bytes": self.memory.retained_bytes if memory_bytes is None else memory_bytes.detach().clone(),
@@ -241,6 +299,15 @@ class SupportSelectionRamen(TTABase):
             "support_count": None if support_counts is None else support_counts.detach().clone(),
             "spawned": None if routing is None else routing.spawned.detach().clone(),
         }
+        if self.support_selection == "class_balanced":
+            diagnostics.update({
+                "returned_support_count": None, "active_class_count": None,
+                "class_coverage": None, "effective_sample_size": None,
+                "support_item_ids": None, "support_valid_mask": None,
+            })
+            if composition is not None:
+                diagnostics.update({name: value.detach().clone() for name, value in composition.items()})
+        return diagnostics
 
 
 class RandomMemoryRamen(SupportSelectionRamen):
