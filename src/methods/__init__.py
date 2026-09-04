@@ -4,6 +4,10 @@ from .Ramen import Ramen
 from .LatentRamen import LatentRamen
 from .EntropyGatedLatentRamen import EntropyGatedLatentRamen
 from .OracleLatentRamen import OracleLatentRamen
+from .SoftRoutingRamen import LatentHardRamen, OracleSoftRankRamen
+
+# Explicit Phase-1 control name; retain OracleLatentRamen for old manifests.
+OracleHardRamen = OracleLatentRamen
 from .SupportAblations import (
     CausalRamen,
     ContextOnlyRamen,

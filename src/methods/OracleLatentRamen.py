@@ -17,6 +17,7 @@ from memory.structured_memory import StructuredGradientMemory
 from models.ModelForBySampleTTA import CLIPModelForBySampleTTA
 
 from .LatentRamen import aggregate_class_balanced_gradients, validate_latent_ramen_config
+from .SupportAblations import core_support_composition_diagnostics
 from .TTABase import TTABase
 from .losses import softmax_entropy
 
@@ -90,11 +91,15 @@ def update_and_retrieve_oracle_causal_batch(
     include_current: bool,
     beta: float,
     seen_contexts: set[int] | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    return_composition: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict[str, torch.Tensor]
+]:
     """Causally insert/retrieve with exact per-item retained-memory evidence."""
     if seen_contexts is None:
         seen_contexts = set()
     retrieved, class_counts, memory_sizes, memory_bytes, active_contexts = [], [], [], [], []
+    composition_metrics: dict[str, list[torch.Tensor]] = {}
     for index in range(features.shape[0]):
         item_slice = slice(index, index + 1)
         memory.add(
@@ -107,18 +112,35 @@ def update_and_retrieve_oracle_causal_batch(
             include_current=include_current, current_item_ids=item_ids[item_slice],
         )
         item_gradient, item_class_count = aggregate_class_balanced_gradients(support, beta)
+        if return_composition:
+            composition = core_support_composition_diagnostics(
+                support, beta=beta, num_classes=memory.num_classes
+            )
+            valid = support.valid_mask
+            support_count = composition["returned_support_count"].to(torch.float32)
+            same_count = (valid & (support.contexts == contexts[item_slice].view(1, 1, 1))).sum(
+                dim=(1, 2)
+            ).to(torch.float32)
+            safe_count = support_count.clamp_min(1)
+            composition["same_domain_ratio"] = same_count / safe_count
+            composition["cross_domain_ratio"] = (support_count - same_count) / safe_count
+            for name, value in composition.items():
+                composition_metrics.setdefault(name, []).append(value)
         retrieved.append(item_gradient)
         class_counts.append(item_class_count)
         memory_sizes.append(memory.size)
         memory_bytes.append(memory.retained_bytes)
         active_contexts.append(len(seen_contexts))
-    return (
+    result = (
         torch.cat(retrieved, dim=0),
         torch.cat(class_counts, dim=0),
         torch.tensor(memory_sizes, device=features.device, dtype=torch.long),
         torch.tensor(memory_bytes, device=features.device, dtype=torch.long),
         torch.tensor(active_contexts, device=features.device, dtype=torch.long),
     )
+    if not return_composition:
+        return result
+    return (*result, {name: torch.cat(values, dim=0) for name, values in composition_metrics.items()})
 
 
 class OracleLatentRamen(OracleDomainContextHook, TTABase):
@@ -154,14 +176,16 @@ class OracleLatentRamen(OracleDomainContextHook, TTABase):
             item_ids = torch.arange(self.counter, self.counter + batch_size,
                                     device=self.device, dtype=torch.long)
             self.counter += batch_size
-            retrieved, active_classes, memory_sizes, memory_bytes, active_contexts = update_and_retrieve_oracle_causal_batch(
+            (retrieved, active_classes, memory_sizes, memory_bytes, active_contexts,
+             composition) = update_and_retrieve_oracle_causal_batch(
                 self.memory, features, gradients, predicted_classes, contexts, entropies, item_ids,
                 topk=self.cfg["topk"], include_current=self.cfg["include_current"], beta=self.cfg["beta"],
                 seen_contexts=self._seen_oracle_contexts,
+                return_composition=True,
             )
             self.model.set_by_sample_grad(retrieved)
             self.last_diagnostics = self._diagnostics(
-                contexts, active_classes, memory_sizes, memory_bytes, active_contexts
+                contexts, active_classes, memory_sizes, memory_bytes, active_contexts, composition
             )
 
         self.model.step_and_zero_grad()
@@ -188,9 +212,9 @@ class OracleLatentRamen(OracleDomainContextHook, TTABase):
 
     def _diagnostics(
         self, contexts=None, active_classes=None, memory_sizes=None,
-        memory_bytes=None, active_contexts=None,
+        memory_bytes=None, active_contexts=None, composition=None,
     ):
-        return {
+        diagnostics = {
             "inferred_context": None if contexts is None else contexts.detach().clone(),
             "memory_size": self.memory.size if memory_sizes is None else memory_sizes.detach().clone(),
             "num_active_contexts": (
@@ -205,3 +229,12 @@ class OracleLatentRamen(OracleDomainContextHook, TTABase):
             "memory_capacity_scope": self.memory.capacity_scope,
             "memory_max_capacity": self.memory.max_capacity,
         }
+        diagnostics.update({
+            "returned_support_count": None, "active_class_count": None,
+            "class_coverage": None, "same_domain_ratio": None,
+            "cross_domain_ratio": None, "effective_sample_size": None,
+            "support_item_ids": None, "support_valid_mask": None,
+        })
+        if composition is not None:
+            diagnostics.update({name: value.detach().clone() for name, value in composition.items()})
+        return diagnostics

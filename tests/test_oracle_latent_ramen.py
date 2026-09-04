@@ -132,6 +132,44 @@ class OracleLatentRamenPureTests(unittest.TestCase):
         self.assertEqual([32, 64, 96], diagnostics["memory_bytes"].tolist())
         self.assertEqual([1, 1, 2], diagnostics["num_active_contexts"].tolist())
 
+    def test_hard_oracle_composition_reports_purity_and_coverage_loss(self):
+        memory = StructuredGradientMemory(2, 4, 1, 1, device="cpu", capacity_scope="per_class")
+        result = update_and_retrieve_oracle_causal_batch(
+            memory,
+            features=torch.tensor([[0.], [10.], [20.]]),
+            gradients=torch.tensor([[1.], [2.], [3.]]),
+            predicted_classes=torch.tensor([0, 0, 0]),
+            contexts=torch.tensor([4, 4, 9]),
+            entropies=torch.zeros(3), item_ids=torch.tensor([0, 1, 2]), topk=1,
+            include_current=False, beta=0., return_composition=True,
+        )
+        *_, composition = result
+        self.assertEqual([0, 1, 0], composition["returned_support_count"].tolist())
+        self.assertEqual([0, 1, 0], composition["active_class_count"].tolist())
+        self.assertEqual([0., .5, 0.], composition["class_coverage"].tolist())
+        self.assertEqual([0., 1., 0.], composition["same_domain_ratio"].tolist())
+        self.assertEqual([0., 0., 0.], composition["cross_domain_ratio"].tolist())
+        self.assertEqual([0., 1., 0.], composition["effective_sample_size"].tolist())
+        self.assertEqual((3, 2, 1), tuple(composition["support_item_ids"].shape))
+        self.assertEqual(torch.bool, composition["support_valid_mask"].dtype)
+        self.assertEqual([0], composition["support_item_ids"][1, 0, :].tolist())
+        self.assertTrue(composition["support_valid_mask"][1, 0, 0])
+        self.assertFalse(composition["support_valid_mask"][1, 1, 0])
+
+        method = object.__new__(OracleLatentRamen)
+        method.memory = memory
+        method._seen_oracle_contexts = {4, 9}
+        diagnostics = method._diagnostics(composition=composition)
+        self.assertEqual([0., 1., 0.], diagnostics["same_domain_ratio"].tolist())
+        self.assertTrue(torch.equal(composition["support_valid_mask"], diagnostics["support_valid_mask"]))
+
+    def test_hard_oracle_diagnostics_exclude_soft_only_context_strength(self):
+        method = object.__new__(OracleLatentRamen)
+        method.memory = StructuredGradientMemory(1, 1, 1, 1, device="cpu")
+        method._seen_oracle_contexts = set()
+        diagnostics = method._diagnostics()
+        self.assertNotIn("context_strength", diagnostics)
+
     def test_observed_context_count_survives_per_class_memory_eviction(self):
         memory = StructuredGradientMemory(
             1, 1, 1, 1, device="cpu", capacity_scope="per_class",

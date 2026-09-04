@@ -7,7 +7,9 @@ set for a query's inferred context.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
+from numbers import Real
 from typing import Dict, List, Tuple
 
 import torch
@@ -40,6 +42,7 @@ class RetrievalBatch:
     recencies: torch.Tensor
     reliabilities: torch.Tensor
     item_ids: torch.Tensor
+    contexts: torch.Tensor
     distances: torch.Tensor
     valid_mask: torch.Tensor
 
@@ -265,6 +268,7 @@ class StructuredGradientMemory:
             recencies=torch.zeros(shape, device=self.device, dtype=torch.long),
             reliabilities=torch.zeros(shape, device=self.device, dtype=torch.float32),
             item_ids=torch.full(shape, -1, device=self.device, dtype=torch.long),
+            contexts=torch.full(shape, -1, device=self.device, dtype=torch.long),
             distances=torch.full(shape, float("inf"), device=self.device, dtype=torch.float32),
             valid_mask=torch.zeros(shape, device=self.device, dtype=torch.bool),
         )
@@ -288,6 +292,97 @@ class StructuredGradientMemory:
                     result.recencies[batch_index, predicted_class, rank] = item.recency
                     result.reliabilities[batch_index, predicted_class, rank] = item.reliability
                     result.item_ids[batch_index, predicted_class, rank] = item.item_id
+                    result.contexts[batch_index, predicted_class, rank] = context
+                    result.distances[batch_index, predicted_class, rank] = distances[candidate_index]
+                    result.valid_mask[batch_index, predicted_class, rank] = True
+        return result
+
+    def query_class_balanced_global(
+        self,
+        features: torch.Tensor,
+        topk: int,
+        *,
+        query_contexts: torch.Tensor | int,
+        context_strength: float = 0.0,
+        include_current: bool = True,
+        current_item_ids: torch.Tensor | int | None = None,
+    ) -> RetrievalBatch:
+        """Retrieve global, class-balanced support with a soft context bonus.
+
+        Every live item for a predicted class remains eligible.  Matching the
+        query context only reduces its ranking distance by ``context_strength``;
+        returned distances are always the original feature distances so callers
+        retain the standard aggregation behavior.
+        """
+        if not isinstance(topk, int) or isinstance(topk, bool) or topk <= 0:
+            raise ValueError("topk must be a positive integer")
+        if (not isinstance(context_strength, Real) or isinstance(context_strength, bool)
+                or not math.isfinite(float(context_strength)) or context_strength < 0):
+            raise ValueError("context_strength must be finite and non-negative")
+        features = self._matrix(features, "features", self.feature_dim)
+        batch_size = features.shape[0]
+        query_contexts = self._integer_vector(query_contexts, "query_contexts", batch_size)
+        if bool((query_contexts < 0).any()):
+            raise ValueError("query_contexts must be non-negative")
+        if not include_current and current_item_ids is None:
+            raise ValueError("current_item_ids is required when include_current=False")
+        current_ids = None if current_item_ids is None else self._integer_vector(
+            current_item_ids, "current_item_ids", batch_size
+        )
+
+        shape = (batch_size, self.num_classes, topk)
+        result = RetrievalBatch(
+            features=torch.zeros(*shape, self.feature_dim, device=self.device, dtype=self.dtype),
+            gradients=torch.zeros(*shape, self.gradient_dim, device=self.device, dtype=self.dtype),
+            entropies=torch.zeros(shape, device=self.device, dtype=torch.float32),
+            recencies=torch.zeros(shape, device=self.device, dtype=torch.long),
+            reliabilities=torch.zeros(shape, device=self.device, dtype=torch.float32),
+            item_ids=torch.full(shape, -1, device=self.device, dtype=torch.long),
+            contexts=torch.full(shape, -1, device=self.device, dtype=torch.long),
+            distances=torch.full(shape, float("inf"), device=self.device, dtype=torch.float32),
+            valid_mask=torch.zeros(shape, device=self.device, dtype=torch.bool),
+        )
+
+        # Stable ID order makes feature-distance ties deterministic across
+        # dictionary/context-bucket insertion order.
+        candidates_by_class = {
+            predicted_class: sorted(
+                ((context, item) for (klass, context), bucket in self._buckets.items()
+                 if klass == predicted_class for item in bucket),
+                key=lambda candidate: int(candidate[1].item_id),
+            )
+            for predicted_class in range(self.num_classes)
+        }
+        for batch_index in range(batch_size):
+            query_context = int(query_contexts[batch_index])
+            for predicted_class, all_candidates in candidates_by_class.items():
+                candidates = all_candidates
+                if current_ids is not None and not include_current:
+                    candidates = [candidate for candidate in candidates
+                                  if int(candidate[1].item_id) != int(current_ids[batch_index])]
+                if not candidates:
+                    continue
+                candidate_features = torch.stack([item.feature for _, item in candidates]).float()
+                distances = torch.linalg.vector_norm(candidate_features - features[batch_index].float(), dim=1)
+                if context_strength == 0:
+                    ranking_distances = distances
+                else:
+                    same_context = torch.tensor(
+                        [context == query_context for context, _ in candidates],
+                        device=self.device,
+                        dtype=distances.dtype,
+                    )
+                    ranking_distances = distances - float(context_strength) * same_context
+                order = torch.argsort(ranking_distances, stable=True)[:topk]
+                for rank, candidate_index in enumerate(order.tolist()):
+                    candidate_context, item = candidates[candidate_index]
+                    result.features[batch_index, predicted_class, rank] = item.feature
+                    result.gradients[batch_index, predicted_class, rank] = item.gradient
+                    result.entropies[batch_index, predicted_class, rank] = item.entropy
+                    result.recencies[batch_index, predicted_class, rank] = item.recency
+                    result.reliabilities[batch_index, predicted_class, rank] = item.reliability
+                    result.item_ids[batch_index, predicted_class, rank] = item.item_id
+                    result.contexts[batch_index, predicted_class, rank] = candidate_context
                     result.distances[batch_index, predicted_class, rank] = distances[candidate_index]
                     result.valid_mask[batch_index, predicted_class, rank] = True
         return result

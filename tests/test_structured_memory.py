@@ -137,7 +137,62 @@ class StructuredGradientMemoryTests(unittest.TestCase):
         self.assertTrue(result.valid_mask[0, 1, 0])
         self.assertEqual(1, result.item_ids[0, 0, 0].item())
         self.assertEqual(3, result.item_ids[0, 1, 0].item())
+        self.assertEqual(3, result.contexts[0, 0, 0].item())
+        self.assertEqual(-1, result.contexts[0, 2, 0].item())
         self.assertFalse(result.valid_mask[0, 2].any())
+
+    def test_global_soft_query_keeps_cross_context_candidates_eligible(self):
+        memory = self.make_memory()
+        self.add(memory, [[4, 0], [1, 0]], [0, 0], [1, 2])
+        result = memory.query_class_balanced_global(
+            torch.tensor([[0.0, 0.0]]), topk=2, query_contexts=1, context_strength=.5,
+        )
+        self.assertEqual([1, 0], result.item_ids[0, 0][result.valid_mask[0, 0]].tolist())
+        self.assertEqual([2, 1], result.contexts[0, 0][result.valid_mask[0, 0]].tolist())
+        self.assertTrue(torch.allclose(result.distances[0, 0, :2], torch.tensor([1., 4.])))
+
+    def test_global_soft_query_prefers_matching_context_on_a_feature_tie(self):
+        memory = self.make_memory()
+        self.add(memory, [[1, 0], [-1, 0]], [0, 0], [2, 7])
+        result = memory.query_class_balanced_global(
+            torch.tensor([[0.0, 0.0]]), topk=1, query_contexts=7, context_strength=.1,
+        )
+        self.assertEqual([1], result.item_ids[0, 0][result.valid_mask[0, 0]].tolist())
+        self.assertEqual([7], result.contexts[0, 0][result.valid_mask[0, 0]].tolist())
+        self.assertEqual(1., result.distances[0, 0, 0].item())
+
+    def test_global_soft_query_zero_strength_uses_global_feature_order_per_class(self):
+        memory = self.make_memory()
+        self.add(memory, [[1, 0], [-1, 0], [2, 0], [3, 0]], [0, 0, 1, 1], [9, 2, 9, 2])
+        result = memory.query_class_balanced_global(
+            torch.tensor([[0.0, 0.0]]), topk=2, query_contexts=9, context_strength=0.,
+        )
+        self.assertEqual([0, 1], result.item_ids[0, 0][result.valid_mask[0, 0]].tolist())
+        self.assertEqual([2, 3], result.item_ids[0, 1][result.valid_mask[0, 1]].tolist())
+        self.assertEqual([9, 2], result.contexts[0, 0][result.valid_mask[0, 0]].tolist())
+
+    def test_global_soft_query_can_exclude_current_item(self):
+        memory = self.make_memory()
+        self.add(memory, [[0, 0], [1, 0]], [0, 0], [3, 9], item_ids=torch.tensor([40, 90]))
+        result = memory.query_class_balanced_global(
+            torch.tensor([[0.0, 0.0]]), topk=2, query_contexts=3,
+            include_current=False, current_item_ids=40,
+        )
+        self.assertEqual([90], result.item_ids[0, 0][result.valid_mask[0, 0]].tolist())
+        with self.assertRaises(ValueError):
+            memory.query_class_balanced_global(
+                torch.tensor([[0.0, 0.0]]), topk=1, query_contexts=3, include_current=False,
+            )
+
+    def test_global_soft_query_rejects_invalid_context_strength(self):
+        memory = self.make_memory()
+        for strength in (-.1, float("inf"), float("nan"), True):
+            with self.subTest(strength=strength):
+                with self.assertRaises(ValueError):
+                    memory.query_class_balanced_global(
+                        torch.tensor([[0.0, 0.0]]), topk=1, query_contexts=0,
+                        context_strength=strength,
+                    )
 
     def test_context_restriction_does_not_cross_contexts(self):
         memory = self.make_memory()

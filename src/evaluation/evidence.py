@@ -57,6 +57,24 @@ RETRIEVAL_PROFILE_TRACE_FIELDS = (
     "retrieval_returned_support_count",
     "retrieval_active_class_count",
 )
+# This is deliberately independent of retrieval timing profiling.  It records
+# the composition of the support actually selected by methods that expose it.
+# The extension is optional so evidence produced before soft-routing work
+# remains resumable under the v2 trace contract.
+SUPPORT_COMPOSITION_TRACE_FIELDS = (
+    "returned_support_count",
+    "active_class_count",
+    "class_coverage",
+    "same_domain_ratio",
+    "cross_domain_ratio",
+    "effective_sample_size",
+)
+SOFT_ROUTING_TRACE_FIELDS = (
+    "context_strength",
+    "selection_change_ratio",
+    "mean_context_bonus",
+    "mean_rank_displacement",
+)
 REFERENCE_IDENTITY_FIELDS = (
     "dataset",
     "model",
@@ -362,6 +380,33 @@ class JsonlTraceWriter:
             for field in RETRIEVAL_PROFILE_TRACE_FIELDS[2:]:
                 if not _is_nonnegative_integer(row[field]):
                     raise ValueError(f"{field} must be a non-negative integer")
+        composition_present = [field in row for field in SUPPORT_COMPOSITION_TRACE_FIELDS]
+        if any(composition_present) and not all(composition_present):
+            raise ValueError("support composition trace fields must be all present or all absent")
+        if all(composition_present):
+            for field in ("returned_support_count", "active_class_count"):
+                if not _is_nonnegative_integer(row[field]):
+                    raise ValueError(f"{field} must be a non-negative integer")
+            for field in ("class_coverage", "same_domain_ratio", "cross_domain_ratio"):
+                if not _is_finite_number(row[field], minimum=0.0, maximum=1.0):
+                    raise ValueError(f"{field} must be a finite probability")
+            expected_ratio_sum = 1.0 if row["returned_support_count"] else 0.0
+            if not math.isclose(
+                row["same_domain_ratio"] + row["cross_domain_ratio"],
+                expected_ratio_sum, rel_tol=0.0, abs_tol=1e-6,
+            ):
+                raise ValueError("same_domain_ratio and cross_domain_ratio disagree with support count")
+            if not _is_finite_number(row["effective_sample_size"], minimum=0.0):
+                raise ValueError("effective_sample_size must be a finite non-negative number")
+        soft_present = [field in row for field in SOFT_ROUTING_TRACE_FIELDS]
+        if any(soft_present) and not all(soft_present):
+            raise ValueError("soft routing trace fields must be all present or all absent")
+        if all(soft_present):
+            if not _is_finite_number(row["selection_change_ratio"], minimum=0.0, maximum=1.0):
+                raise ValueError("selection_change_ratio must be a finite probability")
+            for field in ("context_strength", "mean_context_bonus", "mean_rank_displacement"):
+                if not _is_finite_number(row[field], minimum=0.0):
+                    raise ValueError(f"{field} must be a finite non-negative number")
         memory_bytes = row["memory_bytes"]
         if memory_bytes is not None and (
             not isinstance(memory_bytes, int)

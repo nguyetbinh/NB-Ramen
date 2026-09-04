@@ -8,6 +8,7 @@ import random
 import yaml
 import csv
 import json
+import math
 import re
 import time
 import statistics
@@ -139,7 +140,7 @@ def _method_diagnostics(tta_model, batch_size):
             return list(value)
         return [value] * batch_size
 
-    return {
+    result = {
         'inferred_context': expand('inferred_context'),
         'memory_size': expand('memory_size', 0),
         'num_active_contexts': expand('num_active_contexts'),
@@ -157,6 +158,55 @@ def _method_diagnostics(tta_model, batch_size):
         'retrieval_returned_support_count': expand('retrieval_returned_support_count'),
         'retrieval_active_class_count': expand('retrieval_active_class_count'),
     }
+    support_fields = (
+        'returned_support_count', 'active_class_count', 'class_coverage',
+        'same_domain_ratio', 'cross_domain_ratio', 'effective_sample_size',
+    )
+    # Support composition is an atomic optional extension.  Do not reuse the
+    # similarly named timing-profile counters: they describe instrumentation,
+    # whereas these describe the selected support set.
+    result.update({field: expand(field) for field in support_fields})
+    soft_fields = (
+        'context_strength', 'selection_change_ratio', 'mean_context_bonus',
+        'mean_rank_displacement',
+    )
+    result.update({field: expand(field) for field in soft_fields})
+    # Evaluator-only reconstruction inputs.  They are consumed below and are
+    # intentionally excluded from every persisted trace and summary field set.
+    result['support_item_ids'] = expand('support_item_ids')
+    result['support_valid_mask'] = expand('support_valid_mask')
+    return result
+
+
+def _evaluator_support_domain_ratios(item_ids, valid_mask, known_domains, query_item_id):
+    """Reconstruct support-domain ratios without exposing labels to a method."""
+    selected_ids = []
+
+    def visit(ids, masks):
+        ids_nested = isinstance(ids, (list, tuple))
+        masks_nested = isinstance(masks, (list, tuple))
+        if ids_nested or masks_nested:
+            if not ids_nested or not masks_nested or len(ids) != len(masks):
+                raise ValueError('support_item_ids and support_valid_mask must have identical shapes')
+            for child_ids, child_masks in zip(ids, masks):
+                visit(child_ids, child_masks)
+            return
+        if not isinstance(masks, bool):
+            raise ValueError('support_valid_mask must contain booleans')
+        if not isinstance(ids, int) or isinstance(ids, bool):
+            raise ValueError('support_item_ids must contain integers')
+        if masks:
+            if ids < 0 or ids > query_item_id or ids >= len(known_domains):
+                raise ValueError('support_item_ids contains an unknown or future item ID')
+            selected_ids.append(ids)
+
+    visit(item_ids, valid_mask)
+    if not selected_ids:
+        return 0.0, 0.0
+    query_domain = known_domains[query_item_id]
+    same = sum(known_domains[item_id] == query_domain for item_id in selected_ids)
+    same_ratio = same / len(selected_ids)
+    return same_ratio, 1.0 - same_ratio
 
 
 def _provide_oracle_domain_context(tta_model, domain_idx):
@@ -269,6 +319,11 @@ def ordered_stream_test(
     admission_fields_available = None
     retrieval_profile_rows = []
     retrieval_profile_available = None
+    support_composition_rows = []
+    support_composition_available = None
+    soft_routing_rows = []
+    soft_routing_available = None
+    method_domain_history = []
     memory_tracker = DeviceMemoryTracker(args.device)
     memory_tracker.start()
 
@@ -364,6 +419,57 @@ def ordered_stream_test(
                     retrieval_profile_available = batch_profile_available
                 elif retrieval_profile_available != batch_profile_available:
                     raise ValueError('retrieval profile diagnostics availability changed within one run')
+                support_fields = (
+                    'returned_support_count', 'active_class_count', 'class_coverage',
+                    'same_domain_ratio', 'cross_domain_ratio', 'effective_sample_size',
+                )
+                soft_fields = (
+                    'context_strength', 'selection_change_ratio', 'mean_context_bonus',
+                    'mean_rank_displacement',
+                )
+                item_ids = diagnostics['support_item_ids']
+                valid_masks = diagnostics['support_valid_mask']
+                raw_support_available = {
+                    value is not None for values in (item_ids, valid_masks) for value in values
+                }
+                if raw_support_available not in ({False}, {True}):
+                    raise ValueError('support item IDs and masks must be available for every sample or unavailable for every sample')
+                if raw_support_available == {True}:
+                    known_domains = method_domain_history + domains
+                    for offset, (ids, mask) in enumerate(zip(item_ids, valid_masks)):
+                        same_ratio, cross_ratio = _evaluator_support_domain_ratios(
+                            ids, mask, known_domains, len(method_domain_history) + offset,
+                        )
+                        for field, computed in (
+                            ('same_domain_ratio', same_ratio), ('cross_domain_ratio', cross_ratio),
+                        ):
+                            supplied = diagnostics[field][offset]
+                            if supplied is not None and (
+                                not isinstance(supplied, (int, float))
+                                or isinstance(supplied, bool)
+                                or not math.isfinite(supplied)
+                                or not math.isclose(float(supplied), computed, rel_tol=0.0, abs_tol=1e-6)
+                            ):
+                                raise ValueError(f'diagnostic {field!r} disagrees with evaluator reconstruction')
+                            diagnostics[field][offset] = computed
+                support_available = {value is not None for field in support_fields for value in diagnostics[field]}
+                if support_available not in ({False}, {True}):
+                    raise ValueError('support composition diagnostics must be available for every sample or unavailable for every sample')
+                batch_support_available = support_available == {True}
+                if batch_support_available and raw_support_available != {True}:
+                    raise ValueError('support composition diagnostics require support item IDs and masks for evaluator verification')
+                if support_composition_available is None:
+                    support_composition_available = batch_support_available
+                elif support_composition_available != batch_support_available:
+                    raise ValueError('support composition diagnostics availability changed within one run')
+                soft_available = {value is not None for field in soft_fields for value in diagnostics[field]}
+                if soft_available not in ({False}, {True}):
+                    raise ValueError('soft routing diagnostics must be available for every sample or unavailable for every sample')
+                batch_soft_available = soft_available == {True}
+                if soft_routing_available is None:
+                    soft_routing_available = batch_soft_available
+                elif soft_routing_available != batch_soft_available:
+                    raise ValueError('soft routing diagnostics availability changed within one run')
 
                 for offset in range(batch_size):
                     row = {
@@ -390,6 +496,12 @@ def ordered_stream_test(
                     if batch_profile_available:
                         row.update({field: diagnostics[field][offset] for field in profile_fields})
                         retrieval_profile_rows.append(row)
+                    if batch_support_available:
+                        row.update({field: diagnostics[field][offset] for field in support_fields})
+                        support_composition_rows.append(row)
+                    if batch_soft_available:
+                        row.update({field: diagnostics[field][offset] for field in soft_fields})
+                        soft_routing_rows.append(row)
                     trace_writer.write(row)
                     forward_latencies_ms.append(latency_ms)
                     if row['memory_bytes'] is not None:
@@ -407,8 +519,10 @@ def ordered_stream_test(
                             'accuracy': sum(window_values) / len(window_values),
                         })
                     timestep += 1
+                method_domain_history.extend(domains)
             if segments is not None and part_index < len(evaluation_parts) - 1:
                 tta_model.reset()
+                method_domain_history.clear()
     finally:
         trace_writer.close()
 
@@ -586,6 +700,52 @@ def ordered_stream_test(
             'admitted_contamination_rate': (
                 1.0 - pseudo_accuracy(admitted_rows) if admitted_rows else None
             ),
+        }
+    if support_composition_rows:
+        def support_distribution(field):
+            data = [row[field] for row in support_composition_rows]
+            ordered = sorted(data)
+            def percentile(fraction):
+                position = (len(ordered) - 1) * fraction
+                lower, upper = int(position), min(int(position) + 1, len(ordered) - 1)
+                return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+            return {'min': min(data), 'p50': percentile(.5), 'p95': percentile(.95), 'max': max(data)}
+        summary['support_composition_diagnostics'] = {
+            'status': 'computed',
+            'definition': 'per-query composition of the support selected for adaptation; independent of synchronized retrieval timing instrumentation',
+            'returned_support_count': support_distribution('returned_support_count'),
+            'active_class_count': support_distribution('active_class_count'),
+            'class_coverage': support_distribution('class_coverage'),
+            'same_domain_ratio': support_distribution('same_domain_ratio'),
+            'cross_domain_ratio': support_distribution('cross_domain_ratio'),
+            'effective_sample_size': support_distribution('effective_sample_size'),
+        }
+    else:
+        summary['support_composition_diagnostics'] = {
+            'status': 'unavailable',
+            'reason': 'method did not expose selected-support composition diagnostics',
+        }
+    if soft_routing_rows:
+        def soft_distribution(field):
+            data = [row[field] for row in soft_routing_rows]
+            ordered = sorted(data)
+            def percentile(fraction):
+                position = (len(ordered) - 1) * fraction
+                lower, upper = int(position), min(int(position) + 1, len(ordered) - 1)
+                return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+            return {'min': min(data), 'p50': percentile(.5), 'p95': percentile(.95), 'max': max(data)}
+        summary['soft_routing_diagnostics'] = {
+            'status': 'computed',
+            'definition': 'per-query influence of soft context-aware ranking relative to the gamma-zero ranking on identical memory',
+            'context_strength': soft_distribution('context_strength'),
+            'selection_change_ratio': soft_distribution('selection_change_ratio'),
+            'mean_context_bonus': soft_distribution('mean_context_bonus'),
+            'mean_rank_displacement': soft_distribution('mean_rank_displacement'),
+        }
+    else:
+        summary['soft_routing_diagnostics'] = {
+            'status': 'unavailable',
+            'reason': 'method did not expose soft-routing influence diagnostics',
         }
     write_summary(evidence_paths['summary'], summary)
 
