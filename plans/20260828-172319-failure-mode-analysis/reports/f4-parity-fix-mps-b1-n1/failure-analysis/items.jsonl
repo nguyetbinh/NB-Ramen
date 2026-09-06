@@ -1,0 +1,1 @@
+{"admitted":true,"context":0,"entropy":0.931640625,"evaluator_sample_identity":{"ground_truth_domain":13,"sample_idx":8656},"feature":{"dtype":"torch.float16","length":1024,"offset":0,"shape":[512]},"gradient":{"dtype":"torch.float32","length":159744,"offset":0,"shape":[39936]},"ground_truth_class":10,"item_id":0,"predicted_class":28,"producer_query_timestep":0,"segment_index":0}

@@ -1,0 +1,103 @@
+{
+  "device_memory": {
+    "bytes": null,
+    "kind": "unsupported",
+    "status": "not_applicable"
+  },
+  "domain_accuracies": {
+    "brightness": null,
+    "contrast": null,
+    "defocus_blur": null,
+    "elastic_transform": null,
+    "fog": null,
+    "frost": null,
+    "gaussian_noise": null,
+    "glass_blur": null,
+    "impulse_noise": null,
+    "jpeg_compression": null,
+    "motion_blur": null,
+    "pixelate": 0.25,
+    "shot_noise": null,
+    "snow": null,
+    "zoom_blur": null
+  },
+  "domain_sample_counts": {
+    "brightness": 0,
+    "contrast": 0,
+    "defocus_blur": 0,
+    "elastic_transform": 0,
+    "fog": 0,
+    "frost": 0,
+    "gaussian_noise": 0,
+    "glass_blur": 0,
+    "impulse_noise": 0,
+    "jpeg_compression": 0,
+    "motion_blur": 0,
+    "pixelate": 4,
+    "shot_noise": 0,
+    "snow": 0,
+    "zoom_blur": 0
+  },
+  "forward_latency": {
+    "definition": "per-sample share of synchronized tta_model forward wall-clock latency; includes adaptation and prediction",
+    "mean_per_sample_ms": 77.14515624684282,
+    "median_per_sample_ms": 73.95781250670552,
+    "status": "computed",
+    "total_ms": 308.58062498737127,
+    "unit": "milliseconds"
+  },
+  "macro_domain_accuracy": 0.25,
+  "method_memory": {
+    "final_retained_bytes": null,
+    "max_retained_bytes": null,
+    "reason": "method did not expose retained support-memory bytes",
+    "status": "unavailable",
+    "unit": "bytes"
+  },
+  "micro_accuracy": 0.25,
+  "negative_adaptation_rate": {
+    "reason": "pass --reference_trace from NoAdapt on the identical stream",
+    "status": "reference_required"
+  },
+  "num_samples": 4,
+  "peak_device_memory_bytes": null,
+  "post_shift_recovery_time": {
+    "definition": "full-window recovery within each persistent-domain episode",
+    "shifts": [],
+    "status": "computed",
+    "window_size": 4
+  },
+  "retrieval_latency": {
+    "reason": "retrieval is interleaved with causal insertion and adaptation; isolating it would require invasive instrumentation and device synchronization that would perturb the measured path",
+    "status": "unavailable"
+  },
+  "routing_diagnostics": {
+    "adjusted_rand_index": null,
+    "assignment_churn_rate": null,
+    "context_purity": null,
+    "normalized_mutual_information": null,
+    "number_of_discovered_contexts": null,
+    "status": "unavailable"
+  },
+  "run_id": "luna-v3-cpu-cifar100c-block-s0-b1-n4-noadapt-replay-v1",
+  "schema_version": 2,
+  "sliding_window": {
+    "stride": 4,
+    "values": [
+      {
+        "accuracy": 0.25,
+        "end_timestep": 3,
+        "start_timestep": 0
+      }
+    ],
+    "window_size": 4
+  },
+  "stream_fingerprint": "d9dd816b694e5dc8f187cec82fcd85899843fd135b89aaecd45e9615e04c37ba",
+  "throughput": {
+    "definition": "completed samples divided by total synchronized tta_model forward wall-clock latency",
+    "samples_per_second": 12.962576636701352,
+    "status": "computed",
+    "unit": "samples_per_second"
+  },
+  "worst_domain_accuracy": 0.25
+}

@@ -1,0 +1,56 @@
+{
+  "config": {
+    "counterfactual_thresholds": [
+      0.5,
+      0.75,
+      1.0
+    ]
+  },
+  "dimensions_dtypes": [
+    {
+      "dtype": "torch.float32",
+      "shape": [
+        512
+      ]
+    },
+    {
+      "dtype": "torch.float32",
+      "shape": [
+        39936
+      ]
+    }
+  ],
+  "files": {
+    "features.bin": {
+      "bytes": 2048,
+      "sha256": "7ea8488c7bb55dd3e37e8872791e4fa2b48a2bc77267f6885dfa11d4f2efcbc4"
+    },
+    "gradients.bin": {
+      "bytes": 159744,
+      "sha256": "3c5712591d63ad07863c81e9bb699fab71ee7a84112197d445ff7a3c00239d1a"
+    },
+    "items.jsonl": {
+      "bytes": 389,
+      "sha256": "1962341fba8a3141f17b00a715b4de6ec6033400ce46d16ae6f840461c072b1b"
+    },
+    "queries.jsonl": {
+      "bytes": 2389,
+      "sha256": "ee786057cbea18072eebe10bd950cda0209bf8b5f3d9d5be7d2a76b84a68214f"
+    }
+  },
+  "limits": {
+    "max_bytes": 268435456,
+    "max_samples": 1
+  },
+  "manifest_sha256": "cb94f410787e051fc324547d0186d7c0d6d89286f2fb85cea6880bd56eee3ddc",
+  "profile": "replay_v1",
+  "row_counts": {
+    "items": 1,
+    "queries": 1
+  },
+  "run_id": "f4-parity-fix-cpu-b1-n1",
+  "schema_version": "replay_v1",
+  "source_fingerprint": "7cbf48301ce4cb6d401c99122087a10f74b8376e4d920eb8e01d7e8887c4d2e1",
+  "status": "completed",
+  "stream_fingerprint": "fe6897f0bb36d7904df1a14a92214fd7fb8657064beefa78c2ed5ccc5cbb1231"
+}
