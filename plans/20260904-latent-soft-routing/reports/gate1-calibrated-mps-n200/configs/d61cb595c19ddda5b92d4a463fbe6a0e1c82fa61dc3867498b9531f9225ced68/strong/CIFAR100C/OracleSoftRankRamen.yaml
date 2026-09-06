@@ -1,0 +1,14 @@
+{
+  "beta": 5.0,
+  "calibration_id": "d61cb595c19ddda5b92d4a463fbe6a0e1c82fa61dc3867498b9531f9225ced68",
+  "calibration_strength": "strong",
+  "capacity_scope": "per_class",
+  "gamma": 0.057242561131715775,
+  "include_current": true,
+  "lr": 0.01,
+  "max_capacity": 750,
+  "optimizer": "signsgd",
+  "oracle_context_source": "evaluator_domain_idx",
+  "profile_replacement_margins": false,
+  "topk": 5
+}

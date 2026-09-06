@@ -1,0 +1,194 @@
+{
+  "device_memory": {
+    "bytes": 395231232,
+    "kind": "sampled_post_batch_maximum",
+    "status": "sampled"
+  },
+  "domain_accuracies": {
+    "brightness": null,
+    "contrast": null,
+    "defocus_blur": null,
+    "elastic_transform": null,
+    "fog": null,
+    "frost": null,
+    "gaussian_noise": null,
+    "glass_blur": null,
+    "impulse_noise": null,
+    "jpeg_compression": null,
+    "motion_blur": null,
+    "pixelate": 0.0,
+    "shot_noise": null,
+    "snow": null,
+    "zoom_blur": null
+  },
+  "domain_sample_counts": {
+    "brightness": 0,
+    "contrast": 0,
+    "defocus_blur": 0,
+    "elastic_transform": 0,
+    "fog": 0,
+    "frost": 0,
+    "gaussian_noise": 0,
+    "glass_blur": 0,
+    "impulse_noise": 0,
+    "jpeg_compression": 0,
+    "motion_blur": 0,
+    "pixelate": 2,
+    "shot_noise": 0,
+    "snow": 0,
+    "zoom_blur": 0
+  },
+  "forward_latency": {
+    "definition": "per-sample share of synchronized tta_model forward wall-clock latency; includes adaptation and prediction",
+    "mean_per_sample_ms": 5698.337375011761,
+    "median_per_sample_ms": 5698.337375011761,
+    "status": "computed",
+    "total_ms": 11396.674750023521,
+    "unit": "milliseconds"
+  },
+  "macro_domain_accuracy": 0.0,
+  "method_memory": {
+    "definition": "exact bytes retained by the method support memory after each causal sample update",
+    "final_retained_bytes": 161840,
+    "max_retained_bytes": 161840,
+    "status": "computed",
+    "unit": "bytes"
+  },
+  "micro_accuracy": 0.0,
+  "negative_adaptation_rate": {
+    "negative_windows": 0,
+    "reference_trace": "/Users/admin/Documents/NB-Ramen/plans/20260904-latent-soft-routing/reports/smoke-mps-n2/cifar100c-block-seed-0-noadapt-dev-mps-n2-cfg-a05da3c15a1d-prov-fast-data-6dbea801cbad/trace.jsonl",
+    "status": "computed",
+    "stride": 2,
+    "total_windows": 1,
+    "value": 0.0,
+    "window_size": 2
+  },
+  "num_samples": 2,
+  "peak_device_memory_bytes": null,
+  "post_shift_recovery_time": {
+    "definition": "full-window recovery within each persistent-domain episode",
+    "shifts": [],
+    "status": "computed",
+    "window_size": 2
+  },
+  "replacement_margin_profile": {
+    "definition": "per-query sorted gamma-zero same-domain replacement margins for candidates outside the class-wise top-k",
+    "num_queries": 2,
+    "per_query_candidate_count": {
+      "max": 0,
+      "min": 0,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "queries_with_replacement_candidates": 0,
+    "replacement_margin_count": 0,
+    "replacement_margin_p10": null,
+    "replacement_margin_p25": null,
+    "replacement_margin_p50": null,
+    "replacement_margin_p75": null,
+    "replacement_margin_p90": null,
+    "status": "computed"
+  },
+  "retrieval_latency": {
+    "reason": "retrieval is interleaved with causal insertion and adaptation; isolating it would require invasive instrumentation and device synchronization that would perturb the measured path",
+    "status": "unavailable"
+  },
+  "routing_diagnostics": {
+    "adjusted_rand_index": 1.0,
+    "assignment_churn_rate": 0.0,
+    "context_purity": 1.0,
+    "normalized_mutual_information": 1.0,
+    "number_of_discovered_contexts": 1,
+    "status": "available"
+  },
+  "run_id": "cifar100c-block-seed-0-oraclesoftrankramen-dev-mps-n2-cfg-95a4521bb101-prov-fast-data-6dbea801cbad",
+  "schema_version": 2,
+  "sliding_window": {
+    "stride": 2,
+    "values": [
+      {
+        "accuracy": 0.0,
+        "end_timestep": 1,
+        "start_timestep": 0
+      }
+    ],
+    "window_size": 2
+  },
+  "soft_routing_diagnostics": {
+    "context_strength": {
+      "max": 0.0,
+      "min": 0.0,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "definition": "per-query influence of soft context-aware ranking relative to the gamma-zero ranking on identical memory",
+    "mean_context_bonus": {
+      "max": 0.0,
+      "min": 0.0,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "mean_rank_displacement": {
+      "max": 0.0,
+      "min": 0.0,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "selection_change_ratio": {
+      "max": 0.0,
+      "min": 0.0,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "status": "computed"
+  },
+  "stream_fingerprint": "f518a4b9adb1ea674b86195e253feb90f085983a398e29dea9d600aee1fd09e6",
+  "support_composition_diagnostics": {
+    "active_class_count": {
+      "max": 2,
+      "min": 1,
+      "p50": 1.5,
+      "p95": 1.95
+    },
+    "class_coverage": {
+      "max": 0.019999999552965164,
+      "min": 0.009999999776482582,
+      "p50": 0.014999999664723873,
+      "p95": 0.019499999564141036
+    },
+    "cross_domain_ratio": {
+      "max": 0.0,
+      "min": 0.0,
+      "p50": 0.0,
+      "p95": 0.0
+    },
+    "definition": "per-query composition of the support selected for adaptation; independent of synchronized retrieval timing instrumentation",
+    "effective_sample_size": {
+      "max": 1.9986118078231812,
+      "min": 1.0,
+      "p50": 1.4993059039115906,
+      "p95": 1.948681217432022
+    },
+    "returned_support_count": {
+      "max": 2,
+      "min": 1,
+      "p50": 1.5,
+      "p95": 1.95
+    },
+    "same_domain_ratio": {
+      "max": 1.0,
+      "min": 1.0,
+      "p50": 1.0,
+      "p95": 1.0
+    },
+    "status": "computed"
+  },
+  "throughput": {
+    "definition": "completed samples divided by total synchronized tta_model forward wall-clock latency",
+    "samples_per_second": 0.17548978485991032,
+    "status": "computed",
+    "unit": "samples_per_second"
+  },
+  "worst_domain_accuracy": 0.0
+}

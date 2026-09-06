@@ -1,5 +1,11 @@
 # Minimal Latent Soft Routing Gate 1 — 2026-09-04
 
+> **Superseded interpretation:** Margin profiling later showed that
+> `gamma=0.25` exceeds every support-membership replacement margin in this
+> prefix. Its 2.47% diagnostic is primarily positional rank change, not a
+> large membership intervention. Use the
+> [calibrated Gate 1 report](calibrated-gate1-report.md) for the final decision.
+
 ## Outcome
 
 The minimal oracle-soft routing check is complete and does not pass Gate 1.
