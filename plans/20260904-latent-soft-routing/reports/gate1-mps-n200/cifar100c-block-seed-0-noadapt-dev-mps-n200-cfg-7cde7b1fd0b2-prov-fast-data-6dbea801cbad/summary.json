@@ -1,0 +1,150 @@
+{
+  "device_memory": {
+    "bytes": 650809856,
+    "kind": "sampled_post_batch_maximum",
+    "status": "sampled"
+  },
+  "domain_accuracies": {
+    "brightness": null,
+    "contrast": null,
+    "defocus_blur": null,
+    "elastic_transform": null,
+    "fog": null,
+    "frost": null,
+    "gaussian_noise": 0.28125,
+    "glass_blur": 0.234375,
+    "impulse_noise": null,
+    "jpeg_compression": null,
+    "motion_blur": null,
+    "pixelate": 0.390625,
+    "shot_noise": 0.375,
+    "snow": null,
+    "zoom_blur": null
+  },
+  "domain_sample_counts": {
+    "brightness": 0,
+    "contrast": 0,
+    "defocus_blur": 0,
+    "elastic_transform": 0,
+    "fog": 0,
+    "frost": 0,
+    "gaussian_noise": 64,
+    "glass_blur": 64,
+    "impulse_noise": 0,
+    "jpeg_compression": 0,
+    "motion_blur": 0,
+    "pixelate": 64,
+    "shot_noise": 8,
+    "snow": 0,
+    "zoom_blur": 0
+  },
+  "forward_latency": {
+    "definition": "per-sample share of synchronized tta_model forward wall-clock latency; includes adaptation and prediction",
+    "mean_per_sample_ms": 26.65048792026937,
+    "median_per_sample_ms": 26.65048792026937,
+    "status": "computed",
+    "total_ms": 5330.097584053874,
+    "unit": "milliseconds"
+  },
+  "macro_domain_accuracy": 0.3203125,
+  "method_memory": {
+    "final_retained_bytes": null,
+    "max_retained_bytes": null,
+    "reason": "method did not expose retained support-memory bytes",
+    "status": "unavailable",
+    "unit": "bytes"
+  },
+  "micro_accuracy": 0.305,
+  "negative_adaptation_rate": {
+    "reason": "pass --reference_trace from NoAdapt on the identical stream",
+    "status": "reference_required"
+  },
+  "num_samples": 200,
+  "peak_device_memory_bytes": null,
+  "post_shift_recovery_time": {
+    "definition": "full-window recovery within each persistent-domain episode",
+    "shifts": [
+      {
+        "baseline_accuracy": 0.38,
+        "from_domain": 13,
+        "recovery_samples": null,
+        "shift_timestep": 64,
+        "status": "not_recovered",
+        "to_domain": 0
+      },
+      {
+        "baseline_accuracy": 0.32,
+        "from_domain": 0,
+        "recovery_samples": null,
+        "shift_timestep": 128,
+        "status": "not_recovered",
+        "to_domain": 4
+      },
+      {
+        "from_domain": 4,
+        "recovery_samples": null,
+        "shift_timestep": 192,
+        "status": "insufficient_episode",
+        "to_domain": 1
+      }
+    ],
+    "status": "computed",
+    "window_size": 50
+  },
+  "retrieval_latency": {
+    "reason": "retrieval is interleaved with causal insertion and adaptation; isolating it would require invasive instrumentation and device synchronization that would perturb the measured path",
+    "status": "unavailable"
+  },
+  "routing_diagnostics": {
+    "adjusted_rand_index": null,
+    "assignment_churn_rate": null,
+    "context_purity": null,
+    "normalized_mutual_information": null,
+    "number_of_discovered_contexts": null,
+    "status": "unavailable"
+  },
+  "run_id": "cifar100c-block-seed-0-noadapt-dev-mps-n200-cfg-7cde7b1fd0b2-prov-fast-data-6dbea801cbad",
+  "schema_version": 2,
+  "sliding_window": {
+    "stride": 50,
+    "values": [
+      {
+        "accuracy": 0.42,
+        "end_timestep": 49,
+        "start_timestep": 0
+      },
+      {
+        "accuracy": 0.2,
+        "end_timestep": 99,
+        "start_timestep": 50
+      },
+      {
+        "accuracy": 0.36,
+        "end_timestep": 149,
+        "start_timestep": 100
+      },
+      {
+        "accuracy": 0.24,
+        "end_timestep": 199,
+        "start_timestep": 150
+      }
+    ],
+    "window_size": 50
+  },
+  "soft_routing_diagnostics": {
+    "reason": "method did not expose soft-routing influence diagnostics",
+    "status": "unavailable"
+  },
+  "stream_fingerprint": "aa6c94d923ff8024119c10111c8c685f4cd2e72fb70d47fc5978ba593a70020b",
+  "support_composition_diagnostics": {
+    "reason": "method did not expose selected-support composition diagnostics",
+    "status": "unavailable"
+  },
+  "throughput": {
+    "definition": "completed samples divided by total synchronized tta_model forward wall-clock latency",
+    "samples_per_second": 37.52276517382022,
+    "status": "computed",
+    "unit": "samples_per_second"
+  },
+  "worst_domain_accuracy": 0.234375
+}

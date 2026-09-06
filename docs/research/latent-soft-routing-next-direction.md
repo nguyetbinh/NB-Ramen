@@ -2,21 +2,45 @@
 
 **Branch:** `latent-soft-routing`  
 **Based on HEAD:** `2fea7e8004c6531a5aed3d5bf2dd6d5a7e3c5b86`  
-**Status:** continue oracle-soft diagnostics; do **not** implement `LatentSoftRamen` yet; do **not** close soft routing based on `gamma=0.25`
+**Status:** executed on the canonical bounded cell; stop exact-domain soft routing as the primary axis; do **not** implement `LatentSoftRamen`
+
+> **Outcome update (2026-09-04):** The preregistered margin profile and three
+> calibrated cells described below are complete. All nonzero cells preserved
+> diversity but changed zero predictions and no primary metric. The profile
+> also showed that `gamma=0.25` exceeds every observed replacement margin and
+> already saturates the small set of possible membership changes. The earlier
+> interpretation of `gamma=0.25` as merely “too weak” is therefore superseded.
+> See the [calibrated Gate 1 report](../../plans/20260904-latent-soft-routing/reports/calibrated-gate1-report.md).
+>
+> **Historical ablation update (2026-09-06):** A direct
+> `LegacyLatentRamen` control now keeps legacy `PriorityCache`, float16
+> retrieval, batch-atomic scheduling, weighting, and aggregation while adding
+> only the original prototype-context eligibility rule. The router again
+> discovered one context on the canonical 200-sample prefix. This establishes
+> that router collapse is not caused by causal scheduling or structured
+> memory. Small MPS accuracy differences are not attributed to routing because
+> the eligibility intervention was the identity and repeated legacy MPS runs
+> were not prediction-stable. See the
+> [legacy latent ablation report](../../plans/20260904-latent-soft-routing/reports/legacy-latent-ablation-report.md).
 
 ---
 
 ## 1. Executive decision
 
-The current branch has established two useful facts:
+The completed branch has established three useful facts:
 
 1. **Hard domain/context routing is harmful in the tested cell** because it removes cross-domain support and sharply reduces support count, active-class coverage, and effective sample size.
-2. **`OracleSoftRankRamen(gamma=0.25)` is not a meaningful no-go test of soft routing**, because the intervention was too weak: it changed only a small fraction of selected support, barely changed same-domain composition, and changed zero predictions.
+2. **Exact-domain preference has very little support-set leverage in this
+   bounded stream.** Only 64 replacement boundaries exist across 17,773
+   support slots, and `gamma=0.25` already crosses all of them.
+3. **No tested nonzero oracle-soft point has adaptation value here.** Weak,
+   medium, strong, and saturated `gamma=0.25` change no predictions or primary
+   metrics while preserving diversity.
 
 Therefore the correct next step is **not**:
 
 ```text
-stop soft routing
+increase the exact-domain bonus
 ```
 
 and it is also **not**:
@@ -25,13 +49,16 @@ and it is also **not**:
 implement LatentSoftRamen
 ```
 
-The correct next step is:
+The completed calibration rules out a useful interior point for this
+mechanism in the canonical prefix. The next research step is:
 
-> **Calibrate the strength of oracle soft routing from the actual retrieval margins, then test weak / medium / strong interventions while preserving global class-balanced support.**
+> **Pivot to a richer continuous compatibility signal while preserving global class-balanced support.**
 
 This isolates the scientific question:
 
-> Is there an intermediate level of domain preference that improves adaptation without the diversity collapse caused by hard routing?
+> Can gradient, reliability, semantic, or temporal affinity influence enough
+> support membership to improve adaptation without the diversity collapse
+> caused by hard routing?
 
 ---
 
@@ -86,13 +113,13 @@ This supports the correction from **domain exclusivity** to **domain preference*
 
 ---
 
-## 3. Why `gamma=0.25` is inconclusive rather than a real no-go
+## 3. Why `gamma=0.25` is a saturated but low-leverage intervention
 
 At `gamma=0.25`:
 
 ```text
-queries with any support change: 73 / 200
-mean changed support slots:      2.47%
+queries with any positional slot change: 73 / 200
+mean positional slot changes:           2.47%
 mean rank displacement:          0.031
 mean same-domain ratio:          49.17% -> 49.39%
 mean ESS:                        23.829 -> 23.800
@@ -105,15 +132,21 @@ The same-domain ratio increased by only:
 49.39 - 49.17 = 0.22\text{ percentage points}.
 \]
 
-Thus the tested intervention was extremely weak.
+The positional metric includes rank reorderings that do not change support-set
+membership. Exact margin profiling found only 64 possible membership changes,
+all with required bonus at most `0.12787533`. Therefore `gamma=0.25` already
+saturates the actual membership intervention, even though the resulting
+same-domain shift is small.
 
 The correct interpretation is:
 
-> A very small same-domain ranking bonus does not materially change retrieval or predictions in this bounded cell.
+> Exact domain equality is too sparse a compatibility signal to alter much
+> support membership in this bounded cell, and saturating it does not change
+> predictions.
 
 The following conclusion is **not** supported:
 
-> Soft domain preference does not help Ramen.
+> Every possible continuous compatibility signal will fail.
 
 ---
 
@@ -586,20 +619,16 @@ This formulation is consistent with all evidence collected so far:
 
 - global mixed support can help;
 - hard same-domain exclusivity can hurt;
-- very weak soft preference is effectively neutral;
-- the intermediate regime remains untested.
+- exact-domain soft preference has little membership leverage even at saturation;
+- the calibrated intermediate regime is neutral in the bounded canonical cell.
 
 ---
 
-## 16. Immediate next action
+## 16. Completed action and next decision
 
-The next commit should **not** add a learned router.
-
-It should add a diagnostic that estimates the top-k replacement margins under gamma-zero global class-balanced retrieval and derives preregistered weak / medium / strong oracle-soft intervention strengths.
-
-Then run only those missing oracle-soft cells.
-
-The key next evidence is a response curve:
+The branch now includes the gamma-zero replacement-margin diagnostic and a
+two-stage runner that freezes Q25/Q50/Q75 strengths before executing exactly
+three missing oracle-soft cells. The resulting response curve is:
 
 \[
 \boxed{
@@ -613,4 +642,15 @@ The key next evidence is a response curve:
 }
 \]
 
-The current `gamma=0.25` result is one near-zero point on that curve, not a sufficient reason to terminate the direction.
+Weak, medium, strong, and the reused `gamma=0.25` point all preserve support
+diversity, but all retain identical accuracy and predictions. Only 64
+membership replacements are possible across 17,773 support slots, and the
+maximum replacement margin is `0.12787533`; `gamma=0.25` already crosses all
+of them. The positional `selection_change_ratio` is larger because it also
+counts rank reorderings that do not change set membership.
+
+Therefore the next action is to stop increasing the exact-domain bonus and
+not implement a learned replica of it. Future research should pivot to a
+richer continuous compatibility signal—such as gradient agreement,
+reliability, semantic compatibility, or temporal affinity—under a separate
+preregistered plan.

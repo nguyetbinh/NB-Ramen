@@ -1,0 +1,90 @@
+{
+  "fingerprint": "f518a4b9adb1ea674b86195e253feb90f085983a398e29dea9d600aee1fd09e6",
+  "metadata": {
+    "block_size": 64,
+    "domain_lengths": [
+      10000,
+      10000,
+      10000,
+      10000,
+      10000,
+      10000,
+      10000,
+      10000,
+      10000,
+      10000,
+      10000,
+      10000,
+      10000,
+      10000,
+      10000
+    ],
+    "domain_names": [
+      "gaussian_noise",
+      "shot_noise",
+      "impulse_noise",
+      "defocus_blur",
+      "glass_blur",
+      "motion_blur",
+      "zoom_blur",
+      "snow",
+      "frost",
+      "fog",
+      "brightness",
+      "contrast",
+      "elastic_transform",
+      "pixelate",
+      "jpeg_compression"
+    ],
+    "domain_weights": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "evaluation_budget": {
+      "cost_limited_evidence": true,
+      "dropped_sample_count": 149998,
+      "evidence_scope": "cost_limited",
+      "full_sample_count": 150000,
+      "full_stream_fingerprint": "7f73012b7f4b5a2b3073633c70320a95eaa8b8e8c83eb1918493b8bec2ff232d",
+      "retained_sample_count": 2,
+      "truncation_strategy": "deterministic_prefix"
+    },
+    "fingerprint": "f518a4b9adb1ea674b86195e253feb90f085983a398e29dea9d600aee1fd09e6",
+    "format_version": 1,
+    "mode": "block",
+    "num_samples": 2,
+    "parameters": {
+      "burst_size": null,
+      "correlation_strength": null,
+      "gradual_sharpness": 4.0,
+      "novel_domain_idx": null,
+      "novel_release_fraction": null,
+      "novel_release_timestep": null,
+      "sample_budget": null
+    },
+    "seed": 0
+  },
+  "references": [
+    [
+      13,
+      8656
+    ],
+    [
+      13,
+      185
+    ]
+  ]
+}

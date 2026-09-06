@@ -1,0 +1,57 @@
+{
+  "calibration_id": "d61cb595c19ddda5b92d4a463fbe6a0e1c82fa61dc3867498b9531f9225ced68",
+  "pooled_replacement_margins": {
+    "replacement_margin_p10": 0.009688624739646911,
+    "replacement_margin_p25": 0.016257859766483307,
+    "replacement_margin_p50": 0.03335408866405487,
+    "replacement_margin_p75": 0.057242557406425476,
+    "replacement_margin_p90": 0.09568085670471192
+  },
+  "protocol": {
+    "block_size": 64,
+    "dataset": "CIFAR100C",
+    "method": "OracleSoftRankRamen",
+    "samples": 200,
+    "seed": 0,
+    "stream": "block"
+  },
+  "rules": {
+    "accuracy_read_before_selection": false,
+    "selection": "Q25/Q50/Q75 pooled replacement margins; each threshold advances to next finite float32",
+    "targets": [
+      0.1,
+      0.25,
+      0.5
+    ]
+  },
+  "schema_version": 1,
+  "source": {
+    "config_hash": "95a4521bb101",
+    "config_path": "/Users/admin/Documents/NB-Ramen/cfg/research/latent-soft-routing/margin-profile/CIFAR100C/OracleSoftRankRamen.yaml",
+    "run_id": "cifar100c-block-seed-0-oraclesoftrankramen-dev-mps-n200-cfg-95a4521bb101-prov-fast-data-6dbea801cbad",
+    "stream_fingerprint": "aa6c94d923ff8024119c10111c8c685f4cd2e72fb70d47fc5978ba593a70020b",
+    "summary_path": "/Users/admin/Documents/NB-Ramen/plans/20260904-latent-soft-routing/reports/gate1-calibrated-mps-n200/profile/cifar100c-block-seed-0-oraclesoftrankramen-dev-mps-n200-cfg-95a4521bb101-prov-fast-data-6dbea801cbad/summary.json",
+    "trace_path": "/Users/admin/Documents/NB-Ramen/plans/20260904-latent-soft-routing/reports/gate1-calibrated-mps-n200/profile/cifar100c-block-seed-0-oraclesoftrankramen-dev-mps-n200-cfg-95a4521bb101-prov-fast-data-6dbea801cbad/trace.jsonl",
+    "trace_sha256": "9946fa8a8d1b1057259b6851abaecd9487b4df01152fbe8c1827ee715ccb490f"
+  },
+  "strengths": [
+    {
+      "gamma": 0.016257861629128456,
+      "margin_quantile": "replacement_margin_p25",
+      "name": "weak",
+      "target_selection_change_ratio": 0.1
+    },
+    {
+      "gamma": 0.03335409238934517,
+      "margin_quantile": "replacement_margin_p50",
+      "name": "medium",
+      "target_selection_change_ratio": 0.25
+    },
+    {
+      "gamma": 0.057242561131715775,
+      "margin_quantile": "replacement_margin_p75",
+      "name": "strong",
+      "target_selection_change_ratio": 0.5
+    }
+  ]
+}
