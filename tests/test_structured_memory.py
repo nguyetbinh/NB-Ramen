@@ -194,6 +194,69 @@ class StructuredGradientMemoryTests(unittest.TestCase):
                         context_strength=strength,
                     )
 
+    def test_global_replacement_margin_profiles_exact_cross_context_boundary_and_ties(self):
+        memory = self.make_memory()
+        # Gamma-zero selects IDs 20 and 30.  The same-context item 10 needs a
+        # bonus of one to cross ID 30; at equality its lower stable ID wins.
+        self.add(
+            memory, [[1, 0], [3, 0], [4, 0]], [0, 0, 0], [0, 0, 7],
+            item_ids=torch.tensor([20, 30, 10]),
+        )
+        margins = memory.profile_class_balanced_global_replacement_margins(
+            torch.tensor([[0., 0.]]), topk=2, query_contexts=7,
+        )
+        self.assertEqual(1, len(margins))
+        self.assertEqual([1.], margins[0].tolist())
+        at_margin = memory.query_class_balanced_global(
+            torch.tensor([[0., 0.]]), topk=2, query_contexts=7, context_strength=1.,
+        )
+        self.assertEqual([20, 10], at_margin.item_ids[0, 0, :2].tolist())
+
+    def test_global_replacement_margin_keeps_higher_id_candidate_out_at_equal_margin(self):
+        memory = self.make_memory()
+        self.add(
+            memory, [[1, 0], [3, 0], [4, 0]], [0, 0, 0], [0, 0, 7],
+            item_ids=torch.tensor([10, 20, 30]),
+        )
+        margins = memory.profile_class_balanced_global_replacement_margins(
+            torch.tensor([[0., 0.]]), topk=2, query_contexts=7,
+        )
+        self.assertEqual([1.], margins[0].tolist())
+        at_margin = memory.query_class_balanced_global(
+            torch.tensor([[0., 0.]]), topk=2, query_contexts=7, context_strength=1.,
+        )
+        self.assertEqual([10, 20], at_margin.item_ids[0, 0, :2].tolist())
+        above_margin = memory.query_class_balanced_global(
+            torch.tensor([[0., 0.]]), topk=2, query_contexts=7, context_strength=1.01,
+        )
+        self.assertEqual([10, 30], above_margin.item_ids[0, 0, :2].tolist())
+
+    def test_global_replacement_margin_ignores_underfull_empty_and_nonreplaceable_classes(self):
+        memory = self.make_memory()
+        # Class 0 has only same-context support; class 1 is underfull; class 2
+        # is empty.  None has a cross-context replacement boundary.
+        self.add(memory, [[1, 0], [2, 0], [3, 0]], [0, 0, 1], [7, 7, 0])
+        margins = memory.profile_class_balanced_global_replacement_margins(
+            torch.tensor([[0., 0.]]), topk=2, query_contexts=7,
+        )
+        self.assertEqual([], margins[0].tolist())
+
+    def test_global_replacement_margin_is_read_only_and_honors_historical_exclusion(self):
+        memory = self.make_memory()
+        self.add(memory, [[0, 0], [1, 0], [3, 0]], [0, 0, 0], [7, 0, 7],
+                 item_ids=torch.tensor([40, 50, 60]))
+        before = memory.diagnostics()
+        margins = memory.profile_class_balanced_global_replacement_margins(
+            torch.tensor([[0., 0.]]), topk=1, query_contexts=7,
+            include_current=False, current_item_ids=40,
+        )
+        self.assertEqual([2.], margins[0].tolist())
+        self.assertEqual(before, memory.diagnostics())
+        with self.assertRaises(ValueError):
+            memory.profile_class_balanced_global_replacement_margins(
+                torch.tensor([[0., 0.]]), topk=1, query_contexts=7, include_current=False,
+            )
+
     def test_context_restriction_does_not_cross_contexts(self):
         memory = self.make_memory()
         self.add(memory, [[0, 0], [9, 0]], [0, 0], [1, 2])

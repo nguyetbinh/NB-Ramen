@@ -1,0 +1,12 @@
+{
+  "beta": 5.0,
+  "capacity_scope": "per_class",
+  "gamma": 0.0,
+  "include_current": true,
+  "lr": 0.01,
+  "max_capacity": 750,
+  "optimizer": "signsgd",
+  "oracle_context_source": "evaluator_domain_idx",
+  "profile_replacement_margins": true,
+  "topk": 5
+}
