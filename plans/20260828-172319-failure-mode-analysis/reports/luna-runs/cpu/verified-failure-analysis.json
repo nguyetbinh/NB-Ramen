@@ -1,0 +1,5 @@
+{
+  "error": "invalid replay sidecar: invalid replay metadata",
+  "schema_version": 1,
+  "status": "invalid"
+}

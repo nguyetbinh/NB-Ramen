@@ -1,0 +1,43 @@
+{
+  "config": {
+    "counterfactual_thresholds": [
+      0.5,
+      0.75,
+      1.0
+    ]
+  },
+  "dimensions_dtypes": [],
+  "files": {
+    "features.bin": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "gradients.bin": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "items.jsonl": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "queries.jsonl": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "limits": {
+    "max_bytes": 268435456,
+    "max_samples": 4
+  },
+  "manifest_sha256": "e3c4920aa0d5242a3e09982c0f4153c74a96e8be81d90f6e816208b065ddfc08",
+  "profile": "replay_v1",
+  "row_counts": {
+    "items": 0,
+    "queries": 0
+  },
+  "run_id": "luna-mps-cifar100c-block-s0-b1-n4-causalramen-replay-v1",
+  "schema_version": "replay_v1",
+  "source_fingerprint": "0b4992076aaa203a542193f25299b2c7af6529f153db479a210aeeba17cc4c4d",
+  "status": "interrupted",
+  "stream_fingerprint": "d9dd816b694e5dc8f187cec82fcd85899843fd135b89aaecd45e9615e04c37ba"
+}

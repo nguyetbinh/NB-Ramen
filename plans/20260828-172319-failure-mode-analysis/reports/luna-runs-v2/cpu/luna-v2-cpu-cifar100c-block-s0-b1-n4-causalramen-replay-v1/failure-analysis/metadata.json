@@ -1,0 +1,56 @@
+{
+  "config": {
+    "counterfactual_thresholds": [
+      0.5,
+      0.75,
+      1.0
+    ]
+  },
+  "dimensions_dtypes": [
+    {
+      "dtype": "torch.float32",
+      "shape": [
+        512
+      ]
+    },
+    {
+      "dtype": "torch.float32",
+      "shape": [
+        39936
+      ]
+    }
+  ],
+  "files": {
+    "features.bin": {
+      "bytes": 8192,
+      "sha256": "29db71eff9f1e9340f4d0303c75af0a43edf02cf06f67e84fc0c1a9fd2f72ba0"
+    },
+    "gradients.bin": {
+      "bytes": 638976,
+      "sha256": "47f7743e02d9795c4d3df5693fc368695464c64ae5eba7c2c0849786a0683e7d"
+    },
+    "items.jsonl": {
+      "bytes": 1581,
+      "sha256": "14d37d782ddd53c651ff244cfb60f7c110315f6bdcd6121f6316bc46d66eee46"
+    },
+    "queries.jsonl": {
+      "bytes": 9512,
+      "sha256": "c865deb9bf85073b1cb4638b3e4dfb6f5c502c21b7b4c39a8ce9ba7c163f2e19"
+    }
+  },
+  "limits": {
+    "max_bytes": 268435456,
+    "max_samples": 4
+  },
+  "manifest_sha256": "6d5bf5e0f814160e367e31ab304d304d3633b2ed145defdd1a4937e95ee43d4a",
+  "profile": "replay_v1",
+  "row_counts": {
+    "items": 4,
+    "queries": 4
+  },
+  "run_id": "luna-v2-cpu-cifar100c-block-s0-b1-n4-causalramen-replay-v1",
+  "schema_version": "replay_v1",
+  "source_fingerprint": "c9f5cb7d60d5c742646945c9835d2c8b07e2de0e3ea733341c8163fd46ee52d6",
+  "status": "completed",
+  "stream_fingerprint": "d9dd816b694e5dc8f187cec82fcd85899843fd135b89aaecd45e9615e04c37ba"
+}
