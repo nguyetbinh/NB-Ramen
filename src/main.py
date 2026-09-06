@@ -171,6 +171,7 @@ def _method_diagnostics(tta_model, batch_size):
         'mean_rank_displacement',
     )
     result.update({field: expand(field) for field in soft_fields})
+    result['replacement_margins'] = expand('replacement_margins')
     # Evaluator-only reconstruction inputs.  They are consumed below and are
     # intentionally excluded from every persisted trace and summary field set.
     result['support_item_ids'] = expand('support_item_ids')
@@ -237,6 +238,16 @@ def _evidence_paths(args):
 
 def _load_noadapt_reference_config(args):
     """Load the canonical NoAdapt config independently of the adapted method."""
+    explicit_path = getattr(args, 'reference_config', None)
+    if explicit_path is not None:
+        path = Path(explicit_path).expanduser().resolve()
+        if path.name != 'NoAdapt.yaml' or not path.is_file() or path.is_symlink():
+            raise ValueError(f'--reference_config must name a real NoAdapt.yaml: {path}')
+        with path.open('r', encoding='utf-8') as config_file:
+            config = yaml.safe_load(config_file) or {}
+        if not isinstance(config, dict):
+            raise ValueError(f'NoAdapt config must contain a mapping: {path}')
+        return config, str(path)
     config_dir = getattr(args, 'config_dir', None)
     if config_dir is None:
         current_config_path = getattr(args, 'config_path', None)
@@ -318,7 +329,9 @@ def ordered_stream_test(
     admission_rows = []
     admission_fields_available = None
     retrieval_profile_rows = []
+    replacement_margin_rows = []
     retrieval_profile_available = None
+    replacement_margin_available = None
     support_composition_rows = []
     support_composition_available = None
     soft_routing_rows = []
@@ -470,6 +483,14 @@ def ordered_stream_test(
                     soft_routing_available = batch_soft_available
                 elif soft_routing_available != batch_soft_available:
                     raise ValueError('soft routing diagnostics availability changed within one run')
+                margin_available = {value is not None for value in diagnostics['replacement_margins']}
+                if len(margin_available) != 1:
+                    raise ValueError('replacement margin diagnostics must be available for every sample or unavailable for every sample')
+                batch_margin_available = margin_available == {True}
+                if replacement_margin_available is None:
+                    replacement_margin_available = batch_margin_available
+                elif replacement_margin_available != batch_margin_available:
+                    raise ValueError('replacement margin diagnostics availability changed within one run')
 
                 for offset in range(batch_size):
                     row = {
@@ -502,6 +523,9 @@ def ordered_stream_test(
                     if batch_soft_available:
                         row.update({field: diagnostics[field][offset] for field in soft_fields})
                         soft_routing_rows.append(row)
+                    if batch_margin_available:
+                        row['replacement_margins'] = diagnostics['replacement_margins'][offset]
+                        replacement_margin_rows.append(row)
                     trace_writer.write(row)
                     forward_latencies_ms.append(latency_ms)
                     if row['memory_bytes'] is not None:
@@ -747,6 +771,33 @@ def ordered_stream_test(
             'status': 'unavailable',
             'reason': 'method did not expose soft-routing influence diagnostics',
         }
+    if replacement_margin_rows:
+        per_query_counts = [len(row['replacement_margins']) for row in replacement_margin_rows]
+        margins = sorted(value for row in replacement_margin_rows for value in row['replacement_margins'])
+        def margin_percentile(data, fraction):
+            ordered = sorted(data)
+            position = (len(ordered) - 1) * fraction
+            lower, upper = int(position), min(int(position) + 1, len(ordered) - 1)
+            return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+        summary['replacement_margin_profile'] = {
+            'status': 'computed',
+            'definition': 'per-query sorted gamma-zero same-domain replacement margins for candidates outside the class-wise top-k',
+            'num_queries': len(replacement_margin_rows),
+            'queries_with_replacement_candidates': sum(bool(count) for count in per_query_counts),
+            'replacement_margin_count': len(margins),
+            'per_query_candidate_count': {
+                'min': min(per_query_counts), 'p50': margin_percentile(per_query_counts, .5),
+                'p95': margin_percentile(per_query_counts, .95), 'max': max(per_query_counts),
+            },
+            **{f'replacement_margin_p{int(fraction * 100):02d}': (
+                margin_percentile(margins, fraction) if margins else None
+            ) for fraction in (.1, .25, .5, .75, .9)},
+        }
+    else:
+        summary['replacement_margin_profile'] = {
+            'status': 'unavailable',
+            'reason': 'method did not expose gamma-zero replacement-margin profiling',
+        }
     write_summary(evidence_paths['summary'], summary)
 
     tta_model.reset()
@@ -828,6 +879,8 @@ def main(args):
     manifest_args['data_root'] = str(Path(args.data_root).expanduser().resolve())
     if manifest_args.get('config_path') is not None:
         manifest_args['config_path'] = str(Path(manifest_args['config_path']).expanduser().resolve())
+    if manifest_args.get('reference_config') is not None:
+        manifest_args['reference_config'] = str(Path(manifest_args['reference_config']).expanduser().resolve())
     write_run_manifest(
         evidence_paths['manifest'],
         run_id=args.run_id,
@@ -963,6 +1016,8 @@ def args_parser():
     parser.add_argument('--evidence_dir', type=str, default=str(PROJECT_ROOT / 'evidence'))
     parser.add_argument('--reference_trace', type=str, default=None,
                         help='NoAdapt trace on the identical stream for negative-adaptation rate')
+    parser.add_argument('--reference_config', type=str, default=None,
+                        help='canonical NoAdapt YAML used to verify --reference_trace')
     parser.add_argument('--metric_window_size', type=int, default=50)
     parser.add_argument('--metric_window_stride', type=int, default=50)
 

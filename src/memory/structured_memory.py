@@ -343,16 +343,7 @@ class StructuredGradientMemory:
             valid_mask=torch.zeros(shape, device=self.device, dtype=torch.bool),
         )
 
-        # Stable ID order makes feature-distance ties deterministic across
-        # dictionary/context-bucket insertion order.
-        candidates_by_class = {
-            predicted_class: sorted(
-                ((context, item) for (klass, context), bucket in self._buckets.items()
-                 if klass == predicted_class for item in bucket),
-                key=lambda candidate: int(candidate[1].item_id),
-            )
-            for predicted_class in range(self.num_classes)
-        }
+        candidates_by_class = self._global_candidates_by_class()
         for batch_index in range(batch_size):
             query_context = int(query_contexts[batch_index])
             for predicted_class, all_candidates in candidates_by_class.items():
@@ -362,8 +353,7 @@ class StructuredGradientMemory:
                                   if int(candidate[1].item_id) != int(current_ids[batch_index])]
                 if not candidates:
                     continue
-                candidate_features = torch.stack([item.feature for _, item in candidates]).float()
-                distances = torch.linalg.vector_norm(candidate_features - features[batch_index].float(), dim=1)
+                distances = self._global_candidate_distances(candidates, features[batch_index])
                 if context_strength == 0:
                     ranking_distances = distances
                 else:
@@ -386,6 +376,103 @@ class StructuredGradientMemory:
                     result.distances[batch_index, predicted_class, rank] = distances[candidate_index]
                     result.valid_mask[batch_index, predicted_class, rank] = True
         return result
+
+    def profile_class_balanced_global_replacement_margins(
+        self,
+        features: torch.Tensor,
+        topk: int,
+        *,
+        query_contexts: torch.Tensor | int,
+        include_current: bool = True,
+        current_item_ids: torch.Tensor | int | None = None,
+    ) -> list[torch.Tensor]:
+        """Return sorted finite gamma-zero same-context replacement margins.
+
+        Each output tensor corresponds to one query.  A margin records an
+        outside same-context candidate crossing the cross-context candidate it
+        can replace under the global class-balanced soft ranking.  At an exact
+        equality, selection continues to use the existing stable item-ID tie
+        order.  The method is observational: it neither inserts nor evicts
+        memory items.
+        """
+        if not isinstance(topk, int) or isinstance(topk, bool) or topk <= 0:
+            raise ValueError("topk must be a positive integer")
+        features = self._matrix(features, "features", self.feature_dim)
+        batch_size = features.shape[0]
+        query_contexts = self._integer_vector(query_contexts, "query_contexts", batch_size)
+        if bool((query_contexts < 0).any()):
+            raise ValueError("query_contexts must be non-negative")
+        if not include_current and current_item_ids is None:
+            raise ValueError("current_item_ids is required when include_current=False")
+        current_ids = None if current_item_ids is None else self._integer_vector(
+            current_item_ids, "current_item_ids", batch_size
+        )
+
+        candidates_by_class = self._global_candidates_by_class()
+        margins_by_query = []
+        for batch_index in range(batch_size):
+            query_context = int(query_contexts[batch_index])
+            query_margins: list[float] = []
+            for all_candidates in candidates_by_class.values():
+                candidates = all_candidates
+                if current_ids is not None and not include_current:
+                    candidates = [candidate for candidate in candidates
+                                  if int(candidate[1].item_id) != int(current_ids[batch_index])]
+                # An underfull class has no outside candidate and therefore no
+                # replacement boundary.
+                if len(candidates) <= topk:
+                    continue
+                distances = self._global_candidate_distances(candidates, features[batch_index])
+                baseline = torch.argsort(distances, stable=True)[:topk].tolist()
+                baseline_indices = set(baseline)
+                same_indices = [index for index, (context, _) in enumerate(candidates)
+                                if context == query_context]
+                cross_indices = [index for index, (context, _) in enumerate(candidates)
+                                 if context != query_context]
+                if not same_indices or not cross_indices:
+                    continue
+                # Candidates begin in stable item-ID order, so stable distance
+                # sorts exactly reproduce the retrieval tie contract.
+                same_indices = [same_indices[index] for index in torch.argsort(
+                    distances[same_indices], stable=True
+                ).tolist()]
+                cross_indices = [cross_indices[index] for index in torch.argsort(
+                    distances[cross_indices], stable=True
+                ).tolist()]
+                for same_rank, candidate_index in enumerate(same_indices[:topk]):
+                    if candidate_index in baseline_indices:
+                        continue
+                    replaced_rank = topk - same_rank - 1
+                    if replaced_rank >= len(cross_indices):
+                        continue
+                    margin = float(distances[candidate_index] - distances[cross_indices[replaced_rank]])
+                    # A gamma-zero-excluded candidate cannot have a negative
+                    # mathematical crossing margin.  Clamp only signed zero /
+                    # floating-point roundoff at this diagnostic boundary.
+                    query_margins.append(max(0.0, margin))
+            margins_by_query.append(torch.tensor(
+                sorted(query_margins), device=self.device, dtype=torch.float32
+            ))
+        return margins_by_query
+
+    def _global_candidates_by_class(self) -> dict[int, list[tuple[int, _MemoryItem]]]:
+        """Return global per-class candidates in deterministic stable-ID order."""
+        return {
+            predicted_class: sorted(
+                ((context, item) for (klass, context), bucket in self._buckets.items()
+                 if klass == predicted_class for item in bucket),
+                key=lambda candidate: int(candidate[1].item_id),
+            )
+            for predicted_class in range(self.num_classes)
+        }
+
+    @staticmethod
+    def _global_candidate_distances(
+        candidates: list[tuple[int, _MemoryItem]], query_feature: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute global-ranking distances with the retrieval dtype contract."""
+        candidate_features = torch.stack([item.feature for _, item in candidates]).float()
+        return torch.linalg.vector_norm(candidate_features - query_feature.float(), dim=1)
 
     def query_candidate_counts(
         self,

@@ -35,6 +35,20 @@ class SoftRoutingRamenTests(unittest.TestCase):
         base = {"max_capacity": 2, "topk": 1, "optimizer": "signsgd", "lr": .01,
                 "capacity_scope": "per_class", "oracle_context_source": "evaluator_domain_idx"}
         self.assertEqual(.25, validate_oracle_soft_rank_ramen_config({**base, "gamma": .25})["gamma"])
+        self.assertFalse(validate_oracle_soft_rank_ramen_config({**base, "gamma": 0})[
+            "profile_replacement_margins"
+        ])
+        self.assertTrue(validate_oracle_soft_rank_ramen_config({
+            **base, "gamma": 0, "profile_replacement_margins": True,
+        })["profile_replacement_margins"])
+        with self.assertRaises(ValueError):
+            validate_oracle_soft_rank_ramen_config({
+                **base, "gamma": .25, "profile_replacement_margins": True,
+            })
+        with self.assertRaises(ValueError):
+            validate_oracle_soft_rank_ramen_config({
+                **base, "gamma": 0, "profile_replacement_margins": 1,
+            })
         for gamma in (True, None, float("nan"), float("inf"), -.01):
             with self.assertRaises(ValueError):
                 validate_oracle_soft_rank_ramen_config({**base, "gamma": gamma})
@@ -147,6 +161,33 @@ class SoftRoutingRamenTests(unittest.TestCase):
         self.assertEqual([0, 1, 1], active.tolist())
         self.assertEqual([1, 1, 1], sizes.tolist())
         self.assertEqual([0, 1, 1], diagnostics["returned_support_count"].tolist())
+
+    def test_replacement_margin_diagnostics_follow_both_causal_schedules(self):
+        stream = dict(
+            features=torch.tensor([[1.], [3.], [4.], [0.]]),
+            gradients=torch.tensor([[10.], [20.], [30.], [40.]]),
+            predicted_classes=torch.tensor([0, 0, 0, 0]),
+            contexts=torch.tensor([0, 0, 7, 7]), entropies=torch.zeros(4),
+            item_ids=torch.tensor([20, 30, 10, 40]), topk=2, beta=0., gamma=0.,
+            profile_replacement_margins=True,
+        )
+        # The current-inclusive schedule has both same-context items at the
+        # final query; the historical-only schedule has just the earlier one.
+        for include_current, expected in ((True, [[], [], [], [3.]]), (False, [[], [], [], [1.]])):
+            with self.subTest(include_current=include_current):
+                _, _, _, _, diagnostics = update_and_retrieve_oracle_soft_rank_causal_batch(
+                    StructuredGradientMemory(1, 8, 1, 1, device="cpu", capacity_scope="per_class"),
+                    **stream, include_current=include_current,
+                )
+                self.assertEqual(expected, diagnostics["replacement_margins"])
+
+    def test_replacement_margin_diagnostics_are_opt_in(self):
+        _, _, _, _, diagnostics = update_and_retrieve_oracle_soft_rank_causal_batch(
+            self._memory(), torch.tensor([[0.]]), torch.tensor([[1.]]), torch.tensor([0]),
+            torch.tensor([9]), torch.zeros(1), torch.tensor([10]), topk=1,
+            include_current=True, beta=0., gamma=0.,
+        )
+        self.assertIsNone(diagnostics["replacement_margins"])
 
     def test_diagnostics_math_uses_final_entropy_distance_weights(self):
         memory = StructuredGradientMemory(1, 4, 1, 1, device="cpu", capacity_scope="per_class")

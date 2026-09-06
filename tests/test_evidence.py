@@ -77,6 +77,21 @@ class EvidenceTests(unittest.TestCase):
                     writer.write({**base, **soft, "selection_change_ratio": 2.0})
                 writer.write({**base, **soft})
 
+    def test_trace_writer_requires_sorted_valid_replacement_margins(self):
+        base = {
+            "timestep": 0, "sample_idx": 0, "ground_truth_domain": 0,
+            "ground_truth_class": 0, "prediction": 0, "correct": True,
+            "predicted_entropy": 0.0, "inferred_context": 0, "memory_size": 1,
+            "num_active_contexts": 1, "memory_bytes": 32, "latency_ms": 1.0,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            with JsonlTraceWriter(Path(directory) / "margins.jsonl", "margins") as writer:
+                with self.assertRaisesRegex(ValueError, "sorted"):
+                    writer.write({**base, "replacement_margins": [.2, .1]})
+                with self.assertRaisesRegex(ValueError, "non-negative"):
+                    writer.write({**base, "replacement_margins": [-.1]})
+                writer.write({**base, "replacement_margins": []})
+
     @staticmethod
     def _git(repository, *arguments):
         subprocess.run(

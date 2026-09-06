@@ -45,6 +45,7 @@ try:
         RETRIEVAL_PROFILE_TRACE_FIELDS,
         SUPPORT_COMPOSITION_TRACE_FIELDS,
         SOFT_ROUTING_TRACE_FIELDS,
+        REPLACEMENT_MARGIN_PROFILE_TRACE_FIELDS,
         TRACE_SCHEMA_VERSION,
         compare_trace_negative_adaptation,
     )
@@ -61,6 +62,7 @@ except ImportError:  # ``runtime`` top-level package or direct-file invocation.
         RETRIEVAL_PROFILE_TRACE_FIELDS,
         SUPPORT_COMPOSITION_TRACE_FIELDS,
         SOFT_ROUTING_TRACE_FIELDS,
+        REPLACEMENT_MARGIN_PROFILE_TRACE_FIELDS,
         TRACE_SCHEMA_VERSION,
         compare_trace_negative_adaptation,
     )
@@ -86,7 +88,7 @@ DEFAULT_METHODS = (
 )
 SUPPORTED_METHODS = DEFAULT_METHODS + (
     "EntropyGatedLatentRamen", "OracleHardRamen", "LatentHardRamen",
-    "OracleSoftRankRamen",
+    "OracleSoftRankRamen", "LegacyLatentRamen",
 )
 MODEL_BY_DATASET = {"CIFAR100C": "clip_vitbase16", "DomainNet": "clip_vitbase32"}
 BATCH_SIZE_BY_DATASET = {"CIFAR100C": 100, "DomainNet": 100}
@@ -132,6 +134,7 @@ class ExperimentRun:
     config_data: dict[str, object]
     artifact_provenance: str
     reference_trace: Path | None = None
+    reference_config_path: Path | None = None
 
     @property
     def run_dir(self) -> Path:
@@ -145,6 +148,7 @@ class ExperimentRun:
         result["config_dir"] = str(self.config_dir)
         result["config_path"] = str(self.config_path) if self.config_path else None
         result["reference_trace"] = str(self.reference_trace) if self.reference_trace else None
+        result["reference_config_path"] = str(self.reference_config_path) if self.reference_config_path else None
         return result
 
 
@@ -315,7 +319,7 @@ def build_experiment_matrix(
     for dataset in datasets:
         for stream_mode in streams:
             for seed in seeds:
-                _, baseline_hash, _ = _selected_config(configs, dataset, "NoAdapt")
+                baseline_config_path, baseline_hash, _ = _selected_config(configs, dataset, "NoAdapt")
                 baseline_id = make_run_id(
                     dataset, stream_mode, seed, "NoAdapt", device=device,
                     max_eval_samples=max_eval_samples, config_hash=baseline_hash, artifact_provenance=artifact_provenance,
@@ -350,6 +354,7 @@ def build_experiment_matrix(
                         config_data=config_data,
                         artifact_provenance=artifact_provenance,
                         reference_trace=None if method == "NoAdapt" else baseline_trace,
+                        reference_config_path=None if method == "NoAdapt" else baseline_config_path,
                     ))
     run_ids = [run.run_id for run in runs]
     if len(run_ids) != len(set(run_ids)):
@@ -412,6 +417,8 @@ def build_command(
         command.extend(("--stream_block_size", str(run.stream_block_size)))
     if run.reference_trace is not None:
         command.extend(("--reference_trace", str(run.reference_trace)))
+    if run.reference_config_path is not None:
+        command.extend(("--reference_config", str(run.reference_config_path)))
     return command
 
 
@@ -438,6 +445,32 @@ def _require_equal(actual: object, expected: object, field: str, run: Experiment
         raise IncompleteRunError(
             f"stale or foreign evidence for {run.run_id}: {field} is {actual!r}, expected {expected!r}"
         )
+
+
+def _require_metric_close(
+    actual: object,
+    expected: object,
+    field: str,
+    run: ExperimentRun,
+) -> None:
+    """Compare timing metrics across Python versions without accepting drift."""
+    if not isinstance(actual, dict) or not isinstance(expected, dict) or actual.keys() != expected.keys():
+        _require_equal(actual, expected, field, run)
+        return
+    for key, expected_value in expected.items():
+        actual_value = actual[key]
+        if (
+            isinstance(actual_value, (int, float))
+            and not isinstance(actual_value, bool)
+            and isinstance(expected_value, (int, float))
+            and not isinstance(expected_value, bool)
+        ):
+            if not math.isclose(float(actual_value), float(expected_value), rel_tol=1e-12, abs_tol=1e-9):
+                _require_equal(actual, expected, field, run)
+                return
+        elif actual_value != expected_value:
+            _require_equal(actual, expected, field, run)
+            return
 
 
 def _require_fields(value: dict[str, object], fields: Iterable[str], label: str, run: ExperimentRun) -> None:
@@ -557,6 +590,7 @@ def _validate_summary(
     profile_presence = [all(field in row for field in RETRIEVAL_PROFILE_TRACE_FIELDS) for row in rows]
     support_presence = [all(field in row for field in SUPPORT_COMPOSITION_TRACE_FIELDS) for row in rows]
     soft_presence = [all(field in row for field in SOFT_ROUTING_TRACE_FIELDS) for row in rows]
+    margin_presence = [all(field in row for field in REPLACEMENT_MARGIN_PROFILE_TRACE_FIELDS) for row in rows]
     if any(profile_presence) and not all(profile_presence):
         raise IncompleteRunError(f"trace contains mixed retrieval profile availability: {run.run_id}")
     configured_profile = run.config_data.get("retrieval_profile", "off")
@@ -568,6 +602,8 @@ def _validate_summary(
         raise IncompleteRunError(f"trace contains mixed support composition availability: {run.run_id}")
     if any(soft_presence) and not all(soft_presence):
         raise IncompleteRunError(f"trace contains mixed soft routing availability: {run.run_id}")
+    if any(margin_presence) and not all(margin_presence):
+        raise IncompleteRunError(f"trace contains mixed replacement margin profile availability: {run.run_id}")
     if any(admission_presence) and not all(admission_presence):
         raise IncompleteRunError(f"trace contains mixed admission evidence availability: {run.run_id}")
     if all(admission_presence):
@@ -626,6 +662,30 @@ def _validate_summary(
             "reason": "method did not expose soft-routing influence diagnostics",
         }
         _require_equal(soft_summary, expected_soft, "summary.soft_routing_diagnostics", run)
+    margin_summary = summary.get("replacement_margin_profile")
+    if all(margin_presence):
+        per_query_counts = [len(row["replacement_margins"]) for row in rows]
+        margins = [value for row in rows for value in row["replacement_margins"]]
+        expected_margin = {
+            "status": "computed",
+            "definition": "per-query sorted gamma-zero same-domain replacement margins for candidates outside the class-wise top-k",
+            "num_queries": len(rows),
+            "queries_with_replacement_candidates": sum(bool(count) for count in per_query_counts),
+            "replacement_margin_count": len(margins),
+            "per_query_candidate_count": {
+                "min": min(per_query_counts), "p50": diagnostic_percentile(per_query_counts, .5),
+                "p95": diagnostic_percentile(per_query_counts, .95), "max": max(per_query_counts),
+            },
+            **{f"replacement_margin_p{int(fraction * 100):02d}": (
+                diagnostic_percentile(margins, fraction) if margins else None
+            ) for fraction in (.1, .25, .5, .75, .9)},
+        }
+        _require_equal(margin_summary, expected_margin, "summary.replacement_margin_profile", run)
+    elif margin_summary is not None:
+        _require_equal(margin_summary, {
+            "status": "unavailable",
+            "reason": "method did not expose gamma-zero replacement-margin profiling",
+        }, "summary.replacement_margin_profile", run)
     num_samples = len(rows)
     micro_accuracy = sum(row["correct"] for row in rows) / num_samples
     actual_micro = _require_probability(summary["micro_accuracy"], "summary.micro_accuracy", run)
@@ -790,8 +850,11 @@ def _validate_summary(
         "unit": "samples_per_second",
         "samples_per_second": len(latencies) * 1000.0 / total_latency if total_latency > 0 else None,
     }
-    _require_equal(summary["forward_latency"], expected_forward_latency, "summary.forward_latency", run)
-    _require_equal(summary["throughput"], expected_throughput, "summary.throughput", run)
+    # Python 3.12+ uses compensated float summation while Python 3.11 does
+    # not.  Accept only roundoff-sized timing differences so evidence remains
+    # resumable across supported interpreter versions.
+    _require_metric_close(summary["forward_latency"], expected_forward_latency, "summary.forward_latency", run)
+    _require_metric_close(summary["throughput"], expected_throughput, "summary.throughput", run)
     expected_retrieval_latency = {
         "status": "unavailable",
         "reason": "retrieval is interleaved with causal insertion and adaptation; isolating it would require invasive instrumentation and device synchronization that would perturb the measured path",
@@ -939,6 +1002,26 @@ def validate_completed_run(run: ExperimentRun) -> dict[str, object]:
     }
     for key, expected in expected_args.items():
         _require_equal(args.get(key), expected, f"manifest.args.{key}", run)
+    if "reference_config" in args:
+        _require_equal(
+            args.get("reference_config"),
+            str(run.reference_config_path) if run.reference_config_path else None,
+            "manifest.args.reference_config", run,
+        )
+    if run.reference_config_path is not None:
+        reference_path = run.reference_config_path
+        if reference_path.name != "NoAdapt.yaml" or not reference_path.is_file() or reference_path.is_symlink():
+            raise IncompleteRunError(f"planned reference config path is invalid: {run.run_id}")
+        try:
+            reference_data = _parse_flat_yaml(reference_path.read_bytes(), reference_path)
+        except (OSError, ValueError) as exc:
+            raise IncompleteRunError(f"reference config is malformed: {run.run_id}") from exc
+        if run.reference_trace is not None:
+            baseline_manifest = _read_json(run.reference_trace.parent / "manifest.json", "reference manifest")
+            _require_equal(
+                baseline_manifest.get("config"), reference_data,
+                "reference config content", run,
+            )
     _validate_artifact_evidence(manifest.get("artifacts"), run)
     _require_equal(manifest.get("config"), run.config_data, "manifest.config", run)
     dataset = manifest.get("dataset")
@@ -1098,6 +1181,19 @@ def validate_completed_run(run: ExperimentRun) -> dict[str, object]:
                     for field in ("context_strength", "mean_context_bonus", "mean_rank_displacement"):
                         if not _is_finite_number(row[field], minimum=0.0):
                             raise IncompleteRunError(f"trace[{line_number}].{field} is malformed")
+                margin_present = [field in row for field in REPLACEMENT_MARGIN_PROFILE_TRACE_FIELDS]
+                if any(margin_present) and not all(margin_present):
+                    raise IncompleteRunError(
+                        f"trace[{line_number}] replacement margin profile fields must be all present or all absent"
+                    )
+                if all(margin_present):
+                    margins = row["replacement_margins"]
+                    if not isinstance(margins, list) or any(
+                        not _is_finite_number(value, minimum=0.0) for value in margins
+                    ):
+                        raise IncompleteRunError(f"trace[{line_number}].replacement_margins is malformed")
+                    if margins != sorted(margins):
+                        raise IncompleteRunError(f"trace[{line_number}].replacement_margins must be sorted")
                 rows.append(row)
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
         raise IncompleteRunError(f"invalid trace: {trace_path}") from exc

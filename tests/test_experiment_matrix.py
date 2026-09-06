@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from src.runtime.experiment_matrix import (
+    DEFAULT_METHODS,
     IncompleteRunError,
     build_command,
     build_experiment_matrix,
@@ -371,6 +372,18 @@ class ExperimentMatrixTests(unittest.TestCase):
         self.assertEqual(["NoAdapt", *additions], [run.method for run in runs])
         self.assertEqual([f"{method}.yaml" for method in additions], [run.config_path.name for run in runs[1:]])
 
+    def test_legacy_latent_ablation_is_selectable_without_changing_defaults(self):
+        self.assertIn("LegacyLatentRamen", SUPPORTED_METHODS)
+        with tempfile.TemporaryDirectory() as directory:
+            runs = build_experiment_matrix(
+                datasets=("CIFAR100C",), streams=("block",), methods=("LegacyLatentRamen",),
+                seeds=(0,), evidence_dir=directory, data_root=directory, device="cpu",
+                max_eval_samples=1,
+            )
+        self.assertEqual(["NoAdapt", "LegacyLatentRamen"], [run.method for run in runs])
+        self.assertEqual("LegacyLatentRamen.yaml", runs[-1].config_path.name)
+        self.assertNotIn("LegacyLatentRamen", DEFAULT_METHODS)
+
     def test_support_composition_resume_validation_is_optional_but_exact_when_present(self):
         with tempfile.TemporaryDirectory() as directory:
             run = build_experiment_matrix(
@@ -414,6 +427,37 @@ class ExperimentMatrixTests(unittest.TestCase):
             row["same_domain_ratio"] = 1.2
             trace_path.write_text(json.dumps(row) + "\n")
             with self.assertRaisesRegex(IncompleteRunError, "same_domain_ratio"):
+                validate_completed_run(run)
+
+    def test_replacement_margin_profile_is_optional_but_reconstructed_exactly(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = build_experiment_matrix(
+                datasets=("CIFAR100C",), streams=("iid_mixed",), methods=("NoAdapt",), seeds=(0,),
+                evidence_dir=directory, data_root=directory, device="cpu",
+            )[0]
+            _write_valid_evidence(run)
+            validate_completed_run(run)
+            trace_path = run.run_dir / "trace.jsonl"
+            row = json.loads(trace_path.read_text())
+            row["replacement_margins"] = [.1, .3]
+            trace_path.write_text(json.dumps(row) + "\n")
+            summary_path = run.run_dir / "summary.json"
+            summary = json.loads(summary_path.read_text())
+            summary["replacement_margin_profile"] = {
+                "status": "computed",
+                "definition": "per-query sorted gamma-zero same-domain replacement margins for candidates outside the class-wise top-k",
+                "num_queries": 1, "queries_with_replacement_candidates": 1,
+                "replacement_margin_count": 2,
+                "per_query_candidate_count": {"min": 2, "p50": 2.0, "p95": 2.0, "max": 2},
+                "replacement_margin_p10": .12000000000000001, "replacement_margin_p25": .15,
+                "replacement_margin_p50": .2, "replacement_margin_p75": .25,
+                "replacement_margin_p90": .28,
+            }
+            summary_path.write_text(json.dumps(summary))
+            validate_completed_run(run)
+            summary["replacement_margin_profile"]["replacement_margin_p50"] = .21
+            summary_path.write_text(json.dumps(summary))
+            with self.assertRaisesRegex(IncompleteRunError, "replacement_margin_profile"):
                 validate_completed_run(run)
 
     def test_admission_evidence_summary_is_recomputed_and_tamper_rejected(self):
@@ -1073,6 +1117,23 @@ class ExperimentMatrixTests(unittest.TestCase):
                 _mutate_summary(run, mutate)
                 with self.assertRaises(IncompleteRunError):
                     validate_completed_run(run)
+
+    def test_latency_resume_accepts_cross_interpreter_float_roundoff(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            run = build_experiment_matrix(
+                datasets=("DomainNet",), streams=("block",), methods=("NoAdapt",), seeds=(0,),
+                evidence_dir=temporary_directory,
+            )[0]
+            _write_valid_evidence(run)
+            _mutate_summary(
+                run,
+                lambda summary: summary["forward_latency"].update({
+                    "total_ms": summary["forward_latency"]["total_ms"] + 5e-10,
+                    "mean_per_sample_ms": summary["forward_latency"]["mean_per_sample_ms"] + 5e-10,
+                    "median_per_sample_ms": summary["forward_latency"]["median_per_sample_ms"] + 5e-10,
+                }),
+            )
+            validate_completed_run(run)
 
     def test_retrieval_latency_must_remain_explicitly_unavailable(self):
         mutations = {

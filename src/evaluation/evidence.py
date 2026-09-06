@@ -75,6 +75,9 @@ SOFT_ROUTING_TRACE_FIELDS = (
     "mean_context_bonus",
     "mean_rank_displacement",
 )
+# Optional profiling-only extension.  Retaining the per-query values permits
+# exact reconstruction of the pooled calibration quantiles at resume time.
+REPLACEMENT_MARGIN_PROFILE_TRACE_FIELDS = ("replacement_margins",)
 REFERENCE_IDENTITY_FIELDS = (
     "dataset",
     "model",
@@ -407,6 +410,17 @@ class JsonlTraceWriter:
             for field in ("context_strength", "mean_context_bonus", "mean_rank_displacement"):
                 if not _is_finite_number(row[field], minimum=0.0):
                     raise ValueError(f"{field} must be a finite non-negative number")
+        margin_present = [field in row for field in REPLACEMENT_MARGIN_PROFILE_TRACE_FIELDS]
+        if any(margin_present) and not all(margin_present):
+            raise ValueError("replacement margin profile trace fields must be all present or all absent")
+        if all(margin_present):
+            margins = row["replacement_margins"]
+            if not isinstance(margins, list):
+                raise ValueError("replacement_margins must be a list")
+            if any(not _is_finite_number(value, minimum=0.0) for value in margins):
+                raise ValueError("replacement_margins must contain finite non-negative numbers")
+            if margins != sorted(margins):
+                raise ValueError("replacement_margins must be sorted")
         memory_bytes = row["memory_bytes"]
         if memory_bytes is not None and (
             not isinstance(memory_bytes, int)

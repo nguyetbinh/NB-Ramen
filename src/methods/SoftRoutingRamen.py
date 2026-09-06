@@ -46,6 +46,12 @@ def validate_oracle_soft_rank_ramen_config(config: Mapping[str, Any]) -> dict[st
     if gamma < 0:
         raise ValueError("gamma must be non-negative")
     cfg["gamma"] = gamma
+    profile_replacement_margins = cfg.get("profile_replacement_margins", False)
+    if not isinstance(profile_replacement_margins, bool):
+        raise ValueError("profile_replacement_margins must be a boolean")
+    if profile_replacement_margins and gamma != 0.0:
+        raise ValueError("profile_replacement_margins requires gamma=0")
+    cfg["profile_replacement_margins"] = profile_replacement_margins
     return cfg
 
 
@@ -168,10 +174,16 @@ def update_and_retrieve_oracle_soft_rank_causal_batch(
     include_current: bool,
     beta: float,
     gamma: float,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+    profile_replacement_margins: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
     """Run exact stream-order insertion and global, softly ranked retrieval."""
+    if not isinstance(profile_replacement_margins, bool):
+        raise ValueError("profile_replacement_margins must be a boolean")
+    if profile_replacement_margins and gamma != 0.0:
+        raise ValueError("profile_replacement_margins requires gamma=0")
     retrieved, active_classes, memory_sizes, memory_bytes = [], [], [], []
     metrics: dict[str, list[torch.Tensor]] = {}
+    replacement_margins: list[list[float]] | None = [] if profile_replacement_margins else None
     for index in range(features.shape[0]):
         current = slice(index, index + 1)
         # Preserve CausalRamen's historical-only schedule.  Query before
@@ -180,6 +192,11 @@ def update_and_retrieve_oracle_soft_rank_causal_batch(
         if include_current:
             memory.add(features[current], gradients[current], predicted_classes[current], contexts[current],
                        entropies[current], item_ids=item_ids[current])
+        if replacement_margins is not None:
+            replacement_margins.append(memory.profile_class_balanced_global_replacement_margins(
+                features[current], topk, query_contexts=contexts[current],
+                include_current=include_current, current_item_ids=item_ids[current],
+            )[0].tolist())
         support = memory.query_class_balanced_global(
             features[current], topk, query_contexts=contexts[current], context_strength=gamma,
             include_current=include_current, current_item_ids=item_ids[current],
@@ -215,7 +232,10 @@ def update_and_retrieve_oracle_soft_rank_causal_batch(
         torch.cat(active_classes, dim=0),
         torch.tensor(memory_sizes, device=features.device, dtype=torch.long),
         torch.tensor(memory_bytes, device=features.device, dtype=torch.long),
-        {name: torch.cat(values, dim=0) for name, values in metrics.items()},
+        {
+            **{name: torch.cat(values, dim=0) for name, values in metrics.items()},
+            "replacement_margins": replacement_margins,
+        },
     )
 
 
@@ -254,6 +274,7 @@ class OracleSoftRankRamen(OracleDomainContextHook, TTABase):
                 self.memory, features, gradients, predicted_classes, contexts, entropies, item_ids,
                 topk=self.cfg["topk"], include_current=self.cfg["include_current"],
                 beta=self.cfg["beta"], gamma=self.cfg["gamma"],
+                profile_replacement_margins=self.cfg["profile_replacement_margins"],
             )
             self.model.set_by_sample_grad(retrieved)
             self.last_diagnostics = self._diagnostics(
@@ -290,6 +311,7 @@ class OracleSoftRankRamen(OracleDomainContextHook, TTABase):
             "memory_capacity_scope": self.memory.capacity_scope,
             "memory_max_capacity": self.memory.max_capacity,
             "gamma": self.cfg["gamma"],
+            "profile_replacement_margins": self.cfg["profile_replacement_margins"],
         }
         if composition is None:
             diagnostics.update({
@@ -299,9 +321,13 @@ class OracleSoftRankRamen(OracleDomainContextHook, TTABase):
                 "context_strength": None, "selection_change_ratio": None,
                 "mean_context_bonus": None, "mean_rank_displacement": None,
                 "support_item_ids": None, "support_valid_mask": None,
+                "replacement_margins": None,
             })
         else:
-            diagnostics.update({name: value.detach().clone() for name, value in composition.items()})
+            diagnostics.update({
+                name: value if name == "replacement_margins" else value.detach().clone()
+                for name, value in composition.items()
+            })
         return diagnostics
 
 

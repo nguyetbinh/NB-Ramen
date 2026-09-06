@@ -1,6 +1,7 @@
 from .NoAdapt import NoAdapt
 from .Tent import Tent
 from .Ramen import Ramen
+from .LegacyLatentRamen import LegacyLatentRamen
 from .LatentRamen import LatentRamen
 from .EntropyGatedLatentRamen import EntropyGatedLatentRamen
 from .OracleLatentRamen import OracleLatentRamen
