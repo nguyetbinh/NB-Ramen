@@ -7,12 +7,14 @@ version 1, and exported stream schedules remain at format version 1. Trace
 rows use schema version 3. Version 2 introduced required per-sample
 `memory_bytes`; v3 adds phase-explicit `pre_adaptation_prediction` to open-set
 rows and conditional wrong/correct-sign removal diagnostics to directional
-oracle rows. Completed-run summaries use schema version 3. Version 2
+oracle rows. Completed-run summaries use schema version 4. Version 2
 introduced the explicit device-memory, method-memory, forward-latency,
 throughput, and retrieval-latency blocks; v3 makes pre/post ID accuracy and
-H-score phase-correct and aggregates the hard-mask removal metrics. Strict
+H-score phase-correct and aggregates the hard-mask removal metrics; v4
+separates ID pseudo-label correctness from semantic OOD admission. Strict
 resume and reference-provenance validation accept only these current trace and
-summary versions; prior v1/v2 trace or summary artifacts must be regenerated.
+summary versions; trace v1/v2 and summary v1/v2/v3 artifacts must be regenerated.
+Do not relabel historical artifacts with a newer schema number.
 Before a trace can be used as a direct-CLI negative-adaptation reference, its
 current-schema rows (including predictions and derived correctness) are checked
 against the sibling stream, manifest, and summary accuracy/domain/sliding-window
@@ -26,13 +28,25 @@ current run. Its config must be the canonical `NoAdapt` config; an adapted
 method's config is not a valid substitute. Legacy manifests missing any of
 these identity or provenance fields are rejected.
 
-`LatentRamen` and the separately named `EntropyGatedLatentRamen` may extend a
+`EntropyGatedRamen`, `LatentRamen`, and `EntropyGatedLatentRamen` extend a
 v3 trace with the all-or-none fields `admission_prediction`,
 `admission_normalized_entropy`, and `admitted_to_memory`. Their optional
 `admission_diagnostics` summary is recomputed from the trace during strict
 resume. For the gated method, resume additionally requires every decision to
 equal `admission_normalized_entropy <= max_normalized_entropy` from the exact
-hashed config. Current v3 traces without these optional extensions remain valid.
+hashed config. Methods that do not emit admission diagnostics keep these extensions absent.
+
+For open-set runs, summary v4 reports `admitted_id_count`, `rejected_id_count`,
+`admitted_ood_count`, and `rejected_ood_count`, alongside total admitted/rejected
+counts, admission rate, and mean normalized entropy.
+`admitted_id_pseudo_label_accuracy` and `rejected_id_pseudo_label_accuracy`
+compare `admission_prediction` with `known_label_or_minus_one` only on ID rows.
+The two `*_ood_fraction` fields divide OOD count by the corresponding total
+admitted/rejected count. Empty denominators produce `null`. These diagnostics
+are evaluator-only and never feed labels back to ordinary methods.
+Open-set summaries omit `admitted_contamination_rate` and the old unqualified
+pseudo-label accuracy fields: an ID prediction error is distinct from semantic
+OOD admission. Closed-set summaries retain their previous fields and meaning.
 
 `LatentRamen` also supports an opt-in diagnostic config value
 `retrieval_profile: causal_sync_v1`. Profiled traces add the complete optional
@@ -52,6 +66,49 @@ streams, whose contiguous domain episodes support its full-window definition.
 `novel_domain` remains `not_applicable`: it mixes eligible domains before and
 after the release event, so release-specific recovery requires a separate
 metric.
+
+## Primary temporal protocol
+
+The canonical comparison uses **legacy-compatible batch-atomic mixed-domain
+TTA**. Ramen and primary ConsensusRamen compute the whole evaluator batch,
+admit it into memory, then retrieve for every query. An earlier sample may
+retrieve a later sample from that same batch, including across a domain
+boundary: the fixed batch size is 100 and stream block size is 64. This is not
+strict temporal online TTA. Preserve this shared visibility for the primary
+comparison; do not causalize either primary method or change its frozen config.
+
+Strict stream causality is a separate sensitivity/control experiment. Before
+full execution, compare Ramen B=100, Ramen B=1, and CausalRamen B=100 on one
+identical official CIFAR-100-C CUDA prefix (v1, OOD=.3, block, seed=0,
+block=64, source budget=400/domain, prefix=256). The first contrast measures
+packaging/within-batch visibility sensitivity; Ramen B=1 versus CausalRamen
+B=100 checks strict-causal consistency. Report prediction disagreement and
+ID accuracy differences, with numerical tolerances where relevant. Each
+adapted run needs a paired NoAdapt reference with the **same batch size**;
+B=1 must not reference the B=100 baseline. These controls remain outside the
+252-run primary matrix and are not evidence for tuning or effect-size claims.
+
+## Pre-full CUDA gates
+
+Use trace v3 / summary v4 for a direct `src/main.py` seven-method smoke on the
+same 256-sample cell described above, with `clip_vitbase16`, batch=100, and
+`--artifact-provenance fast`. Run NoAdapt first, then all six frozen adapted
+methods with their config path/SHA-256 locks and its reference trace. Also run
+NoAdapt plus EntropyGatedRamen on `open-set-cifar100-name-rank-v2`, and NoAdapt
+plus OracleIDGradientRamen at OOD=0. The latter must have zero retrieved OOD
+fractions, zero defined sign disagreement, and cosine approximately one for
+nonzero paired directions. Undefined zero-vector diagnostics remain `null`.
+Validate every smoke against its planned identity with
+`runtime.experiment_matrix.validate_completed_run`; do not pass a truncated
+stream to the canonical planner or classify these prefixes as canonical.
+
+Pass the focused and full unit suites, deep official-data preflight, model/data
+provenance, every current-schema CUDA smoke, and causal sensitivity before
+freezing a clean revision. Then dry-plan exactly 252 locked full-stream CUDA
+runs and launch with `--execute --resume`. Smoke outcomes must not retune
+`tau=0.2` or require Consensus to outperform Ramen.
+The latest local gate evidence and remaining hardware blocker are recorded in
+[the 2026-09-07 readiness report](../../plans/20260825-open-world-gradient-memory-evidence/reports/pre-canonical-readiness-20260907.md).
 
 ## Artifact provenance
 

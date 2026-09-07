@@ -15,10 +15,30 @@ from src.evaluation.evidence import (
     SUMMARY_SCHEMA_VERSION, TRACE_SCHEMA_VERSION, JsonlTraceWriter, atomic_write_json, build_run_manifest,
     compare_trace_id_negative_adaptation, compare_trace_negative_adaptation, verify_reference_trace_stream_fingerprint,
     write_run_manifest,
+    admission_diagnostics_summary,
 )
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_open_set_admission_empty_id_groups_have_undefined_accuracy(self):
+        row = {
+            "admission_prediction": 0, "ground_truth_class": 20,
+            "original_label": 20, "known_label_or_minus_one": -1, "is_ood": True,
+            "admission_normalized_entropy": .25,
+        }
+        for admitted in (False, True):
+            with self.subTest(admitted=admitted):
+                result = admission_diagnostics_summary(
+                    [{**row, "admitted_to_memory": admitted}], open_set=True,
+                )
+                self.assertIsNone(result["admitted_id_pseudo_label_accuracy"])
+                self.assertIsNone(result["rejected_id_pseudo_label_accuracy"])
+                self.assertEqual(0, result["admitted_id_count"])
+                self.assertEqual(0, result["rejected_id_count"])
+                self.assertEqual(1.0 if admitted else None, result["admitted_ood_fraction"])
+                self.assertEqual(None if admitted else 1.0, result["rejected_ood_fraction"])
+                self.assertNotIn("admitted_contamination_rate", result)
+
     def test_trace_writer_requires_complete_retrieval_profile_extension(self):
         base = {
             "timestep": 0, "sample_idx": 0, "ground_truth_domain": 0,

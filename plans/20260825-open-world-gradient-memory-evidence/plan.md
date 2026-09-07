@@ -17,7 +17,7 @@ then execute the prespecified CUDA evidence program. Code completion is not
 thesis completion: the final claim requires verified official data, CUDA runs,
 robustness evidence, DomainNet evidence, and strict post-hoc analysis.
 
-## Current state and blockers (updated 2026-08-26)
+## Current state and blockers (updated 2026-09-07)
 
 - **Implementation complete:** F1--F4, evaluator-only ID/OOD isolation,
   pre/post-adaptation detection, ID-only stability, `EntropyGatedRamen`, the
@@ -32,6 +32,11 @@ robustness evidence, DomainNet evidence, and strict post-hoc analysis.
   archive/data is available at `/Users/admin/data`, but this Mac has no CUDA
   runtime. DomainNet is absent. A CUDA runner and actual full-stream execution
   remain required.
+
+- **Pre-full correction:** open-set admission summaries now use known model
+  indices for ID accuracy and separate semantic OOD fractions (trace v3,
+  summary v4). Current-schema CUDA smoke and causal/package sensitivity are
+  pending; see [readiness gates](./reports/pre-canonical-readiness-20260907.md).
 
 ## Dependency graph
 
@@ -72,7 +77,8 @@ robustness evidence, DomainNet evidence, and strict post-hoc analysis.
 ## Success Criteria
 
 - [x] F1--F4 tests and focused integration tests pass with no regression to ordinary Ramen.
-- [x] Local completed runs archive manifest, stream, v2 trace, v2 summary, revision, and paired fingerprint where applicable; canonical acceptance remains pending.
+- [x] Historical local artifacts and their original schemas are archived with revision and paired fingerprints where applicable.
+- [ ] Regenerate current trace-v3 / summary-v4 CUDA artifacts; historical local runs do not satisfy this gate.
 - [ ] Canonical CIFAR-100-C has all 252 CUDA cells (7 methods × 4 ratios × 3 streams × 3 seeds), official provenance, full streams, and strict classification `canonical_cuda_expected`.
 - [x] Required ablation identities/config locks and two additional deterministic split recipes are frozen.
 - [ ] The actual 72-run ablation study, actual 96-run split-robustness study, and real-data DomainNet secondary benchmark are completed and analysed.

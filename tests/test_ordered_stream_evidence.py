@@ -146,6 +146,22 @@ class AdaptedReturnedLogitsMethod:
         pass
 
 
+class AdmissionLogitsMethod(AdaptedReturnedLogitsMethod):
+    """Predict model indices from test inputs with original IDs 5/10/20/30."""
+
+    def __call__(self, images):
+        logits = torch.stack((images[:, 0] != 10, images[:, 0] == 10), dim=1).float() * 3
+        admitted = (images[:, 0] == 10) | (images[:, 0] == 20)
+        self._diagnostics = {
+            "pre_adaptation_prediction": logits.argmax(-1),
+            "pre_adaptation_ood_score": -torch.logsumexp(logits, dim=1),
+            "admission_prediction": logits.argmax(-1),
+            "admission_normalized_entropy": torch.where(admitted, 0.25, 0.75),
+            "admitted_to_memory": admitted,
+        }
+        return logits
+
+
 class OrderedStreamEvidenceTests(unittest.TestCase):
     def setUp(self):
         self.datasets = TensorMultiDomainDataset()
@@ -181,6 +197,31 @@ class OrderedStreamEvidenceTests(unittest.TestCase):
         return build_open_set_stream(
             self.datasets, "iid_mixed", seed=7, ood_ratio=0.5,
         )
+
+    def test_admission_summary_separates_remapped_id_accuracy_from_ood(self):
+        self.datasets.datasets = (
+            TensorDomainDataset(0, [5, 10, 20, 30]),
+            TensorDomainDataset(1, [5, 10, 20, 30]),
+        )
+        self.datasets.known_class_ids = (5, 10)
+        self.datasets.unknown_class_ids = (20, 30)
+        stream = self._open_set_stream()
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self._paths(directory)
+            ordered_stream_test(
+                self.datasets, AdmissionLogitsMethod(), self._args("iid_mixed"), paths, stream,
+            )
+            summary = json.loads(paths["summary"].read_text())
+        self.assertEqual(4, summary["schema_version"])
+        self.assertEqual({
+            "admitted_count": 4, "rejected_count": 4, "admission_rate": 0.5,
+            "mean_normalized_entropy": 0.5,
+            "admitted_id_count": 2, "rejected_id_count": 2,
+            "admitted_ood_count": 2, "rejected_ood_count": 2,
+            "admitted_id_pseudo_label_accuracy": 1.0,
+            "rejected_id_pseudo_label_accuracy": 1.0,
+            "admitted_ood_fraction": 0.5, "rejected_ood_fraction": 0.5,
+        }, summary["admission_diagnostics"])
 
     @staticmethod
     def _trace_rows(paths):

@@ -1,7 +1,7 @@
 ---
 phase: 6
 title: "Local CPU/MPS mechanics verification"
-status: pending
+status: complete
 priority: P2
 effort: "0.5d"
 dependencies: [5]
@@ -14,6 +14,12 @@ dependencies: [5]
 Exercise the frozen interfaces on available hardware and archive reproducible
 noncanonical artifacts. This is a release-quality mechanics gate, never a
 substitute for canonical CUDA effectiveness or cost evidence.
+
+Historical local mechanics checks completed on 2026-08-26; see
+[final evidence status](./reports/final-evidence-status-20260826.md). Their
+original schema versions remain unchanged. Current evidence uses trace v3 /
+summary v4; the required CUDA regeneration is a separate pending phase-7 gate.
+The tasks below describe repeat verification, not missing historical runs.
 
 ## Requirements
 
@@ -29,7 +35,7 @@ substitute for canonical CUDA effectiveness or cost evidence.
 ## Implementation Steps
 
 1. Run focused unit suite, then direct NoAdapt baseline followed by ConsensusRamen and OracleID diagnostic run on identical short streams.
-2. Verify v2 artifacts, optional groups, equal fingerprints, pre/post blocks, ID-only stability fields, and analyzer classification.
+2. Verify trace-v3 / summary-v4 artifacts, optional groups, equal fingerprints, pre/post blocks, ID-only stability fields, and analyzer classification.
 3. Repeat minimal deterministic test on CPU; use MPS only if it passes numerical/tolerance rules.
 
 ## Todo
