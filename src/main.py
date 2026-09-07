@@ -37,6 +37,7 @@ from evaluation import (
     write_summary,
     verify_reference_trace_stream_fingerprint,
 )
+from evaluation.evidence import admission_diagnostics_summary
 from runtime import DeviceMemoryTracker, collect_hardware_evidence
 from runtime.artifact_provenance import (
     ProvenanceError,
@@ -918,21 +919,9 @@ def ordered_stream_test(
             'active_class_count': distribution('retrieval_active_class_count'),
         }
     if admission_rows:
-        admitted_rows = [row for row in admission_rows if row['admitted_to_memory']]
-        rejected_rows = [row for row in admission_rows if not row['admitted_to_memory']]
-        def pseudo_accuracy(rows):
-            return (sum(row['admission_prediction'] == row['ground_truth_class'] for row in rows) / len(rows)) if rows else None
-        summary['admission_diagnostics'] = {
-            'admitted_count': len(admitted_rows),
-            'rejected_count': len(rejected_rows),
-            'admission_rate': len(admitted_rows) / len(admission_rows),
-            'mean_normalized_entropy': sum(row['admission_normalized_entropy'] for row in admission_rows) / len(admission_rows),
-            'admitted_pseudo_label_accuracy': pseudo_accuracy(admitted_rows),
-            'rejected_pseudo_label_accuracy': pseudo_accuracy(rejected_rows),
-            'admitted_contamination_rate': (
-                1.0 - pseudo_accuracy(admitted_rows) if admitted_rows else None
-            ),
-        }
+        summary['admission_diagnostics'] = admission_diagnostics_summary(
+            admission_rows, open_set=open_set_stream is not None,
+        )
     write_summary(evidence_paths['summary'], summary)
 
     tta_model.reset()

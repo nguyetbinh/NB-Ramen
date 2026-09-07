@@ -6,7 +6,10 @@
 **Repository:** `nguyetbinh/NB-Ramen`  
 **Working branch:** `open-world-gradient-memory`  
 **Research direction:** Open-World / Open-Set Mixed-Domain Test-Time Adaptation  
-**Status (2026-08-26):** implementation and local mechanics validation complete; canonical CUDA effectiveness evidence is still pending. See [final evidence status](../../plans/20260825-open-world-gradient-memory-evidence/reports/final-evidence-status-20260826.md).
+**Status (2026-09-07):** admission label-space semantics corrected; current
+artifacts require trace v3 / summary v4. Canonical CUDA evidence and required
+current-schema CUDA controls remain pending. See [readiness report](../../plans/20260825-open-world-gradient-memory-evidence/reports/pre-canonical-readiness-20260907.md);
+[historical local evidence](../../plans/20260825-open-world-gradient-memory-evidence/reports/final-evidence-status-20260826.md) retains its original schema.
 
 ---
 
@@ -872,6 +875,15 @@ use ordinary Ramen aggregation
 SignSGD temporary update
 ```
 
+The primary comparison is **legacy-compatible batch-atomic mixed-domain TTA**.
+Ramen and ConsensusRamen admit the whole current evaluator batch before
+retrieval; earlier queries can retrieve later samples from that batch. With
+batch size 100 and block size 64 this visibility can cross domain boundaries.
+Strict temporal causality is a separate sensitivity/control experiment:
+Ramen B=100 versus B=1 measures packaging sensitivity, and Ramen B=1 versus
+CausalRamen B=100 checks causal consistency on the same stream. These controls
+are not added to the 252-run primary matrix.
+
 Preserve Ramen batch-atomic semantics for admitted samples: admitted current samples are inserted before retrieval and may self-retrieve. Rejected current samples do not enter memory and therefore cannot self-retrieve.
 
 If no support cache is available, use a zero gradient / no adaptation step rather than inventing another fallback.
@@ -905,6 +917,14 @@ admitted_to_memory
 memory_bytes
 pre_adaptation_ood_score
 ```
+
+Open-set summary v4 measures `admitted_id_pseudo_label_accuracy` and
+`rejected_id_pseudo_label_accuracy` only on ID rows, comparing
+`admission_prediction` to `known_label_or_minus_one` (model indices), never to
+original dataset class IDs. It separately records admitted/rejected ID and
+OOD counts, plus `admitted_ood_fraction` and `rejected_ood_fraction` using all
+rows in each admission group as the denominator. Empty-group rates are null.
+Do not label `1 - pseudo_label_accuracy` as semantic OOD contamination.
 
 Add tests for:
 

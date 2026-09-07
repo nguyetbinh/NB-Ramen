@@ -790,6 +790,47 @@ class ExperimentMatrixTests(unittest.TestCase):
             with self.assertRaisesRegex(IncompleteRunError, "admission_diagnostics"):
                 validate_completed_run(run)
 
+    def test_open_set_admission_resume_uses_known_indices_and_rejects_old_semantics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            baseline, gated = build_open_set_evidence_matrix(
+                streams=("block",), ood_ratios=(0.0,), seeds=(0,),
+                methods=("NoAdapt", "EntropyGatedRamen"), evidence_dir=directory,
+                data_root=directory, max_eval_samples=1,
+            )
+            _write_valid_open_set_evidence(baseline)
+            _write_valid_open_set_evidence(gated)
+            _mutate_trace(gated, lambda row: row.update({
+                "admission_prediction": 1, "admission_normalized_entropy": .25,
+                "admitted_to_memory": True,
+            }))
+            admission = {
+                "admitted_count": 1, "rejected_count": 0, "admission_rate": 1.0,
+                "mean_normalized_entropy": .25,
+                "admitted_id_count": 1, "rejected_id_count": 0,
+                "admitted_ood_count": 0, "rejected_ood_count": 0,
+                "admitted_id_pseudo_label_accuracy": 1.0,
+                "rejected_id_pseudo_label_accuracy": None,
+                "admitted_ood_fraction": 0.0, "rejected_ood_fraction": None,
+            }
+            _mutate_summary(gated, lambda summary: summary.update(admission_diagnostics=admission))
+            validate_completed_run(gated)
+            for field, incorrect in (
+                ("admitted_id_pseudo_label_accuracy", 0.0),
+                ("admitted_ood_fraction", 1.0),
+                ("admitted_contamination_rate", 0.0),
+            ):
+                with self.subTest(field=field):
+                    _mutate_summary(gated, lambda summary: summary.update(
+                        admission_diagnostics={**admission, field: incorrect},
+                    ))
+                    with self.assertRaisesRegex(IncompleteRunError, "admission_diagnostics"):
+                        validate_completed_run(gated)
+            _mutate_summary(gated, lambda summary: summary.update(
+                admission_diagnostics=admission, schema_version=3,
+            ))
+            with self.assertRaisesRegex(IncompleteRunError, "summary.schema_version"):
+                validate_completed_run(gated)
+
     def test_gated_resume_rejects_entropy_decision_that_disagrees_with_config(self):
         with tempfile.TemporaryDirectory() as directory:
             runs = build_experiment_matrix(

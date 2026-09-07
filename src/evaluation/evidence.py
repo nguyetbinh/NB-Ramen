@@ -27,9 +27,9 @@ from urllib.parse import quote_from_bytes
 # Trace v3 makes pre/post open-set prediction phases explicit and extends the
 # oracle hard-mask diagnostics. Version 2 evidence remains historical.
 TRACE_SCHEMA_VERSION = 3
-# Summary v3 reports phase-correct open-set classification/H-score metrics and
-# hard-mask-specific oracle removal rates.
-SUMMARY_SCHEMA_VERSION = 3
+# Summary v4 separates ID pseudo-label correctness in model-index space from
+# semantic OOD admission. Summary v3 artifacts must not be reinterpreted.
+SUMMARY_SCHEMA_VERSION = 4
 TRACE_REQUIRED_FIELDS = (
     "schema_version",
     "run_id",
@@ -352,6 +352,52 @@ def write_run_manifest(path: os.PathLike[str] | str, **manifest_kwargs: Any) -> 
     manifest = build_run_manifest(**manifest_kwargs)
     atomic_write_json(path, manifest)
     return manifest
+
+
+def admission_diagnostics_summary(
+    rows: list[Mapping[str, Any]], *, open_set: bool,
+) -> dict[str, Any]:
+    """Summarize validated admission rows using evaluator-only label metadata.
+
+    OOD fractions use all admitted/rejected rows as their denominators; ID
+    pseudo-label accuracy uses only ID rows. Empty groups have no defined rate.
+    Closed-set diagnostics retain their existing field names and semantics.
+    """
+    admitted = [row for row in rows if row["admitted_to_memory"]]
+    rejected = [row for row in rows if not row["admitted_to_memory"]]
+
+    def pseudo_accuracy(selected, label_field):
+        return (
+            sum(row["admission_prediction"] == row[label_field] for row in selected) / len(selected)
+            if selected else None
+        )
+
+    result = {
+        "admitted_count": len(admitted),
+        "rejected_count": len(rejected),
+        "admission_rate": len(admitted) / len(rows) if rows else None,
+        "mean_normalized_entropy": (
+            sum(row["admission_normalized_entropy"] for row in rows) / len(rows) if rows else None
+        ),
+    }
+    if open_set:
+        for name, selected in (("admitted", admitted), ("rejected", rejected)):
+            id_rows = [row for row in selected if not row["is_ood"]]
+            ood_count = len(selected) - len(id_rows)
+            result[f"{name}_id_count"] = len(id_rows)
+            result[f"{name}_ood_count"] = ood_count
+            result[f"{name}_id_pseudo_label_accuracy"] = pseudo_accuracy(
+                id_rows, "known_label_or_minus_one",
+            )
+            result[f"{name}_ood_fraction"] = ood_count / len(selected) if selected else None
+    else:
+        admitted_accuracy = pseudo_accuracy(admitted, "ground_truth_class")
+        result.update({
+            "admitted_pseudo_label_accuracy": admitted_accuracy,
+            "rejected_pseudo_label_accuracy": pseudo_accuracy(rejected, "ground_truth_class"),
+            "admitted_contamination_rate": 1.0 - admitted_accuracy if admitted_accuracy is not None else None,
+        })
+    return result
 
 
 def write_summary(path: os.PathLike[str] | str, summary: Mapping[str, Any]) -> None:

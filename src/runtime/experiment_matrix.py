@@ -49,6 +49,7 @@ try:
         ORACLE_HARD_MASK_DIAGNOSTICS,
         RETRIEVAL_PROFILE_TRACE_FIELDS,
         TRACE_SCHEMA_VERSION,
+        admission_diagnostics_summary,
         compare_trace_id_negative_adaptation,
         compare_trace_negative_adaptation,
     )
@@ -70,6 +71,7 @@ except ImportError:  # ``runtime`` top-level package or direct-file invocation.
         ORACLE_HARD_MASK_DIAGNOSTICS,
         RETRIEVAL_PROFILE_TRACE_FIELDS,
         TRACE_SCHEMA_VERSION,
+        admission_diagnostics_summary,
         compare_trace_id_negative_adaptation,
         compare_trace_negative_adaptation,
     )
@@ -940,23 +942,7 @@ def _validate_summary(
     if any(admission_presence) and not all(admission_presence):
         raise IncompleteRunError(f"trace contains mixed admission evidence availability: {run.run_id}")
     if all(admission_presence):
-        admitted = [row for row in rows if row["admitted_to_memory"]]
-        rejected = [row for row in rows if not row["admitted_to_memory"]]
-        def pseudo_accuracy(selected):
-            return (
-                sum(row["admission_prediction"] == row["ground_truth_class"] for row in selected) / len(selected)
-                if selected else None
-            )
-        admitted_accuracy = pseudo_accuracy(admitted)
-        expected_admission = {
-            "admitted_count": len(admitted),
-            "rejected_count": len(rejected),
-            "admission_rate": len(admitted) / len(rows),
-            "mean_normalized_entropy": sum(row["admission_normalized_entropy"] for row in rows) / len(rows),
-            "admitted_pseudo_label_accuracy": admitted_accuracy,
-            "rejected_pseudo_label_accuracy": pseudo_accuracy(rejected),
-            "admitted_contamination_rate": 1.0 - admitted_accuracy if admitted_accuracy is not None else None,
-        }
+        expected_admission = admission_diagnostics_summary(rows, open_set=run.open_set)
         _require_equal(summary.get("admission_diagnostics"), expected_admission, "summary.admission_diagnostics", run)
     elif "admission_diagnostics" in summary:
         raise IncompleteRunError(f"summary admission diagnostics without trace evidence: {run.run_id}")
