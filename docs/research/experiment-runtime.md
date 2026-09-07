@@ -174,6 +174,12 @@ scientific run.
 
 ## Create the environment
 
+Matrix-generated commands preserve the selected Python interpreter's
+virtualenv path, including executable symlinks. They must not resolve
+`venv/bin/python` to its base interpreter: doing so bypasses the environment's
+installed packages. Bare names such as `python3` remain PATH lookups. Dataset,
+config, and evidence paths still use their canonical resolved identities.
+
 From the repository root:
 
 ```shell

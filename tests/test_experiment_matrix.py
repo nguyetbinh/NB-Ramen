@@ -3,10 +3,12 @@ import hashlib
 import io
 import json
 import shutil
+import subprocess
 import tempfile
 from dataclasses import replace
 from pathlib import Path
 import unittest
+import venv
 from unittest.mock import patch
 
 from src.runtime.experiment_matrix import (
@@ -1202,6 +1204,29 @@ class ExperimentMatrixTests(unittest.TestCase):
                 datasets=("CIFAR100C",), streams=("iid_mixed",), methods=("NoAdapt",),
                 seeds=(huge_seed,),
             )
+
+    def test_command_preserves_symlinked_virtualenv_interpreter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            environment = Path(directory) / "venv"
+            venv.EnvBuilder(with_pip=False, symlinks=True).create(environment)
+            python = environment / "bin" / "python"
+            run = build_experiment_matrix(
+                datasets=("CIFAR100C",), streams=("block",), methods=("NoAdapt",),
+                seeds=(0,), evidence_dir=directory, data_root=directory, device="cpu",
+            )[0]
+            command = build_command(run, python_executable=python)
+            prefix = subprocess.check_output(
+                [command[0], "-c", "import sys; print(sys.prefix)"], text=True,
+            ).strip()
+            self.assertEqual(environment.resolve(), Path(prefix).resolve())
+            self.assertEqual(str(python.absolute()), command[0])
+
+    def test_command_keeps_bare_python_names_for_path_lookup(self):
+        run = build_experiment_matrix(
+            datasets=("CIFAR100C",), streams=("block",), methods=("NoAdapt",),
+            seeds=(0,), device="cpu",
+        )[0]
+        self.assertEqual("python3", build_command(run, python_executable="python3")[0])
 
     def test_commands_use_run_identity_and_small_budget_windows(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
