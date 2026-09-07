@@ -129,11 +129,15 @@ class AdaptedReturnedLogitsMethod:
         self.forward_calls += 1
         pre_logits = _base_open_set_logits(images)
         self._diagnostics = {
+            "pre_adaptation_prediction": pre_logits.argmax(-1).detach(),
             "pre_adaptation_ood_score": -torch.logsumexp(pre_logits.detach(), dim=1),
         }
-        # A sample-dependent common logit shift preserves predictions while
-        # deliberately changing the returned-logit energy on OOD rows.
-        return pre_logits + images[:, :1] * 4.0
+        # Change the ID decision and shift OOD energy, proving that both
+        # classification and detection summaries use their matching phase.
+        output = pre_logits + images[:, :1] * 4.0
+        is_unknown = images[:, 0].to(torch.bool)
+        output[~is_unknown] = output[~is_unknown].flip(dims=(1,))
+        return output
 
     def get_diagnostics(self):
         return self._diagnostics
@@ -151,15 +155,27 @@ class OrderedStreamEvidenceTests(unittest.TestCase):
             {"ramen_vs_oracle_id_cosine": 0.0, "consensus_vs_oracle_id_cosine": 0.3,
              "ramen_vs_oracle_id_sign_disagreement": 0.8,
              "consensus_vs_oracle_id_sign_disagreement": 0.5,
-             "retrieved_ood_fraction": 0.0, "retrieved_ood_weight_fraction": 0.0},
+             "retrieved_ood_fraction": 0.0, "retrieved_ood_weight_fraction": 0.0,
+             "consensus_diagnostic_applied": True,
+             "consensus_wrong_sign_coordinate_count": 2,
+             "consensus_wrong_sign_removed_count": 1,
+             "consensus_correct_sign_coordinate_count": 3,
+             "consensus_correct_sign_removed_count": 1},
             {"ramen_vs_oracle_id_cosine": 0.0, "consensus_vs_oracle_id_cosine": None,
              "ramen_vs_oracle_id_sign_disagreement": 0.8,
              "consensus_vs_oracle_id_sign_disagreement": None,
-             "retrieved_ood_fraction": 0.0, "retrieved_ood_weight_fraction": 0.0},
+             "retrieved_ood_fraction": 0.0, "retrieved_ood_weight_fraction": 0.0,
+             "consensus_diagnostic_applied": False,
+             "consensus_wrong_sign_coordinate_count": 0,
+             "consensus_wrong_sign_removed_count": 0,
+             "consensus_correct_sign_coordinate_count": 0,
+             "consensus_correct_sign_removed_count": 0},
         ]
         summary = _oracle_gradient_summary(rows)
         self.assertAlmostEqual(0.3, summary["gdc_reduction_mean"])
         self.assertAlmostEqual(0.3, summary["sdr_reduction_mean"])
+        self.assertEqual(0.5, summary["consensus_wrong_sign_removal_rate"])
+        self.assertAlmostEqual(1 / 3, summary["consensus_correct_sign_removal_rate"])
 
     def _open_set_stream(self):
         return build_open_set_stream(
@@ -216,6 +232,10 @@ class OrderedStreamEvidenceTests(unittest.TestCase):
         self.assertTrue(all(row["pre_adaptation_ood_score"] != row["post_adaptation_ood_score"] for row in ood_rows))
         self.assertEqual(1.0, summary["open_set"]["pre_adaptation_detection"]["auroc"])
         self.assertEqual(0.0, summary["open_set"]["post_adaptation_detection"]["auroc"])
+        self.assertEqual(1.0, summary["open_set"]["pre_adaptation_detection"]["id_accuracy"])
+        self.assertEqual(0.0, summary["open_set"]["post_adaptation_detection"]["id_accuracy"])
+        self.assertEqual(0.0, summary["open_set"]["auroc"])
+        self.assertEqual(0.0, summary["open_set"]["id_accuracy"])
 
     @staticmethod
     def _args(stream_mode):

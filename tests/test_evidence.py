@@ -202,6 +202,7 @@ class EvidenceTests(unittest.TestCase):
             "memory_size": 0, "num_active_contexts": None, "memory_bytes": None,
             "latency_ms": 1.0, "original_label": 0, "known_label_or_minus_one": 0,
             "is_ood": False, "open_set_split_version": "split", "ood_ratio": 0.0,
+            "pre_adaptation_prediction": 0,
             "pre_adaptation_ood_score": 0.0,
             "post_adaptation_ood_score": 0.0,
         }
