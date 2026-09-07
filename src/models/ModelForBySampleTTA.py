@@ -22,9 +22,9 @@ class BySampleLayerNorm(nn.Module):
         self.register_buffer('weight', layernorm_module.weight.data)
         self.register_buffer('bias', layernorm_module.bias.data)
 
-        # Weight and bias by sample ...
-        self.weight_by_sample = nn.Parameter(self.weight.expand(max_batch_size, -1).contiguous())
-        self.bias_by_sample = nn.Parameter(self.bias.expand(max_batch_size, -1).contiguous())
+        # Always copy: at capacity 1, contiguous() would alias the reset buffers.
+        self.weight_by_sample = nn.Parameter(self.weight.expand(max_batch_size, -1).clone())
+        self.bias_by_sample = nn.Parameter(self.bias.expand(max_batch_size, -1).clone())
         self.recent_B = None
 
         # skip affine transform, use our implementation instead
@@ -81,9 +81,9 @@ class BySampleBatchNorm(nn.Module):
         self.register_buffer('weight', batchnorm_module.weight.data)
         self.register_buffer('bias', batchnorm_module.bias.data)
 
-        # Weight and bias by sample ...
-        self.weight_by_sample = nn.Parameter(self.weight.expand(max_batch_size, -1).contiguous())
-        self.bias_by_sample = nn.Parameter(self.bias.expand(max_batch_size, -1).contiguous())
+        # Always copy: at capacity 1, contiguous() would alias the reset buffers.
+        self.weight_by_sample = nn.Parameter(self.weight.expand(max_batch_size, -1).clone())
+        self.bias_by_sample = nn.Parameter(self.bias.expand(max_batch_size, -1).clone())
         self.recent_B = None
 
         # skip affine transform, use our implementation instead

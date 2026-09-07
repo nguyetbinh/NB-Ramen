@@ -88,6 +88,23 @@ adapted run needs a paired NoAdapt reference with the **same batch size**;
 B=1 must not reference the B=100 baseline. These controls remain outside the
 252-run primary matrix and are not evidence for tuning or effect-size claims.
 
+### Independent pretrained reset state
+
+Per-sample LayerNorm and BatchNorm affine parameters own copies of the
+pretrained reset buffers, including when `max_batch_size=1`. An expanded
+one-row view is already contiguous, so `contiguous()` alone would share
+storage: optimization would overwrite the pretrained state and each reset
+would retain prior adaptation. This invalidates the B=1 causal control.
+Regression tests exercise repeated real SignSGD updates and resets at
+capacities 1, 2, and 100, with a separate real-CUDA check.
+
+When reviewing causal sensitivity, also compare pre-adaptation predictions
+against each same-batch NoAdapt baseline. Large accumulating differences
+require diagnosis before interpreting post-adaptation differences as memory
+visibility effects. Imported smoke evidence from commit `4eef356` exposed
+this reset defect; see the
+[CUDA evidence audit](../../plans/20260825-open-world-gradient-memory-evidence/reports/kaggle-cuda-evidence-audit-20260907.md).
+
 ### FP16 CUDA retrieval compatibility
 
 Ramen's class caches and the directional oracle caches use the matrix-multiply
