@@ -4,13 +4,15 @@
 
 Evidence files are independently versioned. Run manifests remain at schema
 version 1, and exported stream schedules remain at format version 1. Trace
-rows use schema version 2: compared with v1, v2 requires `memory_bytes` for
-each sample (a non-negative retained-memory byte count or `null` when the
-method cannot provide it). Completed-run summaries use schema version 2:
-compared with v1, they include explicit device-memory, method-memory,
-forward-latency, throughput, and retrieval-latency evidence blocks. Strict
+rows use schema version 3. Version 2 introduced required per-sample
+`memory_bytes`; v3 adds phase-explicit `pre_adaptation_prediction` to open-set
+rows and conditional wrong/correct-sign removal diagnostics to directional
+oracle rows. Completed-run summaries use schema version 3. Version 2
+introduced the explicit device-memory, method-memory, forward-latency,
+throughput, and retrieval-latency blocks; v3 makes pre/post ID accuracy and
+H-score phase-correct and aggregates the hard-mask removal metrics. Strict
 resume and reference-provenance validation accept only these current trace and
-summary versions; prior v1 trace or summary artifacts must be regenerated.
+summary versions; prior v1/v2 trace or summary artifacts must be regenerated.
 Before a trace can be used as a direct-CLI negative-adaptation reference, its
 current-schema rows (including predictions and derived correctness) are checked
 against the sibling stream, manifest, and summary accuracy/domain/sliding-window
@@ -25,12 +27,12 @@ method's config is not a valid substitute. Legacy manifests missing any of
 these identity or provenance fields are rejected.
 
 `LatentRamen` and the separately named `EntropyGatedLatentRamen` may extend a
-v2 trace with the all-or-none fields `admission_prediction`,
+v3 trace with the all-or-none fields `admission_prediction`,
 `admission_normalized_entropy`, and `admitted_to_memory`. Their optional
 `admission_diagnostics` summary is recomputed from the trace during strict
 resume. For the gated method, resume additionally requires every decision to
 equal `admission_normalized_entropy <= max_normalized_entropy` from the exact
-hashed config. Older v2 traces without these optional extensions remain valid.
+hashed config. Current v3 traces without these optional extensions remain valid.
 
 `LatentRamen` also supports an opt-in diagnostic config value
 `retrieval_profile: causal_sync_v1`. Profiled traces add the complete optional
@@ -238,9 +240,22 @@ PYTHONPATH=src python src/main.py \
 
 Open-set traces add the all-or-none evaluator fields `original_label`,
 `known_label_or_minus_one`, `is_ood`, split version, ratio, and a
-pre-adaptation energy score (`-logsumexp`). Oracle gradient diagnostics add
-retrieved OOD fractions plus all-vs-ID direction cosine/sign disagreement.
-They are diagnostic upper bounds, not deployable methods. A local CPU/MPS
+pre-adaptation prediction and energy score (`-logsumexp`), plus the
+post-adaptation energy from returned logits. The pre detection block uses the
+pre prediction and score; the post block uses the returned prediction and
+score, so each block's ID accuracy and H-score now belong to one phase. The
+summary and descriptive analyzer use a consistent post-adaptation flat
+projection for compatibility and also expose both phase-specific blocks and
+values.
+
+Oracle gradient diagnostics add retrieved OOD fractions plus all-vs-ID
+direction cosine/sign disagreement. They also report wrong-sign removal rate
+(the fraction of nonzero Ramen coordinates opposing OracleID that the hard
+mask suppresses) and correct-sign removal rate (the corresponding collateral
+suppression of matching nonzero coordinates), with auditable eligible and
+removed counts. Only samples where the consensus diagnostic actually runs are
+included in the summary rates. These are diagnostic upper bounds, not
+deployable methods. A local CPU/MPS
 check is recorded in `plans/20260824-latent-ramen-evidence/reports/`; CUDA
 effectiveness evidence still requires a Linux NVIDIA runner and the verified
 datasets.
@@ -368,6 +383,13 @@ match the planned lock. A missing, substituted fallback, or modified file
 therefore fails before model, dataset, manifest, or run-directory work begins.
 `NoAdapt` has no config lock, and direct legacy commands without both flags
 continue to use the normal configuration resolution behavior.
+
+Before commands are emitted, the canonical CIFAR planner additionally checks
+all six adapted YAML files against preregistered full-file SHA-256 constants
+and exact parsed semantic surfaces. This prevents an edited config from being
+accepted as a new canonical identity merely because planning and launch agree
+on the edited bytes. The primary Consensus policy is defined once and shared
+by the method, evaluator-only direction diagnostic, and canonical planner.
 
 `build_open_set_evidence_matrix` is the explicitly flexible, noncanonical
 library/pilot builder for partial development grids. Its output must not be

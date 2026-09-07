@@ -184,6 +184,7 @@ def _method_diagnostics(tta_model, batch_size):
         'retrieval_eligible_candidate_count': expand('retrieval_eligible_candidate_count'),
         'retrieval_returned_support_count': expand('retrieval_returned_support_count'),
         'retrieval_active_class_count': expand('retrieval_active_class_count'),
+        'pre_adaptation_prediction': expand('pre_adaptation_prediction'),
         'pre_adaptation_ood_score': expand('pre_adaptation_ood_score'),
         'retrieved_ood_fraction': expand('retrieved_ood_fraction'),
         'retrieved_ood_weight_fraction': expand('retrieved_ood_weight_fraction'),
@@ -194,6 +195,12 @@ def _method_diagnostics(tta_model, batch_size):
         'consensus_vs_ramen_cosine': expand('consensus_vs_ramen_cosine'),
         'consensus_diagnostic_mask_rate': expand('consensus_diagnostic_mask_rate'),
         'consensus_diagnostic_applied': expand('consensus_diagnostic_applied'),
+        'consensus_wrong_sign_coordinate_count': expand('consensus_wrong_sign_coordinate_count'),
+        'consensus_wrong_sign_removed_count': expand('consensus_wrong_sign_removed_count'),
+        'consensus_wrong_sign_removal_rate': expand('consensus_wrong_sign_removal_rate'),
+        'consensus_correct_sign_coordinate_count': expand('consensus_correct_sign_coordinate_count'),
+        'consensus_correct_sign_removed_count': expand('consensus_correct_sign_removed_count'),
+        'consensus_correct_sign_removal_rate': expand('consensus_correct_sign_removal_rate'),
         'consensus_mean_agreement': expand('consensus_mean_agreement'),
         'consensus_p10_agreement': expand('consensus_p10_agreement'),
         'consensus_p50_agreement': expand('consensus_p50_agreement'),
@@ -213,6 +220,21 @@ def _oracle_gradient_summary(rows):
     consensus_gdc_mean = mean('consensus_vs_oracle_id_cosine', lambda value: 1.0 - value)
     ramen_sdr_mean = mean('ramen_vs_oracle_id_sign_disagreement')
     consensus_sdr_mean = mean('consensus_vs_oracle_id_sign_disagreement')
+    hard_mask_rows = [row for row in rows if row['consensus_diagnostic_applied']]
+
+    def removal_counts(kind):
+        coordinate_count = sum(
+            row[f'consensus_{kind}_sign_coordinate_count'] for row in hard_mask_rows
+        )
+        removed_count = sum(
+            row[f'consensus_{kind}_sign_removed_count'] for row in hard_mask_rows
+        )
+        return coordinate_count, removed_count, (
+            removed_count / coordinate_count if coordinate_count else None
+        )
+
+    wrong_count, wrong_removed, wrong_rate = removal_counts('wrong')
+    correct_count, correct_removed, correct_rate = removal_counts('correct')
     def paired_mean(ramen_field, consensus_field, transform=lambda value: value):
         values = [
             transform(row[ramen_field]) - transform(row[consensus_field])
@@ -236,6 +258,13 @@ def _oracle_gradient_summary(rows):
         'sdr_reduction_mean': paired_mean(
             'ramen_vs_oracle_id_sign_disagreement', 'consensus_vs_oracle_id_sign_disagreement',
         ),
+        'consensus_hard_mask_applied_sample_count': len(hard_mask_rows),
+        'consensus_wrong_sign_coordinate_count': wrong_count,
+        'consensus_wrong_sign_removed_count': wrong_removed,
+        'consensus_wrong_sign_removal_rate': wrong_rate,
+        'consensus_correct_sign_coordinate_count': correct_count,
+        'consensus_correct_sign_removed_count': correct_removed,
+        'consensus_correct_sign_removal_rate': correct_rate,
         'defined_direction_count': sum(
             row['ramen_vs_oracle_id_cosine'] is not None for row in rows
         ),
@@ -500,10 +529,16 @@ def ordered_stream_test(
                 elif retrieval_profile_available != batch_profile_available:
                     raise ValueError('retrieval profile diagnostics availability changed within one run')
                 ood_scores = diagnostics['pre_adaptation_ood_score']
-                if open_set_stream is not None and any(value is None for value in ood_scores):
-                    raise ValueError(
-                        'open-set evaluation requires a finite pre_adaptation_ood_score diagnostic from the method'
-                    )
+                pre_adaptation_predictions = diagnostics['pre_adaptation_prediction']
+                if open_set_stream is not None:
+                    if any(value is None for value in ood_scores):
+                        raise ValueError(
+                            'open-set evaluation requires a finite pre_adaptation_ood_score diagnostic from the method'
+                        )
+                    if any(value is None for value in pre_adaptation_predictions):
+                        raise ValueError(
+                            'open-set evaluation requires a pre_adaptation_prediction diagnostic from the method'
+                        )
                 oracle_gradient_available = bool(
                     getattr(tta_model, 'emits_oracle_gradient_diagnostics', False)
                 )
@@ -513,6 +548,12 @@ def ordered_stream_test(
                     'consensus_vs_oracle_id_cosine', 'consensus_vs_oracle_id_sign_disagreement',
                     'consensus_vs_ramen_cosine', 'consensus_diagnostic_mask_rate',
                     'consensus_diagnostic_applied',
+                    'consensus_wrong_sign_coordinate_count',
+                    'consensus_wrong_sign_removed_count',
+                    'consensus_wrong_sign_removal_rate',
+                    'consensus_correct_sign_coordinate_count',
+                    'consensus_correct_sign_removed_count',
+                    'consensus_correct_sign_removal_rate',
                 )
                 if oracle_gradient_available and any(
                     diagnostics[field][offset] is None
@@ -574,6 +615,7 @@ def ordered_stream_test(
                             'is_ood': bool(ood_flags[offset]),
                             'open_set_split_version': open_set_stream['split_version'],
                             'ood_ratio': float(open_set_stream['requested_ood_ratio']),
+                            'pre_adaptation_prediction': int(pre_adaptation_predictions[offset]),
                             'pre_adaptation_ood_score': float(ood_scores[offset]),
                             'post_adaptation_ood_score': float(post_adaptation_ood_scores[offset]),
                         })
@@ -683,22 +725,26 @@ def ordered_stream_test(
             where=id_counts > 0,
         )
         metric_kwargs = {
-            'predictions': [row['prediction'] for row in open_set_rows],
             'ground_truth_classes': [row['known_label_or_minus_one'] for row in open_set_rows],
             'is_ood': [row['is_ood'] for row in open_set_rows],
         }
         pre_detection = open_set_detection_summary(
-            **metric_kwargs, ood_scores=[row['pre_adaptation_ood_score'] for row in open_set_rows],
+            **metric_kwargs,
+            predictions=[row['pre_adaptation_prediction'] for row in open_set_rows],
+            ood_scores=[row['pre_adaptation_ood_score'] for row in open_set_rows],
             score='negative_logsumexp_pre_adaptation_logits',
         )
         post_detection = open_set_detection_summary(
-            **metric_kwargs, ood_scores=[row['post_adaptation_ood_score'] for row in open_set_rows],
+            **metric_kwargs,
+            predictions=[row['prediction'] for row in open_set_rows],
+            ood_scores=[row['post_adaptation_ood_score'] for row in open_set_rows],
             score='negative_logsumexp_post_adaptation_logits',
         )
         valid_id_accs = id_accuracies[~np.isnan(id_accuracies)]
         open_set_summary = {
-            # Legacy top-level fields remain an exact pre-adaptation view.
-            **pre_detection,
+            # Schema v3 keeps the flat compatibility projection internally
+            # consistent: it is the returned, post-adaptation method view.
+            **post_detection,
             'pre_adaptation_detection': pre_detection,
             'post_adaptation_detection': post_detection,
             'split_version': open_set_stream['split_version'],

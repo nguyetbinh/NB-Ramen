@@ -34,7 +34,7 @@ except ImportError:  # pragma: no cover - direct-file support
     )
 
 
-REPORT_SCHEMA_VERSION = 2
+REPORT_SCHEMA_VERSION = 3
 
 
 def _number(value: object) -> float | None:
@@ -115,7 +115,7 @@ def analyse_open_set_completed_runs(
     classification = "canonical_cuda_expected" if canonical_coverage and canonical_runtime else "noncanonical_pilot"
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
-        "analysis_contract": "open_set_consensus_descriptive_v2",
+        "analysis_contract": "open_set_consensus_descriptive_v3",
         "classification": classification,
         "consensus_certification": "not_applicable",
         "coverage": {"expected_cell_count": len(expected_cells), "observed_cell_count": len(observed_cells), "complete": canonical_coverage},
@@ -128,19 +128,25 @@ def _open_set_metrics(summary: Mapping[str, object], method: str) -> dict[str, o
     if not isinstance(block, Mapping):
         raise ValueError(f"open-set summary missing for {method}")
     result = {}
-    for name in ("id_accuracy", "worst_domain_id_accuracy"):
-        value = _number(block.get(name))
-        if value is None:
-            raise ValueError(f"open-set summary {name} is missing or non-finite for {method}")
-        result[name] = value
+    worst_domain_id_accuracy = _number(block.get("worst_domain_id_accuracy"))
+    if worst_domain_id_accuracy is None:
+        raise ValueError(
+            f"open-set summary worst_domain_id_accuracy is missing or non-finite for {method}"
+        )
+    result["worst_domain_id_accuracy"] = worst_domain_id_accuracy
     pre = block.get("pre_adaptation_detection")
     post = block.get("post_adaptation_detection")
     if not isinstance(pre, Mapping) or not isinstance(post, Mapping):
         raise ValueError(f"open-set summary lacks explicit pre/post adaptation detection for {method}")
     result["pre_adaptation_detection"] = _detection_metrics(pre, method, "pre")
     result["post_adaptation_detection"] = _detection_metrics(post, method, "post")
-    # Retain the prior report fields as the pre-adaptation projection.
-    result.update(result["pre_adaptation_detection"])
+    # The flat compatibility projection is consistently post-adaptation. The
+    # previous runtime combined post ID accuracy with pre-adaptation OOD scores.
+    result.update(result["post_adaptation_detection"])
+    result["pre_adaptation_id_accuracy"] = result["pre_adaptation_detection"]["id_accuracy"]
+    result["post_adaptation_id_accuracy"] = result["post_adaptation_detection"]["id_accuracy"]
+    for name in ("auroc", "fpr95", "h_score", "ood_recall_at_fpr95"):
+        result[f"pre_adaptation_{name}"] = result["pre_adaptation_detection"][name]
     result["post_adaptation_auroc"] = result["post_adaptation_detection"]["auroc"]
     result["post_adaptation_fpr95"] = result["post_adaptation_detection"]["fpr95"]
     result["post_adaptation_h_score"] = result["post_adaptation_detection"]["h_score"]
@@ -158,12 +164,25 @@ def _open_set_metrics(summary: Mapping[str, object], method: str) -> dict[str, o
         for field in (
             "ramen_gdc_mean", "consensus_gdc_mean", "ramen_sdr_mean",
             "consensus_sdr_mean", "gdc_reduction_mean", "sdr_reduction_mean",
+            "consensus_wrong_sign_removal_rate",
+            "consensus_correct_sign_removal_rate",
         ):
             if field not in diagnostic:
                 raise ValueError(f"oracle diagnostic {field} is missing for {method}")
             value = _number(diagnostic.get(field))
             if diagnostic.get(field) is not None and value is None:
                 raise ValueError(f"oracle diagnostic {field} is non-finite for {method}")
+            result[field] = value
+        for field in (
+            "consensus_hard_mask_applied_sample_count",
+            "consensus_wrong_sign_coordinate_count",
+            "consensus_wrong_sign_removed_count",
+            "consensus_correct_sign_coordinate_count",
+            "consensus_correct_sign_removed_count",
+        ):
+            value = _nonnegative_integer(diagnostic.get(field))
+            if value is None:
+                raise ValueError(f"oracle diagnostic {field} is missing or invalid for {method}")
             result[field] = value
     if method in OPEN_SET_CONSENSUS_METHODS:
         diagnostic = summary.get("consensus_diagnostics")
@@ -176,7 +195,12 @@ def _open_set_metrics(summary: Mapping[str, object], method: str) -> dict[str, o
 
 def _detection_metrics(block: Mapping[str, object], method: str, phase: str) -> dict[str, object]:
     detection_status = block.get("status")
-    result = {}
+    phase_id_accuracy = _number(block.get("id_accuracy"))
+    if phase_id_accuracy is None:
+        raise ValueError(
+            f"{phase}-adaptation summary id_accuracy is missing or non-finite for {method}"
+        )
+    result = {"id_accuracy": phase_id_accuracy}
     if detection_status == "computed":
         for name in ("auroc", "fpr95", "h_score", "ood_recall_at_fpr95"):
             value = _number(block.get(name))

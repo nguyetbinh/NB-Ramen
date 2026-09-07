@@ -666,14 +666,9 @@ consensus_threshold = 0.2
 min_consensus_classes = 3
 ```
 
-Add config keys only if required for strict config identity, for example:
-
-```yaml
-diagnostic_consensus_threshold: 0.2
-diagnostic_min_consensus_classes: 3
-```
-
-Do not tune these independently from the primary v0 method.
+These values come from one shared code contract imported by the primary
+method, evaluator-only diagnostic, and canonical planner. They are not copied
+into independently tunable oracle keys.
 
 ---
 
@@ -687,6 +682,12 @@ consensus_vs_oracle_id_sign_disagreement
 consensus_vs_ramen_cosine
 consensus_diagnostic_mask_rate
 consensus_diagnostic_applied
+consensus_wrong_sign_coordinate_count
+consensus_wrong_sign_removed_count
+consensus_wrong_sign_removal_rate
+consensus_correct_sign_coordinate_count
+consensus_correct_sign_removed_count
+consensus_correct_sign_removal_rate
 ```
 
 Existing fields remain:
@@ -707,7 +708,15 @@ ramen_sdr_mean
 consensus_sdr_mean
 gdc_reduction_mean
 sdr_reduction_mean
+consensus_wrong_sign_removal_rate
+consensus_correct_sign_removal_rate
 ```
+
+The two removal rates condition on coordinates where Ramen and OracleID both
+propose nonzero updates. Wrong-sign removal measures suppression of opposing
+directions; correct-sign removal measures collateral suppression of matching
+directions. Summary rates pool eligible coordinates only from samples where
+the hard-mask diagnostic is active.
 
 The central mechanism claim is supported only if Consensus reduces oracle-direction discrepancy in the conditions where it improves ID adaptation.
 
@@ -760,6 +769,7 @@ post_adaptation_ood_score = -logsumexp(logits)
 Add trace field:
 
 ```text
+pre_adaptation_prediction
 post_adaptation_ood_score
 ```
 
@@ -779,13 +789,15 @@ post_adaptation_detection
 Each block should contain, where defined:
 
 ```text
+ID accuracy from the matching prediction phase
 AUROC
 FPR95
 H-score
 OOD recall at FPR95
 ```
 
-For backward compatibility, existing top-level detection fields may remain mapped to pre-adaptation detection temporarily, but final thesis tables must label pre/post explicitly.
+Schema-v3 top-level open-set fields are a consistent post-adaptation
+projection. The explicit nested blocks retain both phases for thesis tables.
 
 Interpretation:
 
