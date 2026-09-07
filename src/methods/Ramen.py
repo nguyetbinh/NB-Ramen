@@ -144,10 +144,11 @@ class Ramen(TTABase):
 
         feats = self.model.featurize(x)
         logits = self.model.classify(feats)
+        init_preds = logits.argmax(-1)
         self.last_diagnostics = {
+            'pre_adaptation_prediction': init_preds.detach(),
             'pre_adaptation_ood_score': -torch.logsumexp(logits.detach(), dim=1),
         }
-        init_preds = logits.argmax(-1)
 
         loss = self.loss_fn(logits)
         loss.backward()

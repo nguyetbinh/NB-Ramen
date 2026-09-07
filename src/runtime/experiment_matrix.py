@@ -46,6 +46,7 @@ try:
         CONSENSUS_TRACE_FIELDS,
         OPEN_SET_TRACE_FIELDS,
         ORACLE_GRADIENT_TRACE_FIELDS,
+        ORACLE_HARD_MASK_DIAGNOSTICS,
         RETRIEVAL_PROFILE_TRACE_FIELDS,
         TRACE_SCHEMA_VERSION,
         compare_trace_id_negative_adaptation,
@@ -54,6 +55,7 @@ try:
     from ..evaluation.open_set_metrics import open_set_detection_summary
     from ..evaluation.online_metrics import domain_shift_recovery_times, id_only_domain_shift_recovery_times
     from ..evaluation.routing_metrics import routing_diagnostics
+    from ..consensus_contract import PRIMARY_CONSENSUS_POLICY
 except ImportError:  # ``runtime`` top-level package or direct-file invocation.
     source_root = str(Path(__file__).resolve().parents[1])
     if source_root not in sys.path:
@@ -65,6 +67,7 @@ except ImportError:  # ``runtime`` top-level package or direct-file invocation.
         CONSENSUS_TRACE_FIELDS,
         OPEN_SET_TRACE_FIELDS,
         ORACLE_GRADIENT_TRACE_FIELDS,
+        ORACLE_HARD_MASK_DIAGNOSTICS,
         RETRIEVAL_PROFILE_TRACE_FIELDS,
         TRACE_SCHEMA_VERSION,
         compare_trace_id_negative_adaptation,
@@ -73,6 +76,7 @@ except ImportError:  # ``runtime`` top-level package or direct-file invocation.
     from evaluation.open_set_metrics import open_set_detection_summary
     from evaluation.online_metrics import domain_shift_recovery_times, id_only_domain_shift_recovery_times
     from evaluation.routing_metrics import routing_diagnostics
+    from consensus_contract import PRIMARY_CONSENSUS_POLICY
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -116,6 +120,37 @@ OPEN_SET_DIRECTIONAL_ORACLE_METHODS = frozenset({
     "OracleDropOODRamen", "OracleIDGradientRamen",
 })
 OPEN_SET_CONSENSUS_METHODS = frozenset({"ConsensusRamen", "OracleConsensusRamen"})
+# Full file digests and parsed surfaces jointly define the preregistered
+# CIFAR-100-C open-set method configs. A canonical plan must not silently
+# adopt whichever YAML happens to be present when the planner runs.
+CANONICAL_CONFIG_SHA256 = {
+    "Ramen": "54c124be79a3c1536a8a95c68f34b41b31d84d40972f54fcd5b2c0016552ef27",
+    "EntropyGatedRamen": "d964674fc7c30fdbf34c6f2b2a3c4bb5e7ce44d66d29ae9f5971d7247b441dda",
+    "OracleDropOODRamen": "cd422352be0e640c73a14f6edf671fee4cf89d34c9cd61e444ce27c5516dadb3",
+    "OracleIDGradientRamen": "cd422352be0e640c73a14f6edf671fee4cf89d34c9cd61e444ce27c5516dadb3",
+    "ConsensusRamen": "8a9d6fe4bb663653bf275fef4ecafe4d91ddf7415fc45c7eb3ea4634ac6bb34e",
+    "OracleConsensusRamen": "e4df415a6e0ab3d90fb4d8b8050257cd1d61efdde057e8aa07725ca7b87d8d30",
+}
+_CANONICAL_RAMEN_SURFACE = {
+    "max_capacity": 750, "topk": 5, "beta": 5.0,
+    "optimizer": "signsgd", "lr": 0.01,
+}
+CANONICAL_CONFIG_SURFACES = {
+    "Ramen": dict(_CANONICAL_RAMEN_SURFACE),
+    "EntropyGatedRamen": {**_CANONICAL_RAMEN_SURFACE, "max_normalized_entropy": 0.5},
+    "OracleDropOODRamen": {
+        **_CANONICAL_RAMEN_SURFACE, "oracle_ood_source": "evaluator_is_ood",
+    },
+    "OracleIDGradientRamen": {
+        **_CANONICAL_RAMEN_SURFACE, "oracle_ood_source": "evaluator_is_ood",
+    },
+    "ConsensusRamen": {**_CANONICAL_RAMEN_SURFACE, **PRIMARY_CONSENSUS_POLICY},
+    "OracleConsensusRamen": {
+        **_CANONICAL_RAMEN_SURFACE,
+        "oracle_ood_source": "evaluator_is_ood",
+        **PRIMARY_CONSENSUS_POLICY,
+    },
+}
 # Common source exposure across OOD ratios: 400 is divisible by 1, 10, and 2.
 OPEN_SET_PER_DOMAIN_SOURCE_BUDGET = 400
 MODEL_BY_DATASET = {"CIFAR100C": "clip_vitbase16", "DomainNet": "clip_vitbase32"}
@@ -576,7 +611,7 @@ def build_open_set_evidence_matrix(
 
 
 def _validate_canonical_open_set_configs(runs: Iterable[ExperimentRun]) -> None:
-    """Fail closed on config fallback or any unlocked canonical method config."""
+    """Fail closed unless every method matches its preregistered config bytes."""
     required = set(OPEN_SET_METHODS) - {"NoAdapt"}
     seen: set[str] = set()
     for run in runs:
@@ -585,24 +620,24 @@ def _validate_canonical_open_set_configs(runs: Iterable[ExperimentRun]) -> None:
         seen.add(run.method)
         if run.config_path is None or run.config_hash == MISSING_CONFIG_HASH or run.config_sha256 is None:
             raise ValueError(f"missing fixed CIFAR-100-C open-set config: {run.method}")
-        if run.config_path.parent.name != OPEN_SET_DATASET:
+        if (
+            run.config_path.parent.name != OPEN_SET_DATASET
+            or run.config_path.name != f"{run.method}.yaml"
+        ):
             raise ValueError(f"CIFAR-100-C open-set method resolved a fallback config: {run.method}")
-        required_keys = {"max_capacity", "topk", "beta", "optimizer", "lr"}
-        if missing := sorted(required_keys.difference(run.config_data)):
-            raise ValueError(f"CIFAR-100-C open-set config is incomplete for {run.method}: " + ", ".join(missing))
-        if run.method == "EntropyGatedRamen" and run.config_data.get("max_normalized_entropy") != 0.5:
-            raise ValueError("canonical EntropyGatedRamen config must set max_normalized_entropy: 0.50")
-        if run.method.startswith("Oracle") and run.config_data.get("oracle_ood_source") != "evaluator_is_ood":
-            raise ValueError(f"CIFAR-100-C oracle config must declare evaluator_is_ood: {run.method}")
-        if run.method in OPEN_SET_CONSENSUS_METHODS:
-            locked = {
-                "consensus_threshold": 0.2,
-                "min_consensus_classes": 3,
-                "consensus_mode": "hard_mask",
-                "include_current": True,
-            }
-            if any(run.config_data.get(key) != value for key, value in locked.items()):
-                raise ValueError(f"CIFAR-100-C ConsensusRamen-v0 config is not locked: {run.method}")
+        try:
+            actual_digest = hashlib.sha256(run.config_path.read_bytes()).hexdigest()
+        except OSError as exc:
+            raise ValueError(f"canonical config is unreadable: {run.method}") from exc
+        expected_digest = CANONICAL_CONFIG_SHA256[run.method]
+        if (
+            actual_digest != expected_digest
+            or run.config_sha256 != expected_digest
+            or run.config_hash != expected_digest[:CONFIG_HASH_LENGTH]
+        ):
+            raise ValueError(f"canonical config digest drift: {run.method}")
+        if run.config_data != CANONICAL_CONFIG_SURFACES[run.method]:
+            raise ValueError(f"canonical config semantic surface drift: {run.method}")
     if missing_methods := required.difference(seen):
         raise AssertionError("planner did not resolve config(s): " + ", ".join(sorted(missing_methods)))
 
@@ -1234,6 +1269,8 @@ def _validate_open_set_evidence(
         _require_equal(row["open_set_split_version"], run.known_class_split,
                        f"trace[{line_number}].open_set_split_version", run)
         _require_equal(row["ood_ratio"], run.ood_ratio, f"trace[{line_number}].ood_ratio", run)
+        if not _is_int(row["pre_adaptation_prediction"], minimum=0):
+            raise IncompleteRunError(f"trace[{line_number}].pre_adaptation_prediction is malformed")
         if not _is_finite_number(row["pre_adaptation_ood_score"]):
             raise IncompleteRunError(f"trace[{line_number}].pre_adaptation_ood_score is malformed")
         if not _is_finite_number(row["post_adaptation_ood_score"]):
@@ -1252,15 +1289,16 @@ def _validate_open_set_evidence(
     _require_equal(open_set_metadata.get("realized_ood_ratio"), realized_ratio,
                    "stream.metadata.open_set.realized_ood_ratio", run)
 
-    predictions = [row["prediction"] for row in rows]
+    pre_predictions = [row["pre_adaptation_prediction"] for row in rows]
+    post_predictions = [row["prediction"] for row in rows]
     known_labels = [row["known_label_or_minus_one"] for row in rows]
     pre_detection = open_set_detection_summary(
-        predictions, known_labels, flags,
+        pre_predictions, known_labels, flags,
         [row["pre_adaptation_ood_score"] for row in rows],
         score="negative_logsumexp_pre_adaptation_logits",
     )
     post_detection = open_set_detection_summary(
-        predictions, known_labels, flags,
+        post_predictions, known_labels, flags,
         [row["post_adaptation_ood_score"] for row in rows],
         score="negative_logsumexp_post_adaptation_logits",
     )
@@ -1275,7 +1313,7 @@ def _validate_open_set_evidence(
         )
     valid_id_accuracies = [value for value in id_domain_accuracies.values() if value is not None]
     expected_summary = {
-        **pre_detection, "pre_adaptation_detection": pre_detection,
+        **post_detection, "pre_adaptation_detection": pre_detection,
         "post_adaptation_detection": post_detection,
         "split_version": run.known_class_split, "requested_ood_ratio": run.ood_ratio,
         "realized_ood_ratio": realized_ratio, "realized_ood_count": ood_count,
@@ -1358,6 +1396,27 @@ def _validate_open_set_evidence(
                 raise IncompleteRunError(f"trace[{line_number}].consensus_diagnostic_mask_rate is malformed")
             if not isinstance(row["consensus_diagnostic_applied"], bool):
                 raise IncompleteRunError(f"trace[{line_number}].consensus_diagnostic_applied is malformed")
+            for coordinate_field, removed_field, rate_field in ORACLE_HARD_MASK_DIAGNOSTICS:
+                coordinate_count = row[coordinate_field]
+                removed_count = row[removed_field]
+                rate = row[rate_field]
+                if not _is_int(coordinate_count, minimum=0):
+                    raise IncompleteRunError(f"trace[{line_number}].{coordinate_field} is malformed")
+                if not _is_int(removed_count, minimum=0) or removed_count > coordinate_count:
+                    raise IncompleteRunError(f"trace[{line_number}].{removed_field} is malformed")
+                if coordinate_count == 0:
+                    if rate is not None:
+                        raise IncompleteRunError(
+                            f"trace[{line_number}].{rate_field} must be null without eligible coordinates"
+                        )
+                elif (
+                    not _is_finite_number(rate, minimum=0.0, maximum=1.0)
+                    or not math.isclose(
+                        float(rate), removed_count / coordinate_count,
+                        rel_tol=0.0, abs_tol=1e-12,
+                    )
+                ):
+                    raise IncompleteRunError(f"trace[{line_number}].{rate_field} is malformed")
         def oracle_mean(field, transform=lambda value: value):
             values = [transform(row[field]) for row in rows if row[field] is not None]
             return sum(values) / len(values) if values else None
@@ -1368,6 +1427,21 @@ def _validate_open_set_evidence(
                 if row[ramen_field] is not None and row[consensus_field] is not None
             ]
             return sum(values) / len(values) if values else None
+        hard_mask_rows = [row for row in rows if row["consensus_diagnostic_applied"]]
+
+        def removal_counts(kind):
+            coordinate_count = sum(
+                row[f"consensus_{kind}_sign_coordinate_count"] for row in hard_mask_rows
+            )
+            removed_count = sum(
+                row[f"consensus_{kind}_sign_removed_count"] for row in hard_mask_rows
+            )
+            return coordinate_count, removed_count, (
+                removed_count / coordinate_count if coordinate_count else None
+            )
+
+        wrong_count, wrong_removed, wrong_rate = removal_counts("wrong")
+        correct_count, correct_removed, correct_rate = removal_counts("correct")
         expected_oracle = {
             "status": "computed",
             "retrieved_ood_fraction_mean": oracle_mean("retrieved_ood_fraction"),
@@ -1384,6 +1458,13 @@ def _validate_open_set_evidence(
             "sdr_reduction_mean": paired_oracle_mean(
                 "ramen_vs_oracle_id_sign_disagreement", "consensus_vs_oracle_id_sign_disagreement",
             ),
+            "consensus_hard_mask_applied_sample_count": len(hard_mask_rows),
+            "consensus_wrong_sign_coordinate_count": wrong_count,
+            "consensus_wrong_sign_removed_count": wrong_removed,
+            "consensus_wrong_sign_removal_rate": wrong_rate,
+            "consensus_correct_sign_coordinate_count": correct_count,
+            "consensus_correct_sign_removed_count": correct_removed,
+            "consensus_correct_sign_removal_rate": correct_rate,
             "defined_direction_count": sum(row["ramen_vs_oracle_id_cosine"] is not None for row in rows),
         }
         _require_equal(summary.get("oracle_gradient_diagnostics"), expected_oracle,

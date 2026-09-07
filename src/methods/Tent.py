@@ -18,6 +18,7 @@ class Tent(TTABase):
     def forward(self, x):
         logits = self.model(x)
         self.last_diagnostics = {
+            'pre_adaptation_prediction': logits.argmax(-1).detach(),
             'pre_adaptation_ood_score': -torch.logsumexp(logits.detach(), dim=1),
         }
         loss = softmax_entropy(logits, reduction='mean')

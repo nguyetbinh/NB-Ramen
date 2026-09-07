@@ -24,10 +24,12 @@ from typing import Any, Mapping, Optional
 from urllib.parse import quote_from_bytes
 
 
-# Trace v2 adds required per-sample retained-memory evidence (``memory_bytes``).
-TRACE_SCHEMA_VERSION = 2
-# Summary v2 adds the device, method-memory, latency, and throughput evidence blocks.
-SUMMARY_SCHEMA_VERSION = 2
+# Trace v3 makes pre/post open-set prediction phases explicit and extends the
+# oracle hard-mask diagnostics. Version 2 evidence remains historical.
+TRACE_SCHEMA_VERSION = 3
+# Summary v3 reports phase-correct open-set classification/H-score metrics and
+# hard-mask-specific oracle removal rates.
+SUMMARY_SCHEMA_VERSION = 3
 TRACE_REQUIRED_FIELDS = (
     "schema_version",
     "run_id",
@@ -63,6 +65,7 @@ OPEN_SET_TRACE_FIELDS = (
     "is_ood",
     "open_set_split_version",
     "ood_ratio",
+    "pre_adaptation_prediction",
     "pre_adaptation_ood_score",
     "post_adaptation_ood_score",
 )
@@ -76,6 +79,24 @@ ORACLE_GRADIENT_TRACE_FIELDS = (
     "consensus_vs_ramen_cosine",
     "consensus_diagnostic_mask_rate",
     "consensus_diagnostic_applied",
+    "consensus_wrong_sign_coordinate_count",
+    "consensus_wrong_sign_removed_count",
+    "consensus_wrong_sign_removal_rate",
+    "consensus_correct_sign_coordinate_count",
+    "consensus_correct_sign_removed_count",
+    "consensus_correct_sign_removal_rate",
+)
+ORACLE_HARD_MASK_DIAGNOSTICS = (
+    (
+        "consensus_wrong_sign_coordinate_count",
+        "consensus_wrong_sign_removed_count",
+        "consensus_wrong_sign_removal_rate",
+    ),
+    (
+        "consensus_correct_sign_coordinate_count",
+        "consensus_correct_sign_removed_count",
+        "consensus_correct_sign_removal_rate",
+    ),
 )
 CONSENSUS_TRACE_FIELDS = (
     "consensus_mean_agreement",
@@ -409,6 +430,8 @@ class JsonlTraceWriter:
                 raise ValueError("open_set_split_version must be a non-empty string")
             if not _is_finite_number(row["ood_ratio"], minimum=0.0, maximum=1.0):
                 raise ValueError("ood_ratio must be a finite probability")
+            if not _is_nonnegative_integer(row["pre_adaptation_prediction"]):
+                raise ValueError("pre_adaptation_prediction must be a non-negative integer")
             if not _is_finite_number(row["pre_adaptation_ood_score"]):
                 raise ValueError("pre_adaptation_ood_score must be finite")
             if not _is_finite_number(row["post_adaptation_ood_score"]):
@@ -443,6 +466,7 @@ class JsonlTraceWriter:
                 raise ValueError("consensus_diagnostic_mask_rate must be a finite probability")
             if not isinstance(row["consensus_diagnostic_applied"], bool):
                 raise ValueError("consensus_diagnostic_applied must be a boolean")
+            _validate_oracle_hard_mask_record(row)
         consensus_present = [field in row for field in CONSENSUS_TRACE_FIELDS]
         if any(consensus_present) and not all(consensus_present):
             raise ValueError("consensus trace fields must be all present or all absent")
@@ -627,6 +651,31 @@ def _is_finite_number(value: Any, *, minimum: float | None = None,
         and (minimum is None or value >= minimum)
         and (maximum is None or value <= maximum)
     )
+
+
+def _validate_oracle_hard_mask_record(
+    row: Mapping[str, Any], *, prefix: str = ""
+) -> None:
+    """Validate conditional wrong/correct-sign removal counts and rates."""
+    for coordinate_field, removed_field, rate_field in ORACLE_HARD_MASK_DIAGNOSTICS:
+        coordinate_count = row[coordinate_field]
+        removed_count = row[removed_field]
+        rate = row[rate_field]
+        if not _is_nonnegative_integer(coordinate_count):
+            raise ValueError(f"{prefix}{coordinate_field} must be a non-negative integer")
+        if not _is_nonnegative_integer(removed_count) or removed_count > coordinate_count:
+            raise ValueError(
+                f"{prefix}{removed_field} must be a non-negative integer no greater than {coordinate_field}"
+            )
+        if coordinate_count == 0:
+            if rate is not None:
+                raise ValueError(f"{prefix}{rate_field} must be null when no coordinates are eligible")
+            continue
+        if not _is_finite_number(rate, minimum=0.0, maximum=1.0):
+            raise ValueError(f"{prefix}{rate_field} must be a finite probability")
+        expected = removed_count / coordinate_count
+        if not math.isclose(float(rate), expected, rel_tol=0.0, abs_tol=1e-12):
+            raise ValueError(f"{prefix}{rate_field} disagrees with its coordinate counts")
 
 
 def _require_matching_probability(value: Any, expected: float, field: str) -> None:
@@ -1083,6 +1132,10 @@ def verify_reference_trace_stream_fingerprint(
                         raise ValueError(
                             f"reference trace row {line_number} has invalid ood_ratio"
                         )
+                    if not _is_nonnegative_integer(row["pre_adaptation_prediction"]):
+                        raise ValueError(
+                            f"reference trace row {line_number} has invalid pre_adaptation_prediction"
+                        )
                     if not _is_finite_number(row["pre_adaptation_ood_score"]):
                         raise ValueError(
                             f"reference trace row {line_number} has invalid pre_adaptation_ood_score"
@@ -1155,6 +1208,9 @@ def verify_reference_trace_stream_fingerprint(
                         raise ValueError(f"reference trace row {line_number} has invalid consensus_diagnostic_mask_rate")
                     if not isinstance(row["consensus_diagnostic_applied"], bool):
                         raise ValueError(f"reference trace row {line_number} has invalid consensus_diagnostic_applied")
+                    _validate_oracle_hard_mask_record(
+                        row, prefix=f"reference trace row {line_number} "
+                    )
                 consensus_present = [field in row for field in CONSENSUS_TRACE_FIELDS]
                 if any(consensus_present) and not all(consensus_present):
                     raise ValueError(

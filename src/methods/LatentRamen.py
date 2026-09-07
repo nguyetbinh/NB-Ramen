@@ -288,6 +288,7 @@ class LatentRamen(TTABase):
             self.last_diagnostics["pre_adaptation_ood_score"] = -torch.logsumexp(
                 logits.detach(), dim=1
             )
+            self.last_diagnostics["pre_adaptation_prediction"] = predicted_classes.detach()
 
         self.model.step_and_zero_grad()
         with torch.no_grad():

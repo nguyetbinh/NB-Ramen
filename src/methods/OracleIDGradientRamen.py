@@ -16,13 +16,21 @@ import torch
 
 from models.ModelForBySampleTTA import CLIPModelForBySampleTTA
 
+try:
+    from ..consensus_contract import (
+        PRIMARY_CONSENSUS_THRESHOLD,
+        PRIMARY_MIN_CONSENSUS_CLASSES,
+    )
+except ImportError:  # ``methods`` imported as a top-level package from ``src``.
+    from consensus_contract import (
+        PRIMARY_CONSENSUS_THRESHOLD,
+        PRIMARY_MIN_CONSENSUS_CLASSES,
+    )
 from .TTABase import TTABase
 from .losses import softmax_entropy
 
 
 _ORACLE_OOD_SOURCE = "evaluator_is_ood"
-_DIAGNOSTIC_CONSENSUS_THRESHOLD = 0.2
-_DIAGNOSTIC_MIN_CONSENSUS_CLASSES = 3
 
 
 def validate_oracle_id_gradient_config(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -158,6 +166,49 @@ def _direction_diagnostics(all_gradient: torch.Tensor, id_gradient: torch.Tensor
     return float(cosine), float(sign_disagreement)
 
 
+def _hard_mask_removal_diagnostics(
+    ramen_gradient: torch.Tensor,
+    id_gradient: torch.Tensor,
+    mask: torch.Tensor,
+) -> dict[str, Any]:
+    """Measure whether the label-free mask removes harmful or useful signs.
+
+    A coordinate is eligible only when both Ramen and OracleID propose a
+    nonzero update. Opposite signs are wrong-sign coordinates; matching signs
+    are correct-sign coordinates. This avoids letting shared zero coordinates
+    dominate either conditional rate.
+    """
+    ramen_sign = torch.sign(ramen_gradient)
+    id_sign = torch.sign(id_gradient)
+    comparable = ramen_sign.ne(0) & id_sign.ne(0)
+    wrong_sign = comparable & ramen_sign.ne(id_sign)
+    correct_sign = comparable & ramen_sign.eq(id_sign)
+    removed = ~mask.to(dtype=torch.bool)
+
+    wrong_count = wrong_sign.sum(dim=1)
+    wrong_removed = (wrong_sign & removed).sum(dim=1)
+    correct_count = correct_sign.sum(dim=1)
+    correct_removed = (correct_sign & removed).sum(dim=1)
+
+    def rates(removed_counts: torch.Tensor, eligible_counts: torch.Tensor) -> list[float | None]:
+        return [
+            float(removed_count) / float(eligible_count) if eligible_count else None
+            for removed_count, eligible_count in zip(
+                removed_counts.detach().cpu().tolist(),
+                eligible_counts.detach().cpu().tolist(),
+            )
+        ]
+
+    return {
+        "consensus_wrong_sign_coordinate_count": wrong_count,
+        "consensus_wrong_sign_removed_count": wrong_removed,
+        "consensus_wrong_sign_removal_rate": rates(wrong_removed, wrong_count),
+        "consensus_correct_sign_coordinate_count": correct_count,
+        "consensus_correct_sign_removed_count": correct_removed,
+        "consensus_correct_sign_removal_rate": rates(correct_removed, correct_count),
+    }
+
+
 def aggregate_oracle_supports(queries, caches, *, topk: int, beta: float):
     """Derive Ramen, label-free consensus, and OracleID directions from one retrieval.
 
@@ -192,9 +243,9 @@ def aggregate_oracle_supports(queries, caches, *, topk: int, beta: float):
         all_gradient = per_class_all.mean(dim=1)
         id_gradient = torch.stack(class_id, dim=1).mean(dim=1)
         agreement = torch.sign(per_class_all).mean(dim=1).abs()
-        consensus_applied = len(class_all) >= _DIAGNOSTIC_MIN_CONSENSUS_CLASSES
+        consensus_applied = len(class_all) >= PRIMARY_MIN_CONSENSUS_CLASSES
         mask = (
-            agreement >= _DIAGNOSTIC_CONSENSUS_THRESHOLD
+            agreement >= PRIMARY_CONSENSUS_THRESHOLD
             if consensus_applied else torch.ones_like(agreement, dtype=torch.bool)
         )
         consensus_gradient = all_gradient * mask.to(dtype=all_gradient.dtype)
@@ -206,6 +257,7 @@ def aggregate_oracle_supports(queries, caches, *, topk: int, beta: float):
         consensus_applied = False
     fractions = torch.where(total_count > 0, ood_count.to(all_gradient.dtype) / total_count.to(all_gradient.dtype), torch.zeros_like(ood_weight))
     weight_fractions = torch.where(total_weight > 0, ood_weight / total_weight, torch.zeros_like(ood_weight))
+    hard_mask_diagnostics = _hard_mask_removal_diagnostics(all_gradient, id_gradient, mask)
     cosine, sign_disagreement = [], []
     consensus_cosine, consensus_sign_disagreement, consensus_ramen_cosine = [], [], []
     for index in range(batch_size):
@@ -227,6 +279,7 @@ def aggregate_oracle_supports(queries, caches, *, topk: int, beta: float):
         "consensus_vs_ramen_cosine": consensus_ramen_cosine,
         "consensus_diagnostic_mask_rate": mask.to(dtype=all_gradient.dtype).mean(dim=1),
         "consensus_diagnostic_applied": [consensus_applied] * batch_size,
+        **hard_mask_diagnostics,
         "active_classes": active_classes,
     }
 
@@ -289,7 +342,11 @@ class OracleIDGradientRamen(OracleOODContextHook, TTABase):
             self.model.set_by_sample_grad(id_gradient)
             ood_score = -torch.logsumexp(logits, dim=1)
             self.last_diagnostics = self._diagnostics(
-                [self.memory_size] * batch_size, [self.memory_bytes] * batch_size, ood_score, rows
+                [self.memory_size] * batch_size,
+                [self.memory_bytes] * batch_size,
+                predicted_classes.detach(),
+                ood_score,
+                rows,
             )
         self.model.step_and_zero_grad()
         with torch.no_grad():
@@ -308,10 +365,18 @@ class OracleIDGradientRamen(OracleOODContextHook, TTABase):
     def get_diagnostics(self):
         return dict(self.last_diagnostics)
 
-    def _diagnostics(self, memory_sizes=None, memory_bytes=None, ood_score=None, rows=None):
+    def _diagnostics(
+        self,
+        memory_sizes=None,
+        memory_bytes=None,
+        pre_adaptation_prediction=None,
+        ood_score=None,
+        rows=None,
+    ):
         return {
             "memory_size": self.memory_size if memory_sizes is None else torch.tensor(memory_sizes, device=self.device),
             "memory_bytes": self.memory_bytes if memory_bytes is None else torch.tensor(memory_bytes, device=self.device),
+            "pre_adaptation_prediction": pre_adaptation_prediction,
             "pre_adaptation_ood_score": ood_score,
             "retrieved_ood_fraction": None if rows is None else rows["retrieved_ood_fraction"],
             "retrieved_ood_weight_fraction": None if rows is None else rows["retrieved_ood_weight_fraction"],
@@ -322,6 +387,12 @@ class OracleIDGradientRamen(OracleOODContextHook, TTABase):
             "consensus_vs_ramen_cosine": None if rows is None else rows["consensus_vs_ramen_cosine"],
             "consensus_diagnostic_mask_rate": None if rows is None else rows["consensus_diagnostic_mask_rate"],
             "consensus_diagnostic_applied": None if rows is None else rows["consensus_diagnostic_applied"],
+            "consensus_wrong_sign_coordinate_count": None if rows is None else rows["consensus_wrong_sign_coordinate_count"],
+            "consensus_wrong_sign_removed_count": None if rows is None else rows["consensus_wrong_sign_removed_count"],
+            "consensus_wrong_sign_removal_rate": None if rows is None else rows["consensus_wrong_sign_removal_rate"],
+            "consensus_correct_sign_coordinate_count": None if rows is None else rows["consensus_correct_sign_coordinate_count"],
+            "consensus_correct_sign_removed_count": None if rows is None else rows["consensus_correct_sign_removed_count"],
+            "consensus_correct_sign_removal_rate": None if rows is None else rows["consensus_correct_sign_removal_rate"],
             "active_classes": None if rows is None else rows["active_classes"],
             "oracle_ood_source": _ORACLE_OOD_SOURCE,
         }

@@ -16,13 +16,17 @@ import torch
 
 from models.ModelForBySampleTTA import CLIPModelForBySampleTTA
 
+try:
+    from ..consensus_contract import PRIMARY_CONSENSUS_MODE, validate_primary_consensus_policy
+except ImportError:  # ``methods`` imported as a top-level package from ``src``.
+    from consensus_contract import PRIMARY_CONSENSUS_MODE, validate_primary_consensus_policy
 from .Ramen import PriorityCache
 from .TTABase import TTABase
 from .losses import softmax_entropy
 
 
 _REQUIRED_CONFIG = ("max_capacity", "topk", "optimizer", "lr")
-_HARD_MASK_MODE = "hard_mask"
+_HARD_MASK_MODE = PRIMARY_CONSENSUS_MODE
 _SOFT_WEIGHT_MODE = "soft_weight"
 _CONSENSUS_MODES = frozenset({_HARD_MASK_MODE, _SOFT_WEIGHT_MODE})
 
@@ -208,6 +212,8 @@ class ConsensusRamen(TTABase):
     def __init__(self, model, datasets, args):
         super().__init__()
         self.cfg = validate_consensus_ramen_config(args.config)
+        if getattr(args, "tta_algo", None) == "ConsensusRamen":
+            validate_primary_consensus_policy(self.cfg)
         self.beta = self.cfg["beta"]
         self.num_classes = datasets.num_classes
         self.device = next(model.parameters()).device
@@ -241,8 +247,11 @@ class ConsensusRamen(TTABase):
         batch_size = x.shape[0]
         features = self.model.featurize(x)
         logits = self.model.classify(features)
-        self.last_diagnostics = {"pre_adaptation_ood_score": -torch.logsumexp(logits.detach(), dim=1)}
         predicted_classes = logits.argmax(-1)
+        self.last_diagnostics = {
+            "pre_adaptation_prediction": predicted_classes.detach(),
+            "pre_adaptation_ood_score": -torch.logsumexp(logits.detach(), dim=1),
+        }
         self.loss_fn(logits).backward()
         gradients = self.model.get_by_sample_grad()
 

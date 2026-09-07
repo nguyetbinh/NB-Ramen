@@ -17,6 +17,10 @@ import torch
 from models.ModelForBySampleTTA import CLIPModelForBySampleTTA
 
 from .ConsensusRamen import aggregate_consensus_supports, validate_consensus_ramen_config
+try:
+    from ..consensus_contract import validate_primary_consensus_policy
+except ImportError:  # ``methods`` imported as a top-level package from ``src``.
+    from consensus_contract import validate_primary_consensus_policy
 from .OracleIDGradientRamen import OracleOODContextHook
 from .Ramen import PriorityCache
 from .TTABase import TTABase
@@ -29,6 +33,7 @@ _ORACLE_OOD_SOURCE = "evaluator_is_ood"
 def validate_oracle_consensus_ramen_config(config: Mapping[str, Any]) -> dict[str, Any]:
     """Validate the fixed ConsensusRamen-v0 surface plus oracle provenance."""
     cfg = validate_consensus_ramen_config(config)
+    validate_primary_consensus_policy(cfg)
     if cfg.get("oracle_ood_source") != _ORACLE_OOD_SOURCE:
         raise ValueError("oracle_ood_source must be 'evaluator_is_ood'")
     return cfg
@@ -111,6 +116,7 @@ class OracleConsensusRamen(OracleOODContextHook, TTABase):
             self.last_diagnostics = {
                 "memory_size": torch.full((batch_size,), self.memory_size, device=self.device, dtype=torch.long),
                 "memory_bytes": torch.full((batch_size,), self.memory_bytes, device=self.device, dtype=torch.long),
+                "pre_adaptation_prediction": predicted_classes.detach(),
                 "pre_adaptation_ood_score": -torch.logsumexp(logits.detach(), dim=1),
                 "oracle_ood_source": _ORACLE_OOD_SOURCE,
                 **consensus_diagnostics,

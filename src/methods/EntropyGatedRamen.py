@@ -97,6 +97,7 @@ class EntropyGatedRamen(Ramen):
                 "admitted_to_memory": admitted.detach(),
                 "memory_size": sum(cache.size for cache in self.cache),
                 "memory_bytes": self.memory_bytes,
+                "pre_adaptation_prediction": predicted_classes.detach(),
                 "pre_adaptation_ood_score": -torch.logsumexp(logits.detach(), dim=1),
             }
 
