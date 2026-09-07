@@ -1,0 +1,138 @@
+{
+  "archive_sha256": "7b513aa83862ca2ef468e567d80f32e73d7d7b9e9a4d7094a06f42d335d35f1d",
+  "validator_source": "26a7cd7c847b6630841dbae58067e5bb124f2f9d",
+  "raw_artifacts_modified": false,
+  "results": [
+    {
+      "run_id": "prefull-noadapt",
+      "strict_validation": "PASS",
+      "source_digests_match": true
+    },
+    {
+      "run_id": "prefull-ramen",
+      "strict_validation": "PASS",
+      "source_digests_match": true
+    },
+    {
+      "run_id": "prefull-entropy",
+      "strict_validation": "PASS",
+      "source_digests_match": true
+    },
+    {
+      "run_id": "prefull-oracle-drop",
+      "strict_validation": "PASS",
+      "source_digests_match": true
+    },
+    {
+      "run_id": "prefull-oracle-id",
+      "strict_validation": "PASS",
+      "source_digests_match": true
+    },
+    {
+      "run_id": "prefull-consensus",
+      "strict_validation": "PASS",
+      "source_digests_match": true
+    },
+    {
+      "run_id": "prefull-oracle-consensus",
+      "strict_validation": "PASS",
+      "source_digests_match": true
+    },
+    {
+      "run_id": "prefull-noadapt-b1",
+      "strict_validation": "PASS",
+      "source_digests_match": true
+    },
+    {
+      "run_id": "prefull-ramen-b1",
+      "strict_validation": "PASS",
+      "source_digests_match": true
+    },
+    {
+      "run_id": "prefull-causal-b100",
+      "strict_validation": "PASS",
+      "source_digests_match": true
+    },
+    {
+      "run_id": "prefull-v2-noadapt",
+      "strict_validation": "PASS",
+      "source_digests_match": true
+    },
+    {
+      "run_id": "prefull-v2-entropy",
+      "strict_validation": "PASS",
+      "source_digests_match": true
+    },
+    {
+      "run_id": "prefull-ood0-noadapt",
+      "strict_validation": "PASS",
+      "source_digests_match": true
+    },
+    {
+      "run_id": "prefull-ood0-oracle-id",
+      "strict_validation": "PASS",
+      "source_digests_match": true
+    }
+  ],
+  "path_transport_description": "Offline validation mirror remaps Kaggle repo/evidence prefixes to a local source snapshot and evidence mirror; raw archive is unchanged.",
+  "canonical_plan": {
+    "runs": 252,
+    "semantic_identities_and_config_locks": "PASS",
+    "baseline_pairing": "PASS",
+    "executed": false,
+    "data_root_hash_transport": {
+      "linux": "f6d2d4d44038",
+      "macos": "564c2aa9d6e5"
+    },
+    "note": "Initial direct run-ID comparison differed because /tmp resolves to /private/tmp on macOS. Verified identities with each recorded absolute-root hash explicitly mapped."
+  },
+  "runtime": {
+    "gpu": "Tesla T4",
+    "torch": "2.4.1+cu121",
+    "python": "3.11.16"
+  },
+  "tests": {
+    "full": 354,
+    "focused": 148,
+    "skipped": 0,
+    "result": "OK"
+  },
+  "causal_sensitivity": {
+    "causal_ramen_b1_vs_causal_b100": {
+      "left_id_accuracy": 0.5645161290322581,
+      "max_absolute_post_ood_score_difference": 0.390625,
+      "pre_prediction_disagreement_count": 1,
+      "prediction_disagreement_count": 2,
+      "right_id_accuracy": 0.5591397849462365,
+      "samples": 256
+    },
+    "packaging_ramen_b100_vs_b1": {
+      "left_id_accuracy": 0.5376344086021505,
+      "max_absolute_post_ood_score_difference": 3.234375,
+      "pre_prediction_disagreement_count": 1,
+      "prediction_disagreement_count": 26,
+      "right_id_accuracy": 0.5645161290322581,
+      "samples": 256
+    },
+    "pretrained_ramen_b100_vs_noadapt_b100": {
+      "left_id_accuracy": 0.5376344086021505,
+      "max_absolute_post_ood_score_difference": 10.53125,
+      "pre_prediction_disagreement_count": 1,
+      "prediction_disagreement_count": 78,
+      "right_id_accuracy": 0.510752688172043,
+      "samples": 256
+    },
+    "pretrained_ramen_b1_vs_noadapt_b1": {
+      "left_id_accuracy": 0.5645161290322581,
+      "max_absolute_post_ood_score_difference": 10.53125,
+      "pre_prediction_disagreement_count": 0,
+      "prediction_disagreement_count": 66,
+      "right_id_accuracy": 0.510752688172043,
+      "samples": 256
+    },
+    "status": "measured_review_required"
+  },
+  "verdict": "technical_smoke_passed_primary_matrix_preparation_allowed",
+  "exact_causal_equivalence_proven": false,
+  "full_matrix_executed": false
+}
