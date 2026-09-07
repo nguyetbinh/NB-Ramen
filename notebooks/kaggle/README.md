@@ -1,4 +1,10 @@
-# Kaggle pre-full CUDA smoke
+# Kaggle workflows
+
+- **Full matrix 252 runs:** [kaggle-full-matrix.ipynb](kaggle-full-matrix.ipynb),
+  [Python export](kaggle-full-matrix.py), [hướng dẫn chạy/resume](full-run-guide.md).
+- **Pre-full smoke 14 runs:** dùng notebook mô tả bên dưới.
+
+## Pre-full CUDA smoke
 
 Import [kaggle-pre-full-smoke.ipynb](kaggle-pre-full-smoke.ipynb) vào Kaggle,
 bật **Internet** và chọn **GPU** (đã kiểm chứng trên Tesla T4), rồi chạy các cell
