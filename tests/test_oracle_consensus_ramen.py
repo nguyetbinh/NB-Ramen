@@ -24,12 +24,18 @@ class OracleConsensusRamenTests(unittest.TestCase):
     def test_config_requires_explicit_evaluator_provenance(self):
         base = {
             "max_capacity": 2, "topk": 1, "optimizer": "signsgd", "lr": .01,
-            "consensus_threshold": .2, "min_consensus_classes": 1, "consensus_mode": "hard_mask",
+            "consensus_threshold": .2, "min_consensus_classes": 3,
+            "consensus_mode": "hard_mask", "include_current": True,
         }
         with self.assertRaises(ValueError):
             validate_oracle_consensus_ramen_config(base)
         cfg = validate_oracle_consensus_ramen_config({**base, "oracle_ood_source": "evaluator_is_ood"})
         self.assertEqual("evaluator_is_ood", cfg["oracle_ood_source"])
+        with self.assertRaisesRegex(ValueError, "preregistered contract"):
+            validate_oracle_consensus_ramen_config({
+                **base, "min_consensus_classes": 2,
+                "oracle_ood_source": "evaluator_is_ood",
+            })
 
     def test_oracle_hook_fails_closed_and_is_single_use(self):
         method = object.__new__(OracleConsensusRamen)

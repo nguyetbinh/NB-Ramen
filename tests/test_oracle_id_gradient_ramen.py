@@ -22,7 +22,7 @@ from methods.OracleIDGradientRamen import (  # noqa: E402
     validate_oracle_id_gradient_config,
 )
 from main import _method_diagnostics, _oracle_gradient_summary  # noqa: E402
-from evaluation.evidence import JsonlTraceWriter  # noqa: E402
+from evaluation.evidence import JsonlTraceWriter, ORACLE_GRADIENT_TRACE_FIELDS  # noqa: E402
 
 
 class _Hook(OracleOODContextHook):
@@ -182,6 +182,31 @@ class OracleIDGradientRamenTests(unittest.TestCase):
         self.assertEqual(consensus.tolist(), changed_consensus.tolist())
         self.assertEqual(diagnostics["consensus_diagnostic_mask_rate"], changed["consensus_diagnostic_mask_rate"])
 
+    def test_hard_mask_reports_wrong_and_correct_sign_removal_separately(self):
+        caches = [self._cache() for _ in range(3)]
+        # Coordinate 0 is correct and unanimous. Coordinate 1 is wrong in the
+        # ordinary aggregate, while (+, -, 0) yields zero consensus agreement
+        # and therefore suppresses that harmful update.
+        values = ([1., 1.], [1., -4.], [1., 0.])
+        flags = (False, True, True)
+        for cache, gradient, is_ood in zip(caches, values, flags):
+            cache.add(
+                torch.tensor([[0.]]), torch.tensor([gradient]), torch.zeros(1),
+                torch.tensor([0.]), torch.tensor([is_ood]),
+            )
+        ramen, consensus, oracle, diagnostics = aggregate_oracle_supports(
+            torch.tensor([[0.]]), caches, topk=1, beta=0.
+        )
+        self.assertEqual([[1., -1.]], ramen.tolist())
+        self.assertEqual([[1., 0.]], consensus.tolist())
+        torch.testing.assert_close(oracle, torch.tensor([[1. / 3., 1. / 3.]]))
+        self.assertEqual([1], diagnostics["consensus_wrong_sign_coordinate_count"].tolist())
+        self.assertEqual([1], diagnostics["consensus_wrong_sign_removed_count"].tolist())
+        self.assertEqual([1.0], diagnostics["consensus_wrong_sign_removal_rate"])
+        self.assertEqual([1], diagnostics["consensus_correct_sign_coordinate_count"].tolist())
+        self.assertEqual([0], diagnostics["consensus_correct_sign_removed_count"].tolist())
+        self.assertEqual([0.0], diagnostics["consensus_correct_sign_removal_rate"])
+
     def test_forward_diagnostics_survive_evaluator_trace_and_summary_plumbing(self):
         f1_fields = (
             "consensus_vs_oracle_id_cosine",
@@ -211,14 +236,11 @@ class OracleIDGradientRamenTests(unittest.TestCase):
                                 "known_label_or_minus_one": index,
                                 "is_ood": False, "open_set_split_version": "integration",
                                 "ood_ratio": 0.0,
+                                "pre_adaptation_prediction": expanded["pre_adaptation_prediction"][index],
                                 "pre_adaptation_ood_score": expanded["pre_adaptation_ood_score"][index],
                                 "post_adaptation_ood_score": expanded["pre_adaptation_ood_score"][index],
                             }
-                            for field in (
-                                "retrieved_ood_fraction", "retrieved_ood_weight_fraction",
-                                "ramen_vs_oracle_id_cosine", "ramen_vs_oracle_id_sign_disagreement",
-                                *f1_fields,
-                            ):
+                            for field in ORACLE_GRADIENT_TRACE_FIELDS:
                                 row[field] = expanded[field][index]
                             rows.append(writer.write(row))
                     persisted = [json.loads(line) for line in path.read_text().splitlines()]
@@ -227,6 +249,13 @@ class OracleIDGradientRamenTests(unittest.TestCase):
                         self.assertIsNotNone(row[field])
                         self.assertTrue(math.isfinite(row[field]))
                     self.assertIsInstance(row[f1_fields[4]], bool)
+                    for field in (
+                        "consensus_wrong_sign_coordinate_count",
+                        "consensus_wrong_sign_removed_count",
+                        "consensus_correct_sign_coordinate_count",
+                        "consensus_correct_sign_removed_count",
+                    ):
+                        self.assertIsInstance(row[field], int)
                 summary = _oracle_gradient_summary(rows)
                 for field in (
                     "ramen_gdc_mean", "consensus_gdc_mean", "ramen_sdr_mean",
@@ -234,6 +263,12 @@ class OracleIDGradientRamenTests(unittest.TestCase):
                 ):
                     self.assertIsNotNone(summary[field])
                     self.assertTrue(math.isfinite(summary[field]))
+                for field in (
+                    "consensus_wrong_sign_removal_rate",
+                    "consensus_correct_sign_removal_rate",
+                ):
+                    if summary[field] is not None:
+                        self.assertTrue(math.isfinite(summary[field]))
                 entropy_weight = float(torch.exp(-method.cache[0].entropies[0]))
                 expected_x = entropy_weight if method_type is OracleDropOODRamen else entropy_weight / 3.0
                 torch.testing.assert_close(

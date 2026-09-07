@@ -10,14 +10,16 @@ def _evidence(run, *, fingerprint="paired"):
     summary = {
         "stream_fingerprint": fingerprint,
         "open_set": {
-            "status": "computed", "id_accuracy": 0.5, "auroc": 0.7, "fpr95": 0.2,
-            "h_score": 0.4, "worst_domain_id_accuracy": 0.3,
+            "status": "computed", "id_accuracy": 0.5, "auroc": 0.6, "fpr95": 0.3,
+            "h_score": 0.35, "worst_domain_id_accuracy": 0.3,
             "pre_adaptation_detection": {
-                "status": "computed", "auroc": 0.7, "fpr95": 0.2, "h_score": 0.4,
+                "status": "computed", "id_accuracy": 0.8,
+                "auroc": 0.7, "fpr95": 0.2, "h_score": 0.4,
                 "ood_recall_at_fpr95": 0.95,
             },
             "post_adaptation_detection": {
-                "status": "computed", "auroc": 0.6, "fpr95": 0.3, "h_score": 0.35,
+                "status": "computed", "id_accuracy": 0.5,
+                "auroc": 0.6, "fpr95": 0.3, "h_score": 0.35,
                 "ood_recall_at_fpr95": 1.0,
             },
         },
@@ -47,6 +49,13 @@ def _evidence(run, *, fingerprint="paired"):
             "ramen_gdc_mean": 0.1, "consensus_gdc_mean": 0.05,
             "ramen_sdr_mean": 0.2, "consensus_sdr_mean": 0.1,
             "gdc_reduction_mean": 0.05, "sdr_reduction_mean": 0.1,
+            "consensus_hard_mask_applied_sample_count": 1,
+            "consensus_wrong_sign_coordinate_count": 10,
+            "consensus_wrong_sign_removed_count": 8,
+            "consensus_wrong_sign_removal_rate": 0.8,
+            "consensus_correct_sign_coordinate_count": 20,
+            "consensus_correct_sign_removed_count": 2,
+            "consensus_correct_sign_removal_rate": 0.1,
         }
     if run.method in {"ConsensusRamen", "OracleConsensusRamen"}:
         summary["consensus_diagnostics"] = {
@@ -62,7 +71,7 @@ class OpenSetConsensusAnalysisTests(unittest.TestCase):
     def test_reports_noncanonical_partial_evidence_without_legacy_gate(self):
         runs = build_open_set_evidence_matrix(streams=("block",), ood_ratios=(0.5,), seeds=(0,))
         report = analyse_open_set_completed_runs([(run, _evidence(run)) for run in runs])
-        self.assertEqual("open_set_consensus_descriptive_v2", report["analysis_contract"])
+        self.assertEqual("open_set_consensus_descriptive_v3", report["analysis_contract"])
         self.assertEqual("noncanonical_pilot", report["classification"])
         self.assertEqual("not_applicable", report["consensus_certification"])
         self.assertEqual("complete", report["comparisons"][0]["status"])
@@ -80,9 +89,13 @@ class OpenSetConsensusAnalysisTests(unittest.TestCase):
         self.assertEqual(100.0, ramen["cost"]["synchronized_forward_latency"]["total_ms"])
         self.assertEqual(1024, ramen["cost"]["retained_memory"]["max_retained_bytes"])
         self.assertEqual(500.0, ramen["cost"]["throughput"]["samples_per_second"])
-        self.assertEqual(0.95, ramen["ood_recall_at_fpr95"])
+        self.assertEqual(1.0, ramen["ood_recall_at_fpr95"])
+        self.assertEqual(0.95, ramen["pre_adaptation_ood_recall_at_fpr95"])
         self.assertEqual(1.0, ramen["post_adaptation_ood_recall_at_fpr95"])
         self.assertEqual(1.0, ramen["post_adaptation_detection"]["ood_recall_at_fpr95"])
+        self.assertEqual(0.8, ramen["pre_adaptation_id_accuracy"])
+        self.assertEqual(0.5, ramen["post_adaptation_id_accuracy"])
+        self.assertEqual(0.5, ramen["id_accuracy"])
 
     def test_accepts_ratio_zero_explicitly_unavailable_detection_metrics(self):
         runs = build_open_set_evidence_matrix(streams=("block",), ood_ratios=(0.0,), seeds=(0,))
@@ -97,7 +110,8 @@ class OpenSetConsensusAnalysisTests(unittest.TestCase):
                                  ("post_adaptation_detection", "negative_logsumexp_post_adaptation_logits")):
                 block[phase] = {
                     "status": "unavailable", "reason": "OOD metrics require at least one OOD sample",
-                    "score": score, "auroc": None, "fpr95": None, "h_score": None,
+                    "score": score, "id_accuracy": 0.5,
+                    "auroc": None, "fpr95": None, "h_score": None,
                     "ood_recall_at_fpr95": None,
                 }
         metrics = analyse_open_set_completed_runs(completed)["comparisons"][0]["methods"]

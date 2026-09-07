@@ -302,6 +302,7 @@ def _write_valid_open_set_evidence(run, *, diagnostics=False, consensus=False):
         "ground_truth_class": 10, "prediction": 1, "correct": True,
         "original_label": 10, "known_label_or_minus_one": 1, "is_ood": False,
         "open_set_split_version": run.known_class_split, "ood_ratio": run.ood_ratio,
+        "pre_adaptation_prediction": 1,
         "pre_adaptation_ood_score": 0.1, "post_adaptation_ood_score": 0.1,
     })
     summary["stream_fingerprint"] = fingerprint
@@ -311,11 +312,12 @@ def _write_valid_open_set_evidence(run, *, diagnostics=False, consensus=False):
         "auroc": None, "fpr95": None, "fpr95_threshold": None,
         "ood_recall_at_fpr95": None, "h_score": None, "id_count": 1, "ood_count": 0,
     }
+    post_detection = {
+        **detection, "score": "negative_logsumexp_post_adaptation_logits",
+    }
     summary["open_set"] = {
-        **detection, "pre_adaptation_detection": dict(detection),
-        "post_adaptation_detection": {
-            **detection, "score": "negative_logsumexp_post_adaptation_logits",
-        },
+        **post_detection, "pre_adaptation_detection": dict(detection),
+        "post_adaptation_detection": post_detection,
         "split_version": run.known_class_split, "requested_ood_ratio": run.ood_ratio,
         "realized_ood_ratio": 0.0, "realized_ood_count": 0, "realized_known_count": 1,
         "id_domain_accuracies": {"domain-a": 1.0}, "worst_domain_id_accuracy": 1.0,
@@ -348,6 +350,12 @@ def _write_valid_open_set_evidence(run, *, diagnostics=False, consensus=False):
             "consensus_vs_ramen_cosine": 1.0,
             "consensus_diagnostic_mask_rate": 1.0,
             "consensus_diagnostic_applied": False,
+            "consensus_wrong_sign_coordinate_count": 1,
+            "consensus_wrong_sign_removed_count": 0,
+            "consensus_wrong_sign_removal_rate": 0.0,
+            "consensus_correct_sign_coordinate_count": 1,
+            "consensus_correct_sign_removed_count": 0,
+            "consensus_correct_sign_removal_rate": 0.0,
         })
         summary["oracle_gradient_diagnostics"] = {
             "status": "computed", "retrieved_ood_fraction_mean": 0.0,
@@ -356,6 +364,13 @@ def _write_valid_open_set_evidence(run, *, diagnostics=False, consensus=False):
             "ramen_gdc_mean": 0.0, "consensus_gdc_mean": 0.0,
             "ramen_sdr_mean": 0.0, "consensus_sdr_mean": 0.0,
             "gdc_reduction_mean": 0.0, "sdr_reduction_mean": 0.0,
+            "consensus_hard_mask_applied_sample_count": 0,
+            "consensus_wrong_sign_coordinate_count": 0,
+            "consensus_wrong_sign_removed_count": 0,
+            "consensus_wrong_sign_removal_rate": None,
+            "consensus_correct_sign_coordinate_count": 0,
+            "consensus_correct_sign_removed_count": 0,
+            "consensus_correct_sign_removal_rate": None,
             "defined_direction_count": 1,
         }
     if consensus:
@@ -588,7 +603,7 @@ class ExperimentMatrixTests(unittest.TestCase):
         )
         self.assertEqual(["NoAdapt", "Ramen"], [run.method for run in runs])
 
-    def test_canonical_open_set_config_requires_clean_gate_and_no_fallback(self):
+    def test_canonical_open_set_configs_require_exact_bytes_surfaces_and_no_fallback(self):
         with tempfile.TemporaryDirectory() as directory:
             config_root = Path(directory) / "cfg"
             config_dataset = config_root / "CIFAR100C"
@@ -596,28 +611,39 @@ class ExperimentMatrixTests(unittest.TestCase):
             for method in OPEN_SET_METHODS:
                 if method != "NoAdapt":
                     shutil.copy(REPOSITORY_ROOT / "cfg" / "CIFAR100C" / f"{method}.yaml", config_dataset)
-            clean_config = config_dataset / "EntropyGatedRamen.yaml"
-            clean_config.write_text(clean_config.read_text(encoding="utf-8").replace("0.50", "0.40"), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "max_normalized_entropy"):
+            ramen_config = config_dataset / "Ramen.yaml"
+            ramen_config.write_text(
+                ramen_config.read_text(encoding="utf-8").replace("beta: 5.0", "beta: 4.0"),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "canonical config digest drift: Ramen"):
                 build_canonical_open_set_evidence_matrix(
                     evidence_dir=directory, data_root=directory, config_dir=config_root,
                 )
-            clean_config.write_text(clean_config.read_text(encoding="utf-8").replace("0.40", "0.50"), encoding="utf-8")
+            modified_digest = hashlib.sha256(ramen_config.read_bytes()).hexdigest()
+            with patch.dict(
+                "src.runtime.experiment_matrix.CANONICAL_CONFIG_SHA256",
+                {"Ramen": modified_digest},
+            ), self.assertRaisesRegex(ValueError, "canonical config semantic surface drift: Ramen"):
+                build_canonical_open_set_evidence_matrix(
+                    evidence_dir=directory, data_root=directory, config_dir=config_root,
+                )
+            shutil.copy(REPOSITORY_ROOT / "cfg/CIFAR100C/Ramen.yaml", ramen_config)
+
             consensus_config = config_dataset / "OracleConsensusRamen.yaml"
             consensus_config.write_text(
-                consensus_config.read_text(encoding="utf-8").replace("include_current: true\n", ""), encoding="utf-8"
+                consensus_config.read_text(encoding="utf-8") + "# byte-level drift\n",
+                encoding="utf-8",
             )
-            with self.assertRaisesRegex(ValueError, "ConsensusRamen-v0"):
+            with self.assertRaisesRegex(ValueError, "canonical config digest drift: OracleConsensusRamen"):
                 build_canonical_open_set_evidence_matrix(
                     evidence_dir=directory, data_root=directory, config_dir=config_root,
                 )
-            consensus_config.write_text(
-                consensus_config.read_text(encoding="utf-8").replace("consensus_mode: hard_mask\n", "consensus_mode: hard_mask\ninclude_current: true\n"), encoding="utf-8"
-            )
+            shutil.copy(REPOSITORY_ROOT / "cfg/CIFAR100C/OracleConsensusRamen.yaml", consensus_config)
             runs = build_canonical_open_set_evidence_matrix(
                 evidence_dir=directory, data_root=directory, config_dir=config_root,
             )
-            clean = next(run for run in runs if run.method == "EntropyGatedRamen")
+            clean = next(run for run in runs if run.method == "Ramen")
             self.assertEqual(hashlib.sha256(clean.config_path.read_bytes()).hexdigest()[:12], clean.config_hash)
 
             fallback_root = Path(directory) / "fallback-cfg"
