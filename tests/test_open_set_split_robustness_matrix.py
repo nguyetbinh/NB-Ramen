@@ -1,5 +1,6 @@
 """Contract tests for the immutable v2/v3 split-robustness planner."""
 
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -48,9 +49,14 @@ class SplitRobustnessMatrixTests(unittest.TestCase):
                       data_root="/tmp/ramen-data", open_set_ood_ratio=.3,
                       open_set_per_domain_source_budget=400)
         legacy = make_run_id(**common)
+        # Run identity binds the resolved data root: /tmp resolves to
+        # /private/tmp on macOS but ordinarily remains /tmp on Linux.
+        data_root_digest = hashlib.sha256(
+            str(Path(common["data_root"]).resolve()).encode("utf-8")
+        ).hexdigest()[:12]
         self.assertEqual(
             "cifar100c-block-seed-0-ramen-dev-cuda-full-open-ood-0-3-src-400-"
-            "cfg-abc123-prov-exact-data-c6eee46166e8",
+            f"cfg-abc123-prov-exact-data-{data_root_digest}",
             legacy,
         )
         self.assertNotEqual(
