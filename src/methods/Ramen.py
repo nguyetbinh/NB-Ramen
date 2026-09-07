@@ -6,6 +6,19 @@ from .losses import softmax_entropy
 from .TTABase import TTABase
 
 
+def cache_distances(queries, supports):
+    """Compute Euclidean distances without unsupported Half cdist kernels."""
+    if queries.dtype == torch.float16:
+        if queries.device.type == 'cpu':
+            return torch.cdist(queries.float(), supports.float())
+        if queries.device.type == 'cuda':
+            # PyTorch 2.4 defaults to MM when either point count exceeds 25.
+            # Its small-input CUDA kernel does not support Half. Force the
+            # same MM path used by the primary B=100 runs, retaining FP16.
+            return torch.cdist(queries, supports, compute_mode='use_mm_for_euclid_dist')
+    return torch.cdist(queries, supports)
+
+
 class PriorityCache:
     """
     Store key-value pairs
@@ -69,13 +82,7 @@ class PriorityCache:
 
         queries = queries.detach().to(device=self.device, dtype=self.dtype)
         supports = self.keys[:self.size]
-        if queries.device.type == 'cpu' and queries.dtype == torch.float16:
-            # CPU cdist does not implement Half.  Keep the cache in Half so
-            # its storage behavior is unchanged, but calculate distances in
-            # float32 for CPU retrieval.
-            dist = torch.cdist(queries.float(), supports.float())
-        else:
-            dist = torch.cdist(queries, supports)  # torch.Tensor,
+        dist = cache_distances(queries, supports)
         sorted_dist, indices = torch.topk(dist, k=topk, dim=1, largest=False, sorted=True)
 
         values = self.values[indices]  # num_queries * topk * value_dim
