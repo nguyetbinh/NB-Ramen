@@ -231,11 +231,13 @@ def _absolute(path: str | Path) -> Path:
 
 
 def _python_executable(path: str | Path) -> str:
-    """Keep an explicit PATH command usable while defaulting to absolute Python."""
+    """Keep PATH commands and the virtualenv identity of explicit Python paths."""
     text = str(path)
     if "/" not in text and "\\" not in text:
         return text
-    return str(_absolute(text))
+    # Resolving the executable symlink can bypass pyvenv.cfg and launch the
+    # base interpreter, which does not have the environment's dependencies.
+    return str(Path(text).expanduser().absolute())
 
 
 def _parse_config_scalar(value: str) -> object:
