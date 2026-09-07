@@ -28,6 +28,7 @@ except ImportError:  # ``methods`` imported as a top-level package from ``src``.
     )
 from .TTABase import TTABase
 from .losses import softmax_entropy
+from .Ramen import cache_distances
 
 
 _ORACLE_OOD_SOURCE = "evaluator_is_ood"
@@ -128,7 +129,7 @@ class OraclePriorityCache:
         if self.size == 0:
             return None
         count = min(topk, self.size)
-        distances = torch.cdist(queries.detach().to(self.keys.dtype), self.keys[:self.size])
+        distances = cache_distances(queries.detach().to(self.keys.dtype), self.keys[:self.size])
         distances, indices = torch.topk(distances, k=count, dim=1, largest=False, sorted=True)
         return (
             self.values[indices], self.entropies[indices], distances,

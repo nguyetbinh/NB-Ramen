@@ -88,6 +88,18 @@ adapted run needs a paired NoAdapt reference with the **same batch size**;
 B=1 must not reference the B=100 baseline. These controls remain outside the
 252-run primary matrix and are not evidence for tuning or effect-size claims.
 
+### FP16 CUDA retrieval compatibility
+
+Ramen's class caches and the directional oracle caches use the matrix-multiply
+Euclidean `torch.cdist` path explicitly for CUDA FP16 queries. PyTorch 2.4.1's
+default selects that same path when either point count exceeds 25, including
+primary batch=100 queries; smaller queries otherwise select a CUDA kernel
+without Half support. This explicit selection lets the B=1 causal control run
+while preserving the existing B=100 distance path, FP16 storage, and admission
+order. CPU Half retrieval continues to calculate distances in float32.
+Real-CUDA regression tests check small queries, the 25/26-point boundary,
+primary-batch equivalence, and oracle support-label alignment.
+
 ## Pre-full CUDA gates
 
 Use trace v3 / summary v4 for a direct `src/main.py` seven-method smoke on the
