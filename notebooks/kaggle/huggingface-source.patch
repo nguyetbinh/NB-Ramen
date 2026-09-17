@@ -1,0 +1,231 @@
+--- a/src/runtime/artifact_provenance.py
++++ b/src/runtime/artifact_provenance.py
+@@ -16,6 +16,12 @@
+ from pathlib import Path, PurePosixPath
+ from typing import Any, Iterable, Mapping
+ from urllib.parse import urlparse
++
++
++try:
++    from .cifar100c_huggingface import CIFAR100C_HF_ACQUISITION, verify_huggingface_cifar100c_files
++except ImportError:
++    from cifar100c_huggingface import CIFAR100C_HF_ACQUISITION, verify_huggingface_cifar100c_files
+ 
+ 
+ SCHEMA_VERSION = 1
+@@ -287,8 +293,8 @@
+ 
+ 
+ def _validate_cifar_acquisition(acquisition: Mapping[str, Any]) -> None:
+-    if dict(acquisition) != CIFAR100C_OFFICIAL_ACQUISITION:
+-        raise ProvenanceError("CIFAR-100-C acquisition does not match the pinned official Zenodo artifact")
++    if dict(acquisition) not in (CIFAR100C_OFFICIAL_ACQUISITION, CIFAR100C_HF_ACQUISITION):
++        raise ProvenanceError("CIFAR-100-C acquisition does not match the pinned official Zenodo artifact or pinned Hugging Face mirror")
+ 
+ 
+ def generate_dataset_provenance(dataset: str, dataset_root: str | Path, *, manifest_path: str | Path | None = None,
+@@ -310,8 +316,11 @@
+     acquisition_record = dict(acquisition or {})
+     if dataset == "cifar100c":
+         _validate_cifar_acquisition(acquisition_record)
+-        acquisition_record["expected_checksum"] = acquisition_record["expected_checksum"].lower()
+-        acquisition_record["actual_checksum"] = acquisition_record["actual_checksum"].lower()
++        if acquisition_record == CIFAR100C_HF_ACQUISITION:
++            verify_huggingface_cifar100c_files(root)
++        else:
++            acquisition_record["expected_checksum"] = acquisition_record["expected_checksum"].lower()
++            acquisition_record["actual_checksum"] = acquisition_record["actual_checksum"].lower()
+     payload = {"schema_version": SCHEMA_VERSION, "dataset": dataset, "root": ".", "sidecar": f"{SIDECAR_DIRECTORY}/{sidecar.name}",
+                "acquisition": acquisition_record, "content": {"algorithm": "sha256", "files": records, "root_digest": _content_digest(records)}}
+     _atomic_json(sidecar, payload)
+@@ -386,6 +395,8 @@
+             raise ProvenanceError(f"dataset file size changed: {relative}")
+         if exact and sha256_regular_file(path)["sha256"] != record["sha256"]:
+             raise ProvenanceError(f"dataset file SHA-256 mismatch: {relative}")
++    if exact and dataset == "cifar100c" and payload.get("acquisition") == CIFAR100C_HF_ACQUISITION:
++        verify_huggingface_cifar100c_files(root)
+     return {
+         "schema_version": SCHEMA_VERSION,
+         "dataset": dataset,
+--- a/src/runtime/experiment_matrix.py
++++ b/src/runtime/experiment_matrix.py
+@@ -24,7 +24,7 @@
+ try:  # Supports both ``python -m runtime...`` and direct-file invocation.
+     from .preflight import validate_dataset_layout
+     from .artifact_provenance import (
+-        CIFAR100C_OFFICIAL_ACQUISITION,
++        CIFAR100C_OFFICIAL_ACQUISITION, CIFAR100C_HF_ACQUISITION,
+         SCHEMA_VERSION as ARTIFACT_SCHEMA_VERSION,
+         default_sidecar_path,
+         resolve_clip_model,
+@@ -32,7 +32,7 @@
+ except ImportError:  # pragma: no cover - exercised only by direct invocation
+     from preflight import validate_dataset_layout
+     from artifact_provenance import (
+-        CIFAR100C_OFFICIAL_ACQUISITION,
++        CIFAR100C_OFFICIAL_ACQUISITION, CIFAR100C_HF_ACQUISITION,
+         SCHEMA_VERSION as ARTIFACT_SCHEMA_VERSION,
+         default_sidecar_path,
+         resolve_clip_model,
+@@ -925,6 +925,9 @@
+     expected_sidecar = str(default_sidecar_path(root, dataset_key).absolute())
+     _require_equal(sidecar, expected_sidecar, "manifest.artifacts.dataset.sidecar", run)
+     expected_acquisition = CIFAR100C_OFFICIAL_ACQUISITION if run.dataset == "CIFAR100C" else {}
++    if run.dataset == "CIFAR100C" and dataset.get("acquisition") == CIFAR100C_HF_ACQUISITION:
++        expected_acquisition = CIFAR100C_HF_ACQUISITION
++        _require_equal(dataset.get("file_count"), 20, "manifest.artifacts.dataset.file_count", run)
+     _require_equal(dataset.get("acquisition"), expected_acquisition, "manifest.artifacts.dataset.acquisition", run)
+ 
+ 
+--- /dev/null
++++ b/src/runtime/cifar100c_huggingface.py
+@@ -0,0 +1,62 @@
++"""Pinned Hugging Face transport with independent original NumPy checksums.
++
++The MD5 table is published by TorchUncertainty's CIFAR100C implementation:
++https://torch-uncertainty.github.io/_modules/torch_uncertainty/datasets/classification/cifar/cifar_c.html
++It identifies the original .npy bytes, including image order and NPY headers.
++This acquisition does not claim to have downloaded or hashed the Zenodo tar.
++"""
++
++from pathlib import Path
++
++HF_REPOSITORY = "WNJXYK/TTA-CIFAR-100-C"
++HF_REVISION = "a12f0bcc1da33fa26d8c76ce8c1fb32e6f913bea"
++CIFAR100C_NPY_MD5 = {
++    "brightness.npy": "f22d7195aecd6abb541e27fca230c171",
++    "contrast.npy": "322bb385f1d05154ee197ca16535f71e",
++    "defocus_blur.npy": "d923e3d9c585a27f0956e2f2ad832564",
++    "elastic_transform.npy": "a0792bd6581f6810878be71acedfc65a",
++    "fog.npy": "4efc7ebd5e82b028bdbe13048e3ea564",
++    "frost.npy": "3a39c6823bdfaa0bf8b12fe7004b8117",
++    "gaussian_blur.npy": "5204ba0d557839772ef5a4196a052c3e",
++    "gaussian_noise.npy": "ecc4d366eac432bdf25c024086f5e97d",
++    "glass_blur.npy": "0bf384f38e5ccbf8dd479d9059b913e1",
++    "impulse_noise.npy": "3b3c210ddfa0b5cb918ff4537a429fef",
++    "jpeg_compression.npy": "c851b7f1324e1d2ffddeb76920576d11",
++    "labels.npy": "bb4026e9ce52996b95f439544568cdb2",
++    "motion_blur.npy": "732a7e2e54152ff97c742d4c388c5516",
++    "pixelate.npy": "96c00c60f144539e14cffb02ddbd0640",
++    "saturate.npy": "c0697e9fdd646916a61e9c312c77bf6b",
++    "shot_noise.npy": "b0a1fa6e1e465a747c1b204b1914048a",
++    "snow.npy": "0237be164583af146b7b144e73b43465",
++    "spatter.npy": "12ccf41d62564d36e1f6a6ada5022728",
++    "speckle_noise.npy": "e3f215b1a0f9fd9fd6f0d1cf94a7ce99",
++    "zoom_blur.npy": "0204613400c034a81c4830d5df81cb82",
++}
++CIFAR100C_HF_ACQUISITION = {
++    "publisher": "Hugging Face community mirror",
++    "repository": HF_REPOSITORY,
++    "revision": HF_REVISION,
++    "url": f"https://huggingface.co/datasets/{HF_REPOSITORY}/tree/{HF_REVISION}",
++    "upstream_doi": "10.5281/zenodo.3555552",
++    "verification": "reconstructed_original_npy_md5",
++    "files": dict(CIFAR100C_NPY_MD5),
++}
++
++
++def verify_huggingface_cifar100c_files(root):
++    """Check all twenty original files, not just mirror sizes or self-reported hashes."""
++    try:
++        from .artifact_provenance import ProvenanceError, _walk_regular_files, checksum_regular_file
++    except ImportError:
++        from artifact_provenance import ProvenanceError, _walk_regular_files, checksum_regular_file
++
++    files = dict(_walk_regular_files(Path(root)))
++    if set(files) != set(CIFAR100C_NPY_MD5):
++        raise ProvenanceError("Hugging Face CIFAR-100-C requires exactly the twenty original NPY files")
++    actual = {}
++    for name, expected in CIFAR100C_NPY_MD5.items():
++        digest = checksum_regular_file(files[name], "md5")["checksum"]
++        if digest != expected:
++            raise ProvenanceError(f"Original CIFAR-100-C NPY checksum mismatch: {name}")
++        actual[name] = digest
++    return {**CIFAR100C_HF_ACQUISITION, "files": actual}
+--- /dev/null
++++ b/tests/test_cifar100c_huggingface.py
+@@ -0,0 +1,84 @@
++import copy
++import json
++from pathlib import Path
++import tempfile
++import unittest
++
++from src.runtime import artifact_provenance as provenance
++from src.runtime.cifar100c_huggingface import (
++    CIFAR100C_HF_ACQUISITION, CIFAR100C_NPY_MD5, verify_huggingface_cifar100c_files,
++)
++
++
++class HuggingFaceAcquisitionTests(unittest.TestCase):
++    def test_pinned_acquisitions_are_distinct_and_accepted(self):
++        self.assertNotEqual(CIFAR100C_HF_ACQUISITION, provenance.CIFAR100C_OFFICIAL_ACQUISITION)
++        provenance._validate_cifar_acquisition(CIFAR100C_HF_ACQUISITION)
++        provenance._validate_cifar_acquisition(provenance.CIFAR100C_OFFICIAL_ACQUISITION)
++        self.assertNotIn("actual_checksum", CIFAR100C_HF_ACQUISITION)
++
++    def test_changed_revision_url_or_checksum_is_rejected(self):
++        for field in ("revision", "url", "files"):
++            with self.subTest(field=field):
++                bad = copy.deepcopy(CIFAR100C_HF_ACQUISITION)
++                bad[field] = {} if field == "files" else "changed"
++                with self.assertRaises(provenance.ProvenanceError):
++                    provenance._validate_cifar_acquisition(bad)
++
++    def test_generation_checks_original_bytes_before_writing_sidecar(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            root = Path(tmp)
++            for name in CIFAR100C_NPY_MD5:
++                (root / name).write_bytes(b"not the official data")
++            with self.assertRaisesRegex(provenance.ProvenanceError, "checksum mismatch"):
++                provenance.generate_cifar100c_provenance(root, acquisition=CIFAR100C_HF_ACQUISITION)
++            self.assertFalse(provenance.default_sidecar_path(root, "cifar100c").exists())
++
++    def test_missing_or_extra_file_is_rejected(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            root = Path(tmp)
++            with self.assertRaisesRegex(provenance.ProvenanceError, "twenty"):
++                verify_huggingface_cifar100c_files(root)
++            for name in CIFAR100C_NPY_MD5:
++                (root / name).write_bytes(b"")
++            (root / "extra.npy").write_bytes(b"")
++            with self.assertRaisesRegex(provenance.ProvenanceError, "twenty"):
++                verify_huggingface_cifar100c_files(root)
++
++    def test_symlink_is_rejected(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            root = Path(tmp) / "data"
++            root.mkdir()
++            target = Path(tmp) / "target"
++            target.write_bytes(b"data")
++            (root / "labels.npy").symlink_to(target)
++            with self.assertRaises(provenance.ProvenanceError):
++                verify_huggingface_cifar100c_files(root)
++
++    def test_strict_matrix_validation_accepts_pinned_hf_and_rejects_altered_receipt(self):
++        from src.runtime.experiment_matrix import build_experiment_matrix, validate_completed_run, IncompleteRunError
++        from tests.test_experiment_matrix import _write_valid_evidence
++
++        with tempfile.TemporaryDirectory() as tmp:
++            run = build_experiment_matrix(datasets=("CIFAR100C",), methods=("NoAdapt",),
++                                          streams=("block",), seeds=(0,), device="cpu",
++                                          evidence_dir=Path(tmp))[0]
++            _write_valid_evidence(run)
++            path = run.run_dir / "manifest.json"
++            manifest = json.loads(path.read_text())
++            manifest["artifacts"]["dataset"].update(
++                acquisition=copy.deepcopy(CIFAR100C_HF_ACQUISITION), file_count=20,
++            )
++            path.write_text(json.dumps(manifest))
++            validate_completed_run(run)
++            for field, value in (("file_count", 19), ("acquisition", {})):
++                with self.subTest(field=field):
++                    bad = copy.deepcopy(manifest)
++                    bad["artifacts"]["dataset"][field] = value
++                    path.write_text(json.dumps(bad))
++                    with self.assertRaises(IncompleteRunError):
++                        validate_completed_run(run)
++
++
++if __name__ == "__main__":
++    unittest.main()
