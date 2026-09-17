@@ -1,0 +1,142 @@
+{
+  "b-null": {
+    "audit": "PASS_DIAGNOSTIC_TARGET",
+    "summary": {
+      "schema_version": 1,
+      "diagnostic_only": true,
+      "oracle_scope": "screened_subset_lower_bound",
+      "requested_queries": 128,
+      "eligible_queries": 128,
+      "query_budget_complete": true,
+      "mean_oracle_loss_gain": 0.04667678474601189,
+      "median_oracle_loss_gain": 0.008720360696315765,
+      "p25_p75": [
+        6.0627993661910295e-05,
+        0.04948386549949646
+      ],
+      "headroom_rate": 0.890625,
+      "accuracy_transitions": {
+        "False->False": 56,
+        "False->True": 2,
+        "True->False": 0,
+        "True->True": 70
+      },
+      "net_correction": 2,
+      "mean_margin_gain": 0.0849609375,
+      "spearman_predicted_exact": 0.40064708628028234,
+      "correlation_population": "all verified swaps pooled; screened mode has selection bias",
+      "selected_swap_count": 114,
+      "ood_to_id_best_swap_rate": 0.0,
+      "id_to_ood_best_swap_rate": 0.0,
+      "same_to_cross_domain_rate": 0.2543859649122807,
+      "cross_to_same_domain_rate": 0.03508771929824561,
+      "baseline_mean_loss_gain": {
+        "feature_similarity": 0.0,
+        "best_predicted": 0.03426916406061764,
+        "worst_predicted": -0.034423552653890965,
+        "random": -0.00904442448569398,
+        "gradient_cosine": 0.01567750938033896
+      },
+      "decision": "requires_review_of_pilot_A_and_both_pilot_B_cells"
+    },
+    "extra": {
+      "query_domains": {
+        "fog": 64,
+        "defocus_blur": 64
+      },
+      "query_timestep_range": [
+        0,
+        127
+      ],
+      "committed_trace_rows": 200,
+      "realized_trace_ood_fraction": 0.0,
+      "mean_ramen_ce": 2.0419632144738102,
+      "mean_oracle_ce": 1.9952864297277983,
+      "ramen_correct": 70,
+      "oracle_correct": 72,
+      "verified_swaps": 493,
+      "legal_swaps_ranked": 4600,
+      "baseline_positive_queries": {
+        "feature_similarity": 0,
+        "best_predicted": 86,
+        "worst_predicted": 39,
+        "random": 58,
+        "gradient_cosine": 78
+      }
+    }
+  },
+  "b-open": {
+    "audit": "PASS_DIAGNOSTIC_TARGET",
+    "summary": {
+      "schema_version": 1,
+      "diagnostic_only": true,
+      "oracle_scope": "screened_subset_lower_bound",
+      "requested_queries": 128,
+      "eligible_queries": 128,
+      "query_budget_complete": true,
+      "mean_oracle_loss_gain": 0.33178782533241247,
+      "median_oracle_loss_gain": 0.053991883993148804,
+      "p25_p75": [
+        0.0007655990775674582,
+        0.16136610507965088
+      ],
+      "headroom_rate": 0.9375,
+      "accuracy_transitions": {
+        "False->False": 64,
+        "False->True": 2,
+        "True->False": 0,
+        "True->True": 62
+      },
+      "net_correction": 2,
+      "mean_margin_gain": 0.4150390625,
+      "spearman_predicted_exact": 0.6752614131369487,
+      "correlation_population": "all verified swaps pooled; screened mode has selection bias",
+      "selected_swap_count": 120,
+      "ood_to_id_best_swap_rate": 0.19166666666666668,
+      "id_to_ood_best_swap_rate": 0.3416666666666667,
+      "same_to_cross_domain_rate": 0.26666666666666666,
+      "cross_to_same_domain_rate": 0.13333333333333333,
+      "baseline_mean_loss_gain": {
+        "feature_similarity": 0.0,
+        "best_predicted": 0.3200135164911444,
+        "worst_predicted": -0.11663183902101082,
+        "random": -0.002947842129287892,
+        "gradient_cosine": 0.19243557397953737
+      },
+      "decision": "requires_review_of_pilot_A_and_both_pilot_B_cells"
+    },
+    "extra": {
+      "query_domains": {
+        "defocus_blur": 17,
+        "motion_blur": 36,
+        "zoom_blur": 32,
+        "shot_noise": 32,
+        "brightness": 11
+      },
+      "query_timestep_range": [
+        100,
+        346
+      ],
+      "committed_trace_rows": 400,
+      "realized_trace_ood_fraction": 0.485,
+      "mean_ramen_ce": 2.300949442900219,
+      "mean_oracle_ce": 1.9691616175678064,
+      "ramen_correct": 62,
+      "oracle_correct": 64,
+      "verified_swaps": 509,
+      "legal_swaps_ranked": 30845,
+      "baseline_positive_queries": {
+        "feature_similarity": 0,
+        "best_predicted": 109,
+        "worst_predicted": 19,
+        "random": 65,
+        "gradient_cosine": 78
+      }
+    }
+  },
+  "pilot_a_overlap": {
+    "queries": 16,
+    "baseline_and_verified_swaps_exactly_match": true,
+    "screened_to_exhaustive_gain_ratio": 0.7520031790824975
+  }
+}

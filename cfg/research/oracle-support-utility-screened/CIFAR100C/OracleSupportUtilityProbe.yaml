@@ -1,0 +1,9 @@
+max_capacity: 750
+topk: 5
+beta: 5.0
+optimizer: signsgd
+lr: 0.01
+candidate_m: 10
+probe_queries: 128
+probe_mode: screened
+oracle_label_source: evaluator_known_label

@@ -450,10 +450,22 @@ def ordered_stream_test(
                 # receives it through its one-shot context hook only.
                 _provide_oracle_domain_context(tta_model, domain_idx)
                 _provide_oracle_ood_context(tta_model, is_ood)
+                if getattr(tta_model, 'requires_oracle_known_label', False):
+                    if args.tta_algo != 'OracleSupportUtilityProbe':
+                        raise RuntimeError('known labels are restricted to OracleSupportUtilityProbe')
+                    from evaluation.oracle_support_utility import write_probe_outputs
+                    def save_probe_progress():
+                        write_probe_outputs(tta_model, evidence_paths['run_dir'])
+                        print(f'Oracle support queries: {len(tta_model.rows)}/{tta_model.cfg["probe_queries"]}', flush=True)
+                    tta_model.probe_progress = save_probe_progress
+                    tta_model.set_oracle_known_label(label, is_ood=is_ood, domains=domain_idx)
 
                 _sync_device(args.device)
                 started = time.perf_counter()
                 logits = tta_model(image)
+                if getattr(args, 'tta_algo', None) == 'OracleSupportUtilityProbe':
+                    from evaluation.oracle_support_utility import write_probe_outputs
+                    write_probe_outputs(tta_model, evidence_paths['run_dir'])
                 _sync_device(args.device)
                 batch_latency_ms = (time.perf_counter() - started) * 1000.0
 
@@ -1018,6 +1030,7 @@ def main(args):
     manifest_args['oracle_domain_contexts'] = bool(
         getattr(method_class, 'requires_oracle_domain_context', False)
     )
+    manifest_args['oracle_known_label_contexts'] = bool(getattr(method_class, 'requires_oracle_known_label', False))
     manifest_args['oracle_ood_contexts'] = bool(
         getattr(method_class, 'requires_oracle_ood_context', False)
     )
