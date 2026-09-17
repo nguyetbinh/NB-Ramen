@@ -1,5 +1,8 @@
 # Kaggle workflows
 
+- **Full matrix qua Hugging Face khi Zenodo lỗi:**
+  [kaggle-huggingface-full-matrix.ipynb](kaggle-huggingface-full-matrix.ipynb),
+  [hướng dẫn và kiểm tra nguồn dữ liệu](huggingface-run-guide.md).
 - **Full matrix 252 runs:** [kaggle-full-matrix.ipynb](kaggle-full-matrix.ipynb),
   [Python export](kaggle-full-matrix.py), [hướng dẫn chạy/resume](full-run-guide.md).
 - **Pre-full smoke 14 runs:** dùng notebook mô tả bên dưới.
