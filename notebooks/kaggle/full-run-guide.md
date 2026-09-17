@@ -41,6 +41,12 @@ vượt mốc đó. Đặt `SESSION_HOURS=0` để tắt giới hạn này, ho�
 chạy tối đa 7 run mới mỗi lần. Những lựa chọn này không thay nội dung từng run.
 Thời gian setup/data/tests không tính vào ngân sách matrix.
 
+Cell dữ liệu thử tối đa 6 lần, luân phiên đường download và API chính thức
+của Zenodo, giữ file `.part` để tải tiếp khi máy chủ hỗ trợ. Archive và CLIP
+chỉ được dùng sau khi checksum hợp lệ; file sai được đổi tên `.rejected-*`
+để giữ chẩn đoán. Log từng lần tải nằm trong `runtime/<session-id>/download-attempts.jsonl`.
+Nếu cả hai đường Zenodo vẫn lỗi, cell dừng; retry không bảo đảm dịch vụ phục hồi.
+
 ## Tiếp tục ở phiên khác
 
 Upload ZIP full đã tải thành Kaggle Input, rồi điền đường dẫn ZIP thực tế:
@@ -104,9 +110,13 @@ Sau khi sửa nguồn, tái sinh artifact theo thứ tự:
 python notebooks/kaggle/build-notebook.py
 python notebooks/kaggle/build-full-notebook.py
 python -m unittest discover -s notebooks/kaggle -p 'test_full_run_support.py'
+PYTHONPATH=src python -m unittest discover -s notebooks/kaggle -p 'test_prepare_data.py'
 ```
 
 Các test helper dùng filesystem/subprocess thật để kiểm tra round-trip ZIP,
 không overwrite, CRC, path/symlink rejection, giữ ZIP cũ khi checkpoint lỗi
 và dừng cả tiến trình con khi bị interrupt. Kiểm tra local không thực thi
 252 GPU runs; notebook mới là entry point để thu evidence đó trên Kaggle.
+Các test tải dữ liệu dùng curl và máy chủ HTTP trên localhost để kiểm tra
+504/fallback, resume, checksum, file có sẵn và giữ phần tải dở khi hết lượt thử;
+môi trường chạy test cần cho phép mở cổng localhost.
