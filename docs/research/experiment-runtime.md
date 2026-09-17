@@ -569,3 +569,12 @@ preregistered OOD-ratio denominator. Do not replace this with a cost-limited
 prefix or a non-CUDA pilot inside the canonical evidence directory.
 
 The preflight also supports `ImageNetC`, `PACS`, `VLCS`, `TerraIncognita`, and `OfficeHome`; use `--all-datasets` to check every supported layout.
+
+## Oracle support utility pilot
+
+The diagnostic-only [support utility probe](oracle-support-utility-probe.md)
+measures same-pseudo-class one-swap headroom while returning ordinary Ramen
+predictions. Its separate runner plans exhaustive Pilot A and screened Pilot B
+at OOD ratios 0/.5; its label hook and JSONL sidecars are outside the canonical
+252-run matrix. See the linked contract for config locks, eligibility, timeout
+handling and the distinction between exhaustive and screened headroom.

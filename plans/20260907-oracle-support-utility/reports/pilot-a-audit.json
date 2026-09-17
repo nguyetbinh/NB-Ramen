@@ -1,0 +1,70 @@
+{
+  "audit": {
+    "status": "PASS_DIAGNOSTIC_TARGET",
+    "full_600_sample_run_complete": false,
+    "eligible_queries": 16,
+    "trace_rows": 200,
+    "earliest_eligible_queries": [
+      100,
+      102,
+      103,
+      104,
+      105,
+      106,
+      108,
+      109,
+      110,
+      111,
+      117,
+      119,
+      122,
+      124,
+      125,
+      126
+    ],
+    "all_legal_swaps_verified": 1760,
+    "unique_nonbaseline_directions": 1760,
+    "source_hashes_match_launch": true,
+    "support_provenance_matches_trace": true,
+    "complete_earliest_query_selection": true,
+    "summary_recomputed_from_raw_rows": true
+  },
+  "summary": {
+    "schema_version": 1,
+    "diagnostic_only": true,
+    "oracle_scope": "exhaustive_one_swap",
+    "requested_queries": 16,
+    "eligible_queries": 16,
+    "query_budget_complete": true,
+    "mean_oracle_loss_gain": 0.21433536947733955,
+    "median_oracle_loss_gain": 0.17331933975219727,
+    "p25_p75": [
+      0.00041820749174803495,
+      0.29790791869163513
+    ],
+    "headroom_rate": 1.0,
+    "accuracy_transitions": {
+      "False->False": 8,
+      "False->True": 0,
+      "True->False": 0,
+      "True->True": 8
+    },
+    "net_correction": 0,
+    "mean_margin_gain": 0.26171875,
+    "spearman_predicted_exact": 0.4413060530900304,
+    "correlation_population": "all verified swaps pooled; screened mode has selection bias",
+    "selected_swap_count": 16,
+    "ood_to_id_best_swap_rate": 0.1875,
+    "id_to_ood_best_swap_rate": 0.1875,
+    "same_to_cross_domain_rate": 0.5,
+    "cross_to_same_domain_rate": 0.125,
+    "baseline_mean_loss_gain": {
+      "feature_similarity": 0.0,
+      "best_predicted": 0.16016648840741254,
+      "worst_predicted": -0.09987680002814159,
+      "random": 0.014635295148764271,
+      "gradient_cosine": 0.07624180890707066
+    },
+    "decision": "requires_review_of_pilot_A_and_both_pilot_B_cells"
+  }
+}
