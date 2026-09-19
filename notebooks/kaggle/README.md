@@ -1,5 +1,10 @@
 # Kaggle workflows
 
+- **QCGS label-free diagnostic:** [kaggle-qcgs-label-free.ipynb](kaggle-qcgs-label-free.ipynb).
+  Chạy CPU checks → CUDA smoke → registry → Stage A → Stage B → audit.
+  Source được nhúng và cố định; xuất `qcgs-label-free-evidence.zip` để tải về.
+  Đây là notebook chưa chạy CUDA, không phải kết quả thực nghiệm. Xem
+  [protocol và lệnh chạy/resume](../../docs/research/query-conditioned-gradient-selection.md#execution-entry-point).
 - **Full matrix qua Hugging Face khi Zenodo lỗi:**
   [kaggle-huggingface-full-matrix.ipynb](kaggle-huggingface-full-matrix.ipynb),
   [hướng dẫn và kiểm tra nguồn dữ liệu](huggingface-run-guide.md).

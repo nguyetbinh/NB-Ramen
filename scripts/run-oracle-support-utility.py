@@ -64,4 +64,13 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    if '--diagnostic' in sys.argv:
+        index = sys.argv.index('--diagnostic')
+        if sys.argv[index+1:index+2] != ['qcgs']:
+            raise SystemExit('the explicit diagnostic mode must be qcgs')
+        arguments = sys.argv[1:index] + sys.argv[index+2:]
+        sys.path.insert(0, str(ROOT / 'src'))
+        from runtime.query_gradient_campaign import main as qcgs_main
+        qcgs_main(arguments)
+    else:
+        main()

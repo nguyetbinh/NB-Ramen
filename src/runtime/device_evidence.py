@@ -109,11 +109,22 @@ class DeviceMemoryTracker:
         self._device_type = _device_type(device)
         self._torch = _torch(torch_module)
         self._mps_maximum: int | None = None
+        self._cuda_maximum: int | None = None
 
     def start(self) -> None:
         """Reset CUDA allocator peak immediately before the evaluated stream."""
         if self._device_type == "cuda" and self._torch is not None:
+            self._cuda_maximum = None
             _call(getattr(getattr(self._torch, "cuda", None), "reset_peak_memory_stats", None), self.device)
+
+    def reset_scoped_cuda_peak(self) -> None:
+        """Start a local measurement while retaining all earlier stream peaks."""
+        if self._device_type == "cuda" and self._torch is not None:
+            cuda = getattr(self._torch, "cuda", None)
+            value = _call(getattr(cuda, "max_memory_allocated", None), self.device)
+            if value is not None:
+                self._cuda_maximum = max(self._cuda_maximum or 0, int(value))
+            _call(getattr(cuda, "reset_peak_memory_stats", None), self.device)
 
     def sample_post_batch(self) -> None:
         """Sample MPS allocation after the caller has synchronized the batch."""
@@ -126,6 +137,8 @@ class DeviceMemoryTracker:
     def summary(self) -> dict[str, Any]:
         if self._device_type == "cuda":
             value = _call(getattr(getattr(self._torch, "cuda", None), "max_memory_allocated", None), self.device) if self._torch else None
+            if self._cuda_maximum is not None:
+                value = max(self._cuda_maximum, int(value or 0))
             return {"status": "collected" if value is not None else "unavailable",
                     "kind": "exact_cuda_allocator_peak", "bytes": int(value) if value is not None else None}
         if self._device_type == "mps":

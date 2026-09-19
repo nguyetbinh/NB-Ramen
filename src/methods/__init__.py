@@ -32,3 +32,4 @@ def get_method_class(method_name):
     return globals()[method_name]
 
 from .OracleSupportUtilityProbe import OracleSupportUtilityProbe
+from .QueryGradientUtilityProbe import QueryGradientUtilityProbe

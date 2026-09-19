@@ -4,7 +4,7 @@
 **Source base:** `oracle-hf-workflows`\
 **Working branch:** `qcgs-label-free-diagnostic`\
 **Pinned base commit:** `3a80623b074f16b8ef87d8d5507427277ea2a54f`\
-**Status:** Preregistration draft, ready for implementation; not ready for execution.\
+**Status:** Diagnostic implemented; CUDA smoke and the actual runtime registry are pending.\
 **Revised:** 2026-09-19\
 **Dataset/model:** CIFAR-100-C / CLIP ViT-B/16.
 
@@ -384,7 +384,8 @@ pytest -q tests/test_oracle_support_utility.py tests/test_query_gradient_selecti
 pytest -q
 ```
 
-These are required future checks, not checks claimed to have passed already.
+These are required checks. Consult the execution report and test receipts for
+which checks have actually run; notebook generation is not experimental evidence.
 
 ## 10. Execution and artifact contract
 
@@ -460,6 +461,51 @@ the historical oracle conclusion separate from the failed single-view proxy.
 Do not claim universal Ramen improvement, supervised-gradient recovery,
 causal benefit from OOD, or generalization to untested datasets from this pilot.
 Related-work/novelty claims require a separate review.
+
+## Execution entry point
+
+The new mode preserves the historical oracle CLI and uses a separate probe,
+evaluator and campaign module. From a clean committed checkout with CUDA:
+
+```bash
+python scripts/run-oracle-support-utility.py --diagnostic qcgs --execute \
+  --data-root /path/to/data --evidence-dir /path/to/fresh-qcgs-evidence
+```
+
+CPU verification without scientific execution:
+
+```bash
+python scripts/run-oracle-support-utility.py --diagnostic qcgs --preflight-only \
+  --evidence-dir evidence/qcgs-cpu-preflight
+```
+
+The Kaggle notebook is `notebooks/kaggle/kaggle-qcgs-label-free.ipynb`. It embeds
+a committed source bundle, uses the existing pinned Hugging Face reconstruction,
+and exports an atomic `qcgs-label-free-evidence.zip`. Import it with Internet and
+GPU enabled. Outputs are empty until it actually runs.
+
+The committed operational spec is
+`cfg/research/query-gradient-diagnostic/protocol.json`; it leaves the scientific
+score and gates unchanged. Outcome-blind scans start at 600 stream rows and may
+double to at most 6,000 only to fill untouched-image quotas. Final scored runs
+use the shortest whole-batch prefix covering the registry, locked before A.
+Timeout defaults to 3,600 seconds per cell; any override must be supplied before
+the initial freeze. A timeout stops later stages and retains partial evidence.
+
+Actual smoke IDs, parameter ordering, registry, scan/provenance, configs and
+launch commands are committed to a **separate local Git ledger inside
+`evidence/locks`** before Stage A; Stage A bin edges are committed there before
+Stage B. This satisfies the pre-result commit requirement while keeping the
+source checkout clean. Ledger history is included in the ZIP; no remote push
+is required. Checkpoints restart an incomplete cell from its initial model,
+cache and dedicated RNG. Completed cells require matching hashes and validation.
+
+After restoring a ZIP at the same execution paths, add `--resume` to execute.
+For a downloaded/extracted artifact, `--audit --evidence-dir /path/to/evidence`
+rechecks the input ledger, completed-file hashes and raw arithmetic without a
+GPU or access to the original Kaggle filesystem. This audit does not independently
+recompute model logits. See
+[execution status](../../plans/20260919-qcgs-diagnostic/reports/results.md).
 
 ## Source basis
 

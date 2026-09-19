@@ -88,6 +88,17 @@ class DeviceEvidenceTests(unittest.TestCase):
             tracker.summary(),
         )
 
+    def test_scoped_cuda_resets_preserve_whole_stream_peak(self):
+        cuda = FakeCuda()
+        tracker = DeviceMemoryTracker('cuda', torch_module=self.torch(cuda=cuda))
+        tracker.start()
+        tracker.reset_scoped_cuda_peak()
+        cuda.peak = 1024
+        self.assertEqual(tracker.summary()['bytes'], 8192)
+        tracker.reset_scoped_cuda_peak()
+        cuda.peak = 16384
+        self.assertEqual(tracker.summary()['bytes'], 16384)
+
     def test_mps_evidence_and_tracker_are_explicitly_sampled(self):
         mps = FakeMps([100, 250, 175, 275])
         torch = self.torch(mps=mps)

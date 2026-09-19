@@ -347,9 +347,13 @@ class OracleSupportUtilityProbe(Ramen):
                             raise RuntimeError('grouped ViT trial differs from isolated full-batch trial')
                     checked = True
                 for job in group:
-                    job['metrics'][job['pending'][step]] = logit_metrics(logits[job['b']], labels[job['b']])
+                    job['metrics'][job['pending'][step]] = self.trial_metrics(logits[job['b']], labels[job['b']])
             if step == 0 or (step+1) % 10 == 0 or step+1 == rounds:
                 print(f'Oracle exact verification: {step+1}/{rounds} rounds, {len(jobs)} queries', flush=True)
+
+    @staticmethod
+    def trial_metrics(logits, label):
+        return logit_metrics(logits, label)
 
     def reset(self):
         super().reset()
