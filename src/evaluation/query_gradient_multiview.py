@@ -119,7 +119,8 @@ def summarize_cell(rows, stage):
         values['U'].append(r['ramen']['ce'] - ce)
         values['D'].append(r['policies']['random_matched']['ce'] - ce)
         values['E'].append(r['prediction_controls']['ramen_mv']['ce'] - ce)
-    ids = [(r['sample_idx'], r['domain'], r['timestep']) for r in rows]
+    # Gate payloads must survive JSON round trips exactly for audit and resume.
+    ids = [[r['sample_idx'], r['domain'], r['timestep']] for r in rows]
     result = {'queries': len(rows), **{n: sensitivity(v, ids) for n,v in values.items()},
               'policies': {n: policy_summary(rows, n) for n in POLICIES},
               'exact_oracle': describe([r['exact_oracle_utility'] for r in rows]) if stage == 'stage-a' else None,

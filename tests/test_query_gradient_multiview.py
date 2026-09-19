@@ -1,5 +1,6 @@
 """Real autograd tests of views, anchor/reset, unchanged Ramen, and raw audit."""
 import copy
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -15,7 +16,7 @@ from methods.MultiViewQueryGradientUtilityProbe import MultiViewQueryGradientUti
 from methods.query_gradient_multiview import VIEW_SPEC, raw_views, ensemble_log_probabilities, soft_target_ce, direction_scores
 from methods.query_gradient_selection import select_positive
 from methods.QueryGradientUtilityProbe import tensor_sha
-from evaluation.query_gradient_multiview import audit_rows
+from evaluation.query_gradient_multiview import audit_rows, summarize_cell
 
 
 def preprocess(image):
@@ -153,6 +154,8 @@ class MultiviewTests(unittest.TestCase):
         for stage in ('stage-a','stage-b'):
             p=probe(stage);feed(p,pixels);p.forward(x)
             self.assertFalse(audit_rows(p.rows,stage,'0'))
+            summary=summarize_cell(p.rows,stage)
+            self.assertEqual(summary,json.loads(json.dumps(summary)))
             probes.append(p)
         for a,b in zip(probes[0].rows,probes[1].rows):
             self.assertEqual(len(a['verified_swaps']),a['legal_swap_count'])
