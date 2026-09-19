@@ -26,16 +26,18 @@ def write_json(path, value):
     temp.replace(path)
 
 
-def assigned_stage(fingerprint, sample_idx):
+def assigned_stage(fingerprint, sample_idx, namespace="qcgs-label-free-v1"):
     if len(fingerprint) != 64 or any(c not in "0123456789abcdef" for c in fingerprint):
         raise ValueError("dataset fingerprint must be lowercase SHA-256")
     if type(sample_idx) is not int or not 0 <= sample_idx < 10000:
         raise ValueError("CIFAR base sample index out of range")
-    key = f"qcgs-label-free-v1|{fingerprint}|{sample_idx}"
+    if namespace not in ("qcgs-label-free-v1", "qcgs-multiview-rescue-v1"):
+        raise ValueError("unknown registry namespace")
+    key = f"{namespace}|{fingerprint}|{sample_idx}"
     return "stage-a" if int(hashlib.sha256(key.encode("utf-8")).hexdigest(), 16) % 9 == 0 else "stage-b"
 
 
-def build_registry(scans, fingerprint, exclusions, *, source_revision, provenance):
+def build_registry(scans, fingerprint, exclusions, *, source_revision, provenance, namespace="qcgs-label-free-v1"):
     """Take the earliest eligible distinct base images; never inspect utility."""
     if set(scans) != set(CELLS):
         raise ValueError("require both OOD cells")
@@ -48,7 +50,7 @@ def build_registry(scans, fingerprint, exclusions, *, source_revision, provenanc
         selected, seen = {s: [] for s in STAGES}, set()
         for row in rows:
             i = row["sample_idx"]
-            stage = assigned_stage(fingerprint, i)
+            stage = assigned_stage(fingerprint, i, namespace)
             if row["is_ood"] or not row["eligible"] or i in excluded or i in seen:
                 continue
             if len(selected[stage]) < STAGES[stage]:
@@ -62,12 +64,17 @@ def build_registry(scans, fingerprint, exclusions, *, source_revision, provenanc
     value = {"schema_version": 1, "dataset_fingerprint": fingerprint,
              "source_revision": source_revision, "provenance": provenance,
              "exclusions": exclusions, "cells": cells}
+    if namespace != "qcgs-label-free-v1":
+        value.update(schema_version=2, namespace=namespace)
     validate_registry(value)
     value["sha256"] = digest(value)
     return value
 
 
 def validate_registry(value):
+    namespace = value.get("namespace", "qcgs-label-free-v1")
+    if (value["schema_version"], namespace) not in ((1, "qcgs-label-free-v1"), (2, "qcgs-multiview-rescue-v1")):
+        raise ValueError("registry version/namespace mismatch")
     payload = {k: v for k, v in value.items() if k != "sha256"}
     if "sha256" in value and value["sha256"] != digest(payload):
         raise ValueError("registry hash mismatch")
@@ -81,6 +88,10 @@ def validate_registry(value):
             raise ValueError("registry stream is not contiguous")
         if cell["max_eval_samples"] % 100 or cell["max_eval_samples"] > len(stream):
             raise ValueError("invalid registry stream budget")
+        if namespace == "qcgs-multiview-rescue-v1":
+            shortest = 100 * (1 + max(r["timestep"] for rows in cell["selected"].values() for r in rows) // 100)
+            if cell["max_eval_samples"] != shortest:
+                raise ValueError("registry must freeze the shortest whole-batch prefix")
         seen = set()
         for stage, count in STAGES.items():
             rows = cell["selected"][stage]
@@ -90,7 +101,7 @@ def validate_registry(value):
                 i = row["sample_idx"]
                 if i in excluded or i in seen or row["is_ood"] or not row["eligible"]:
                     raise ValueError("registry overlap, excluded image or invalid eligibility")
-                if assigned_stage(value["dataset_fingerprint"], i) != stage:
+                if assigned_stage(value["dataset_fingerprint"], i, namespace) != stage:
                     raise ValueError("registry hash assignment mismatch")
                 if stream[row["timestep"]] != row or row["timestep"] >= cell["max_eval_samples"]:
                     raise ValueError("registry stream identity mismatch")
@@ -100,7 +111,7 @@ def validate_registry(value):
             expected, taken = [], set()
             for row in stream:
                 i = row["sample_idx"]
-                if not row["is_ood"] and row["eligible"] and i not in excluded and i not in taken and assigned_stage(value["dataset_fingerprint"], i) == stage:
+                if not row["is_ood"] and row["eligible"] and i not in excluded and i not in taken and assigned_stage(value["dataset_fingerprint"], i, namespace) == stage:
                     expected.append(row)
                     taken.add(i)
                     if len(expected) == count:

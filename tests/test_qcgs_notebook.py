@@ -29,6 +29,16 @@ class NotebookTests(unittest.TestCase):
             bundle=root/'source.bundle'
             subprocess.run(['git','bundle','create',str(bundle),'HEAD'],cwd=source,check=True)
             nb=builder.build(revision,bundle.read_bytes())
+            rescue=builder.build(revision,bundle.read_bytes(),rescue=True)
+            self.assertEqual(rescue['metadata']['qcgs']['diagnostic'],'qcgs-multiview')
+            for index,cell in enumerate(rescue['cells']):
+                if cell['cell_type']=='code':
+                    compile(''.join(cell['source']),f'multiview-cell-{index}','exec')
+                    self.assertEqual(cell['outputs'],[])
+            rescue_text='\n'.join(''.join(c['source']) for c in rescue['cells'])
+            self.assertIn('GO_CONFIRM',rescue_text)
+            self.assertIn('qcgs-multiview-evidence.zip',rescue_text)
+            self.assertNotIn('qcgs-label-free-evidence',rescue_text)
             self.assertFalse(nb['metadata']['qcgs']['experimental_outputs'])
             for index,cell in enumerate(nb['cells']):
                 if cell['cell_type']=='code':

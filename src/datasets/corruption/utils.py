@@ -102,6 +102,9 @@ class NumpyImageDataset:
     def __getitem__(self, item):
         return self.transform(Image.fromarray(self.X[item], mode='RGB')), int(self.Y[item])
 
+    def diagnostic_raw_image(self, item):
+        return np.array(self.X[item], copy=True), self.transform
+
     def __len__(self):
         return len(self.X)
 

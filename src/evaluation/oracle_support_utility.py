@@ -56,7 +56,7 @@ def summarize(rows, requested_queries, mode=None):
 
 
 def write_probe_outputs(method, run_dir):
-    if getattr(method, 'diagnostic_kind', None) == 'qcgs':
+    if getattr(method, 'diagnostic_kind', None) in ('qcgs', 'qcgs-multiview'):
         from .query_gradient_utility import write_query_outputs
         return write_query_outputs(method, run_dir)
     run_dir = Path(run_dir)

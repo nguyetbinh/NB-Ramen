@@ -1,5 +1,12 @@
 # Kaggle workflows
 
+- **QCGS multi-view rescue:** [kaggle-qcgs-multiview.ipynb](kaggle-qcgs-multiview.ipynb).
+  CPU checks → CUDA smoke → registry mới → Stage A → **GO_CONFIRM** mới chạy Stage B → audit.
+  Source nhúng/cố định, dùng pipeline Hugging Face; xuất `qcgs-multiview-evidence.zip`.
+  Chưa có evidence CUDA cho biến thể này. Xem [protocol](../../docs/research/qcgs-multiview-rescue-protocol.md)
+  và [trạng thái validation](../../plans/20260919-qcgs-multiview-rescue/reports/results.md).
+  Tái tạo notebook từ source đã commit: `python notebooks/kaggle/build-qcgs-notebook.py --multiview`.
+
 - **QCGS label-free diagnostic:** [kaggle-qcgs-label-free.ipynb](kaggle-qcgs-label-free.ipynb).
   Chạy CPU checks → CUDA smoke → registry → Stage A → Stage B → audit.
   Source được nhúng và cố định; xuất `qcgs-label-free-evidence.zip` để tải về.

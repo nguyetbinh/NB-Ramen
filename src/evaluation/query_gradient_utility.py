@@ -38,8 +38,9 @@ def write_query_outputs(method, run_dir):
     write_jsonl(root / 'qcgs-queries.jsonl', method.rows)
     write_jsonl(root / 'qcgs-scan.jsonl', method.scan)
     write_json(root / 'qcgs-state.json', {'parameter_order':method.parameter_order,
-               'parameter_order_sha256':method.parameter_order_sha256})
-    write_json(root / 'qcgs-status.json', {'schema_version': 1, 'mode': method.mode,
+               'parameter_order_sha256':method.parameter_order_sha256,
+               **({'view_state': method.view_state} if method.schema_version == 2 else {})})
+    write_json(root / 'qcgs-status.json', {'schema_version': method.schema_version, 'mode': method.mode,
                'scanned': len(method.scan), 'scored': len(method.rows),
                'requested': method.cfg['probe_queries'], 'complete': len(method.rows) == method.cfg['probe_queries']})
 
@@ -57,7 +58,9 @@ def close(a, b):
     return finite(a) and finite(b) and math.isclose(a, b, rel_tol=1e-10, abs_tol=1e-10)
 
 
-def audit_rows(rows, stage, cell, registry=None, config_sha256=None):
+def audit_rows(rows, stage, cell, registry=None, config_sha256=None, *, schema_version=1,
+               policies=POLICIES, score_names=('entropy_sign', 'entropy_cosine', 'supervised_reference'),
+               forced_reference=True, random_policy='random', sign_names=('entropy_sign',)):
     """Reject malformed/nonfinite outcomes; missing rows alone are incomplete.
 
     Recompute utilities, selected actions, RNG draws, and legal-space coverage.
@@ -74,7 +77,7 @@ def audit_rows(rows, stage, cell, registry=None, config_sha256=None):
         digest(row)  # Reject JSON NaN/Infinity anywhere, including diagnostic fields.
         require(finite(row['query_entropy']) and row['query_entropy'] >= 0
                 and finite(row['query_gradient_norm']) and row['query_gradient_norm'] >= 0, 'invalid query entropy/norm')
-        require(row['schema_version'] == 1 and row['stage'] == stage and row['ood_cell'] == cell, 'row schema/stage/cell mismatch')
+        require(row['schema_version'] == schema_version and row['stage'] == stage and row['ood_cell'] == cell, 'row schema/stage/cell mismatch')
         require(row['sample_idx'] not in seen, 'duplicate original image')
         seen.add(row['sample_idx'])
         require(row['is_ood'] is False and type(row['known_label']) is int and row['known_label'] >= 0, 'invalid scored ID label')
@@ -100,14 +103,14 @@ def audit_rows(rows, stage, cell, registry=None, config_sha256=None):
                     actions.append({'class': int(key), 'out': out, 'in': incoming})
         require(actions == row['legal_actions'] and len(actions) == row['legal_swap_count'] > 0, 'legal action space mismatch')
         require(len(row['direction_changes']) == len(actions) and all(type(v) is bool for v in row['direction_changes']), 'direction flags mismatch')
-        require(set(row['policies']) == set(POLICIES), 'missing policy outcomes')
+        require(set(row['policies']) == set(policies), 'missing policy outcomes')
         scores = row['candidate_scores']
-        require(set(scores) == set(POLICIES[1:3]) | {'supervised_reference'}, 'score vector schema mismatch')
+        require(set(scores) == set(score_names), 'score vector schema mismatch')
         for name, vector in scores.items():
             require(len(vector) == len(actions) and (all(v is None for v in vector) or all(finite(v) for v in vector)), 'invalid score vector')
             choice = row['policies'][name]
             require(choice['invalid'] is False, 'numerical integrity failure')
-            if name == 'supervised_reference':
+            if name == 'supervised_reference' and forced_reference:
                 require(all(finite(v) for v in vector), 'missing supervised scores')
                 index = max(range(len(vector)), key=vector.__getitem__)
             elif all(v is None for v in vector):
@@ -119,14 +122,14 @@ def audit_rows(rows, stage, cell, registry=None, config_sha256=None):
                     index = None
             require(choice['index'] == index, 'policy is not the frozen canonical argmax: '+name)
             require(close(choice['score'], 0. if index is None else vector[index]), 'selected score mismatch')
-            if name != 'supervised_reference' and all(finite(v) for v in vector):
+            if (name != 'supervised_reference' or not forced_reference) and all(finite(v) for v in vector):
                 maximum = max(vector)
                 reason = ('positive_score' if index is not None else
-                          'all_aggregate_directions_unchanged' if name == 'entropy_sign' and not any(row['direction_changes']) else
+                          'all_aggregate_directions_unchanged' if name in sign_names and not any(row['direction_changes']) else
                           'negative_maximum' if maximum < 0 else 'zero_maximum_no_swap_wins')
                 require(choice['reason'] == reason, 'fallback reason mismatch')
         require(row['random_draw'] == position and row['rng_before_sha256'] == digest(rng.getstate()), 'random RNG provenance mismatch')
-        require(row['policies']['random']['index'] == rng.randrange(len(actions)), 'random control is not independent uniform draw')
+        require(row['policies'][random_policy]['index'] == rng.randrange(len(actions)), 'random control is not independent uniform draw')
         require(row['policies']['ramen']['index'] is None, 'Ramen must be no swap')
         verified = {r['index']: r for r in row['verified_swaps']}
         require(len(verified) == len(row['verified_swaps']), 'duplicate verified action')

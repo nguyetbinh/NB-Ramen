@@ -403,7 +403,7 @@ def ordered_stream_test(
     consensus_diagnostics_available = None
     memory_tracker = DeviceMemoryTracker(args.device)
     memory_tracker.start()
-    if getattr(tta_model, 'diagnostic_kind', None) == 'qcgs':
+    if getattr(tta_model, 'diagnostic_kind', None) in ('qcgs', 'qcgs-multiview'):
         tta_model.reset_cuda_peak = memory_tracker.reset_scoped_cuda_peak
         tta_model.device_memory_summary = memory_tracker.summary
 
@@ -454,7 +454,7 @@ def ordered_stream_test(
                 _provide_oracle_domain_context(tta_model, domain_idx)
                 _provide_oracle_ood_context(tta_model, is_ood)
                 if getattr(tta_model, 'requires_oracle_known_label', False):
-                    if args.tta_algo not in ('OracleSupportUtilityProbe', 'QueryGradientUtilityProbe'):
+                    if args.tta_algo not in ('OracleSupportUtilityProbe', 'QueryGradientUtilityProbe', 'MultiViewQueryGradientUtilityProbe'):
                         raise RuntimeError('known labels are restricted to named utility diagnostics')
                     from evaluation.oracle_support_utility import write_probe_outputs
                     def save_probe_progress():
@@ -462,13 +462,17 @@ def ordered_stream_test(
                         print(f'Oracle support queries: {len(tta_model.rows)}/{tta_model.cfg["probe_queries"]}', flush=True)
                     tta_model.probe_progress = save_probe_progress
                     tta_model.set_oracle_known_label(label, is_ood=is_ood, domains=domain_idx)
-                    if args.tta_algo == 'QueryGradientUtilityProbe':
+                    if args.tta_algo in ('QueryGradientUtilityProbe', 'MultiViewQueryGradientUtilityProbe'):
                         tta_model.set_query_identity(sample_idx)
+                    if args.tta_algo == 'MultiViewQueryGradientUtilityProbe':
+                        # Raw pixels are a separate diagnostic input; evaluator metadata stays unchanged.
+                        raw = [datasets[int(d)].diagnostic_raw_image(int(i)) for d, i in zip(domain_idx, sample_idx)]
+                        tta_model.set_query_images(np.stack([p for p, _ in raw]), raw[0][1])
 
                 _sync_device(args.device)
                 started = time.perf_counter()
                 logits = tta_model(image)
-                if getattr(args, 'tta_algo', None) in ('OracleSupportUtilityProbe', 'QueryGradientUtilityProbe'):
+                if getattr(args, 'tta_algo', None) in ('OracleSupportUtilityProbe', 'QueryGradientUtilityProbe', 'MultiViewQueryGradientUtilityProbe'):
                     from evaluation.oracle_support_utility import write_probe_outputs
                     write_probe_outputs(tta_model, evidence_paths['run_dir'])
                 _sync_device(args.device)
@@ -1378,7 +1382,7 @@ if __name__ == '__main__':
     args = args_parser()
     torch.set_num_threads(args.num_threads)
     setup_seed(args.seed)
-    if args.tta_algo == 'QueryGradientUtilityProbe':
+    if args.tta_algo in ('QueryGradientUtilityProbe', 'MultiViewQueryGradientUtilityProbe'):
         torch.use_deterministic_algorithms(True)
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.backends.cudnn.allow_tf32 = False
