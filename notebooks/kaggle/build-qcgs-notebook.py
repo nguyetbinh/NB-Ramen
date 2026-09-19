@@ -1,18 +1,52 @@
-"""Embed the current committed source (including ancestry) in one Kaggle notebook."""
+"""Build size-checked Kaggle notebooks with an immutable Git source revision."""
 import argparse
 import base64
 import hashlib
 import json
 from pathlib import Path
 import subprocess
-import tempfile
 import textwrap
 
 ROOT=Path(__file__).resolve().parents[2]
+MAX_NOTEBOOK_BYTES=1_000_000
+SOURCE_REPOSITORY='https://github.com/nguyetbinh/NB-Ramen'
 
 
-def build(revision, bundle, *, rescue=False):
-    checksum=hashlib.sha256(bundle).hexdigest()
+def build(revision, bundle=None, *, rescue=False, repository_url=None, source_tree=None):
+    if (bundle is None) == (repository_url is None):
+        raise ValueError('provide exactly one source transport: bundle or repository URL')
+    if repository_url is not None and not source_tree:
+        raise ValueError('Git source requires the expected tree hash')
+    source_info={'source_revision':revision}
+    if bundle is not None:
+        checksum=hashlib.sha256(bundle).hexdigest()
+        source_info['bundle_sha256']=checksum
+        constants='BUNDLE_SHA256 = '+repr(checksum)+'\nSOURCE_BUNDLE = '+repr(base64.b64encode(bundle).decode())
+        restore='''bundle = Path("/tmp/qcgs-source.bundle")
+raw = base64.b64decode(SOURCE_BUNDLE, validate=True)
+assert hashlib.sha256(raw).hexdigest() == BUNDLE_SHA256
+bundle.write_bytes(raw)
+if not REPO.exists():
+    run(["git", "clone", "--no-checkout", bundle, REPO])
+    run(["git", "checkout", "--detach", REVISION])'''
+        verify=''
+        receipt_name='source-bundle.json'
+        receipt='{"revision": REVISION, "bundle_sha256": BUNDLE_SHA256}'
+    else:
+        source_info.update(source_transport='git',source_repository=repository_url,source_tree=source_tree)
+        constants='SOURCE_REPOSITORY = '+repr(repository_url)+'\nSOURCE_TREE = '+repr(source_tree)
+        restore='''if not REPO.exists():
+    # A failed download leaves no partial checkout at REPO; rerunning is safe.
+    with tempfile.TemporaryDirectory(prefix="qcgs-source-", dir=REPO.parent) as tmp:
+        staged = Path(tmp) / "source"
+        run(["git", "clone", "--no-checkout", SOURCE_REPOSITORY, staged])
+        run(["git", "-C", staged, "checkout", "--detach", REVISION])
+        assert subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=staged, text=True).strip() == REVISION
+        assert subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], cwd=staged, text=True).strip() == SOURCE_TREE
+        staged.rename(REPO)'''
+        verify='assert subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], cwd=REPO, text=True).strip() == SOURCE_TREE'
+        receipt_name='source-git.json'
+        receipt='{"revision": REVISION, "repository": SOURCE_REPOSITORY, "tree": SOURCE_TREE}'
     def cell(kind,source):
         result={'cell_type':kind,'metadata':{},'source':textwrap.dedent(source).strip().splitlines(keepends=True)}
         if kind=='code': result.update(execution_count=None,outputs=[])
@@ -30,7 +64,7 @@ Giữ nguyên source và các tham số khi resume. Môi trường/GPU khác s�
 
 Stage A có exact oracle. Stage B chỉ có best-verified subset. Không sửa score/ngưỡng theo kết quả.
 ''')]
-    setup='''import base64, hashlib, importlib.util, json, os, shutil, subprocess, sys
+    setup='''import base64, hashlib, importlib.util, json, os, shutil, subprocess, sys, tempfile
 from pathlib import Path
 
 RESUME_ARCHIVE = ""  # Ví dụ: /kaggle/input/my-qcgs-checkpoint/qcgs-label-free-evidence.zip
@@ -40,8 +74,7 @@ DATA = Path("/tmp/nb-ramen-qcgs-data")
 EVIDENCE = Path("/kaggle/working/qcgs-label-free-evidence")
 RUNTIME = EVIDENCE / "runtime"
 REVISION = __REVISION__
-BUNDLE_SHA256 = __CHECKSUM__
-SOURCE_BUNDLE = __PAYLOAD__
+__TRANSPORT_CONSTANTS__
 
 def run(command, *, env=None, log=None):
     command = [str(x) for x in command]
@@ -51,14 +84,9 @@ def run(command, *, env=None, log=None):
         with Path(log).open("w") as handle:
             subprocess.run(command, check=True, cwd=REPO, env=env, stdout=handle, stderr=subprocess.STDOUT)
 
-bundle = Path("/tmp/qcgs-source.bundle")
-raw = base64.b64decode(SOURCE_BUNDLE, validate=True)
-assert hashlib.sha256(raw).hexdigest() == BUNDLE_SHA256
-bundle.write_bytes(raw)
-if not REPO.exists():
-    run(["git", "clone", "--no-checkout", bundle, REPO])
-    run(["git", "checkout", "--detach", REVISION])
+__RESTORE_SOURCE__
 assert subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip() == REVISION
+__VERIFY_SOURCE__
 assert not subprocess.check_output(["git", "status", "--porcelain"], cwd=REPO, text=True).strip()
 run(["git", "merge-base", "--is-ancestor", "3a80623b074f16b8ef87d8d5507427277ea2a54f", REVISION])
 
@@ -67,10 +95,11 @@ if RESUME_ARCHIVE:
     support = importlib.util.module_from_spec(spec); spec.loader.exec_module(support)
     support.restore(RESUME_ARCHIVE, EVIDENCE)
 RUNTIME.mkdir(parents=True, exist_ok=True)
-(RUNTIME / "source-bundle.json").write_text(json.dumps({"revision": REVISION, "bundle_sha256": BUNDLE_SHA256}, indent=2))
+(RUNTIME / "__RECEIPT_NAME__").write_text(json.dumps(__SOURCE_RECEIPT__, indent=2))
 print("Pinned source ready:", REVISION)
 '''
-    setup=setup.replace('__REVISION__',repr(revision)).replace('__CHECKSUM__',repr(checksum)).replace('__PAYLOAD__',repr(base64.b64encode(bundle).decode()))
+    setup=setup.replace('__REVISION__',repr(revision)).replace('__TRANSPORT_CONSTANTS__',constants).replace('__RESTORE_SOURCE__',restore)
+    setup=setup.replace('__VERIFY_SOURCE__',verify).replace('__RECEIPT_NAME__',receipt_name).replace('__SOURCE_RECEIPT__',receipt)
     cells.append(cell('code',setup))
     cells.append(cell('code','''
 # Môi trường riêng: không thay Torch của kernel Kaggle.
@@ -137,28 +166,40 @@ print("Nếu Save & Run All: tải qcgs-label-free-evidence.zip trong tab Output
             ):
                 text = text.replace(before, after)
             c['source'] = text.splitlines(keepends=True)
+    if repository_url is not None:
+        cells[0]['source']=''.join(cells[0]['source']).replace(
+            'có sẵn trong notebook; không cần push nhánh lên GitHub.',
+            'được tải từ GitHub và xác minh commit/tree hash trước khi chạy.').splitlines(keepends=True)
     return {'nbformat':4,'nbformat_minor':5,'metadata':{'kernelspec':{'display_name':'Python 3','language':'python','name':'python3'},
-            'language_info':{'name':'python'},'qcgs':{'source_revision':revision,'bundle_sha256':checksum,'experimental_outputs':False, **({'diagnostic':'qcgs-multiview'} if rescue else {})}},'cells':cells}
+            'language_info':{'name':'python'},'qcgs':{**source_info,'experimental_outputs':False, **({'diagnostic':'qcgs-multiview'} if rescue else {})}},'cells':cells}
+
+
+def write_notebook(notebook, output):
+    for i,c in enumerate(notebook['cells']):
+        c['id']=f'qcgs-{i}'
+        if c['cell_type']=='code': compile(''.join(c['source']),f'cell-{i}','exec')
+    encoded=(json.dumps(notebook,ensure_ascii=False,indent=1)+'\n').encode('utf-8')
+    if len(encoded) >= MAX_NOTEBOOK_BYTES:
+        raise ValueError(f'Notebook is {len(encoded)} bytes; Kaggle requires less than {MAX_NOTEBOOK_BYTES}. Use Git transport instead of embedding a bundle.')
+    Path(output).write_bytes(encoded)
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output',type=Path)
     parser.add_argument('--multiview',action='store_true')
+    parser.add_argument('--revision',help='Keep an already validated source commit; defaults to HEAD')
+    parser.add_argument('--repository',default=SOURCE_REPOSITORY)
     args=parser.parse_args()
     if args.output is None:
         args.output=Path(__file__).with_name('kaggle-qcgs-multiview.ipynb' if args.multiview else 'kaggle-qcgs-label-free.ipynb')
-    revision=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
-    subprocess.run(['git','diff','--exit-code','HEAD','--','src','scripts','cfg','tests','pytest.ini',
+    revision=subprocess.check_output(['git','rev-parse','--verify',(args.revision or 'HEAD')+'^{commit}'],cwd=ROOT,text=True).strip()
+    if args.revision is None:
+        subprocess.run(['git','diff','--exit-code','HEAD','--','src','scripts','cfg','tests','pytest.ini',
                     'docs/research/query-conditioned-gradient-selection.md','docs/research/qcgs-multiview-rescue-protocol.md','notebooks/kaggle/build-qcgs-notebook.py'],cwd=ROOT,check=True,stdout=subprocess.DEVNULL)
-    with tempfile.TemporaryDirectory() as tmp:
-        bundle=Path(tmp)/'source.bundle'
-        subprocess.run(['git','bundle','create',str(bundle),'HEAD'],cwd=ROOT,check=True)
-        notebook=build(revision,bundle.read_bytes(),rescue=args.multiview)
-    for i,c in enumerate(notebook['cells']):
-        c['id']=f'qcgs-{i}'
-        if c['cell_type']=='code': compile(''.join(c['source']),f'cell-{i}','exec')
-    args.output.write_text(json.dumps(notebook,ensure_ascii=False,indent=1)+'\n')
+    tree=subprocess.check_output(['git','rev-parse',revision+'^{tree}'],cwd=ROOT,text=True).strip()
+    notebook=build(revision,rescue=args.multiview,repository_url=args.repository,source_tree=tree)
+    write_notebook(notebook,args.output)
     print(args.output,revision,args.output.stat().st_size)
 
 

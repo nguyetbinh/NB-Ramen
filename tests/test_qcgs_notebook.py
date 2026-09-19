@@ -1,5 +1,5 @@
 """Validate actual notebook generation and checkpoint IO without claiming GPU evidence."""
-import base64
+import ast
 import importlib.util
 import json
 from pathlib import Path
@@ -17,6 +17,54 @@ def module(name,path):
 
 
 class NotebookTests(unittest.TestCase):
+    def test_git_setup_restores_exact_source_and_rejects_dirty_checkout(self):
+        builder=module('qcgs_git_builder',ROOT/'notebooks/kaggle/build-qcgs-notebook.py')
+        revision=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
+        tree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],cwd=ROOT,text=True).strip()
+        nb=builder.build(revision,rescue=True,repository_url=ROOT.as_uri(),source_tree=tree)
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);repo=root/'checkout';evidence=root/'evidence'
+            # Change only the output directories; execute the actual generated setup.
+            setup=ast.parse(''.join(nb['cells'][1]['source']))
+            for node in setup.body:
+                if isinstance(node,ast.Assign) and isinstance(node.targets[0],ast.Name):
+                    if node.targets[0].id in ('REPO','EVIDENCE'):
+                        node.value=ast.Call(func=ast.Name(id='Path',ctx=ast.Load()),
+                            args=[ast.Constant(str(repo if node.targets[0].id=='REPO' else evidence))],keywords=[])
+            code=compile(ast.fix_missing_locations(setup),'generated-git-setup','exec')
+            exec(code,{})
+            self.assertEqual(subprocess.check_output(['git','rev-parse','HEAD'],cwd=repo,text=True).strip(),revision)
+            self.assertEqual(subprocess.check_output(['git','status','--porcelain'],cwd=repo,text=True).strip(),'')
+            receipt=json.loads((evidence/'runtime/source-git.json').read_text())
+            self.assertEqual(receipt,dict(revision=revision,repository=ROOT.as_uri(),tree=tree))
+            exec(code,{})  # idempotent setup keeps the exact existing checkout
+            with (repo/'src/main.py').open('a') as handle:handle.write('\n# dirty checkout\n')
+            with self.assertRaises(AssertionError):exec(code,{})
+            # Failed verification must not publish a partial checkout.
+            for node in setup.body:
+                if isinstance(node,ast.Assign) and isinstance(node.targets[0],ast.Name):
+                    if node.targets[0].id=='REPO':
+                        node.value=ast.Call(func=ast.Name(id='Path',ctx=ast.Load()),args=[ast.Constant(str(root/'bad'))],keywords=[])
+                    elif node.targets[0].id=='SOURCE_TREE':node.value=ast.Constant('0'*40)
+            with self.assertRaises(AssertionError):exec(compile(ast.fix_missing_locations(setup),'bad-tree-setup','exec'),{})
+            self.assertFalse((root/'bad').exists())
+            self.assertEqual(list(root.glob('qcgs-source-*')),[])
+
+    def test_generated_size_limit_counts_utf8_and_preserves_previous_file(self):
+        builder=module('qcgs_size_builder',ROOT/'notebooks/kaggle/build-qcgs-notebook.py')
+        nb=builder.build('a'*40,rescue=True,repository_url='https://github.com/nguyetbinh/NB-Ramen',source_tree='b'*40)
+        with tempfile.TemporaryDirectory() as tmp:
+            output=Path(tmp)/'notebook.ipynb'
+            builder.write_notebook(nb,output)
+            before=output.read_bytes()
+            self.assertLess(len(before),20_000)
+            self.assertNotIn('SOURCE_BUNDLE',before.decode())
+            self.assertIn('GO_CONFIRM',before.decode())
+            nb['cells'][0]['source']=['é'*500_000]
+            with self.assertRaisesRegex(ValueError,'Kaggle requires less than 1000000'):
+                builder.write_notebook(nb,output)
+            self.assertEqual(before,output.read_bytes())
+
     def test_embedded_source_bundle_round_trip_and_cell_syntax(self):
         builder=module('qcgs_builder',ROOT/'notebooks/kaggle/build-qcgs-notebook.py')
         with tempfile.TemporaryDirectory() as tmp:
