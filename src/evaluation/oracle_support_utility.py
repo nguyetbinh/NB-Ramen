@@ -56,6 +56,9 @@ def summarize(rows, requested_queries, mode=None):
 
 
 def write_probe_outputs(method, run_dir):
+    if getattr(method, 'diagnostic_kind', None) == 'qcgs':
+        from .query_gradient_utility import write_query_outputs
+        return write_query_outputs(method, run_dir)
     run_dir = Path(run_dir)
     query_path = run_dir / 'oracle-support-queries.jsonl'
     query_tmp = query_path.with_suffix('.tmp')
