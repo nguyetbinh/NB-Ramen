@@ -4,7 +4,7 @@
 **Source base:** `oracle-hf-workflows`\
 **Working branch:** `qcgs-label-free-diagnostic`\
 **Pinned base commit:** `3a80623b074f16b8ef87d8d5507427277ea2a54f`\
-**Status:** Diagnostic implemented; CUDA smoke and the actual runtime registry are pending.\
+**Status:** CUDA diagnostic completed and artifacts validated; STOP for the frozen single-view entropy-sign signal (see execution report).\
 **Revised:** 2026-09-19\
 **Dataset/model:** CIFAR-100-C / CLIP ViT-B/16.
 
