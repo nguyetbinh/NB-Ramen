@@ -3,7 +3,9 @@
 - **QCGS label-free diagnostic:** [kaggle-qcgs-label-free.ipynb](kaggle-qcgs-label-free.ipynb).
   Chạy CPU checks → CUDA smoke → registry → Stage A → Stage B → audit.
   Source được nhúng và cố định; xuất `qcgs-label-free-evidence.zip` để tải về.
-  Đây là notebook chưa chạy CUDA, không phải kết quả thực nghiệm. Xem
+  Diagnostic đã chạy CUDA và được audit ngày 2026-09-19: **STOP** cho entropy-sign một view;
+  xem [kết quả và giới hạn](../../plans/20260919-qcgs-diagnostic/reports/results.md).
+  Notebook giữ nguyên source pin; kết quả nằm trong ZIP riêng. Xem
   [protocol và lệnh chạy/resume](../../docs/research/query-conditioned-gradient-selection.md#execution-entry-point).
 - **Full matrix qua Hugging Face khi Zenodo lỗi:**
   [kaggle-huggingface-full-matrix.ipynb](kaggle-huggingface-full-matrix.ipynb),
