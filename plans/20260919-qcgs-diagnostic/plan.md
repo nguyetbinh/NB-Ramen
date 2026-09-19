@@ -1,6 +1,6 @@
 # QCGS diagnostic execution
 
-Status: implementation and tests complete; notebook packaging in progress; CUDA stages pending. Branch: `qcgs-label-free-diagnostic`.
+Status: local implementation, verification and notebook delivery complete. CUDA smoke/Stage A/Stage B remain unrun; diagnostic decision INCONCLUSIVE. Branch: `qcgs-label-free-diagnostic`.
 
 Protocol: [query-conditioned-gradient-selection](../../docs/research/query-conditioned-gradient-selection.md).
 
@@ -14,3 +14,5 @@ Environment: existing Python 3.11 / torch 2.4.1 environment, no CUDA.
 Unrelated existing logs and notebook metadata are preserved. No `ak` skills.
 
 Acceptance: baseline parity, label isolation, exact Stage A versus subset Stage B, immutable registry/provenance, atomic ZIP checkpoints, replay-safe interrupted runs, no fabricated experimental evidence.
+
+Delivered: [results and limits](reports/results.md). The notebook pins implementation `8298ba434fa3e63710b899500a822a3575ca4884`; its source bundle was restored and the CPU preflight passed on a clean checkout.
