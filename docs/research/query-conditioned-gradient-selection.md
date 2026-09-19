@@ -2,7 +2,7 @@
 
 **Repository:** `nguyetbinh/NB-Ramen`\
 **Source base:** `oracle-hf-workflows`\
-**Working branch:** `codex/qcgs-label-free-diagnostic`\
+**Working branch:** `qcgs-label-free-diagnostic`\
 **Pinned base commit:** `3a80623b074f16b8ef87d8d5507427277ea2a54f`\
 **Status:** Preregistration draft, ready for implementation; not ready for execution.\
 **Revised:** 2026-09-19\
@@ -392,7 +392,7 @@ The research branch is created from the pinned base. In this repository,
 continue on that branch and verify the base remains in its history:
 
 ```bash
-git switch codex/qcgs-label-free-diagnostic
+git switch qcgs-label-free-diagnostic
 git merge-base --is-ancestor 3a80623b074f16b8ef87d8d5507427277ea2a54f HEAD
 git rev-parse HEAD
 git status --short
