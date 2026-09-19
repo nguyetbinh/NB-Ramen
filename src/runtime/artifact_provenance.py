@@ -18,6 +18,12 @@ from typing import Any, Iterable, Mapping
 from urllib.parse import urlparse
 
 
+try:
+    from .cifar100c_huggingface import CIFAR100C_HF_ACQUISITION, verify_huggingface_cifar100c_files
+except ImportError:
+    from cifar100c_huggingface import CIFAR100C_HF_ACQUISITION, verify_huggingface_cifar100c_files
+
+
 SCHEMA_VERSION = 1
 SIDECAR_DIRECTORY = ".nb-ramen-provenance"
 _MODEL_ALIASES = {
@@ -287,8 +293,8 @@ def default_sidecar_path(dataset_root: str | Path, dataset: str) -> Path:
 
 
 def _validate_cifar_acquisition(acquisition: Mapping[str, Any]) -> None:
-    if dict(acquisition) != CIFAR100C_OFFICIAL_ACQUISITION:
-        raise ProvenanceError("CIFAR-100-C acquisition does not match the pinned official Zenodo artifact")
+    if dict(acquisition) not in (CIFAR100C_OFFICIAL_ACQUISITION, CIFAR100C_HF_ACQUISITION):
+        raise ProvenanceError("CIFAR-100-C acquisition does not match the pinned official Zenodo artifact or pinned Hugging Face mirror")
 
 
 def generate_dataset_provenance(dataset: str, dataset_root: str | Path, *, manifest_path: str | Path | None = None,
@@ -310,8 +316,11 @@ def generate_dataset_provenance(dataset: str, dataset_root: str | Path, *, manif
     acquisition_record = dict(acquisition or {})
     if dataset == "cifar100c":
         _validate_cifar_acquisition(acquisition_record)
-        acquisition_record["expected_checksum"] = acquisition_record["expected_checksum"].lower()
-        acquisition_record["actual_checksum"] = acquisition_record["actual_checksum"].lower()
+        if acquisition_record == CIFAR100C_HF_ACQUISITION:
+            verify_huggingface_cifar100c_files(root)
+        else:
+            acquisition_record["expected_checksum"] = acquisition_record["expected_checksum"].lower()
+            acquisition_record["actual_checksum"] = acquisition_record["actual_checksum"].lower()
     payload = {"schema_version": SCHEMA_VERSION, "dataset": dataset, "root": ".", "sidecar": f"{SIDECAR_DIRECTORY}/{sidecar.name}",
                "acquisition": acquisition_record, "content": {"algorithm": "sha256", "files": records, "root_digest": _content_digest(records)}}
     _atomic_json(sidecar, payload)
@@ -386,6 +395,8 @@ def verify_dataset_provenance(dataset: str, dataset_root: str | Path, *, exact: 
             raise ProvenanceError(f"dataset file size changed: {relative}")
         if exact and sha256_regular_file(path)["sha256"] != record["sha256"]:
             raise ProvenanceError(f"dataset file SHA-256 mismatch: {relative}")
+    if exact and dataset == "cifar100c" and payload.get("acquisition") == CIFAR100C_HF_ACQUISITION:
+        verify_huggingface_cifar100c_files(root)
     return {
         "schema_version": SCHEMA_VERSION,
         "dataset": dataset,

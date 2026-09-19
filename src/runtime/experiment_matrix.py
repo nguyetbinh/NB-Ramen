@@ -24,7 +24,7 @@ from typing import Iterable, Sequence
 try:  # Supports both ``python -m runtime...`` and direct-file invocation.
     from .preflight import validate_dataset_layout
     from .artifact_provenance import (
-        CIFAR100C_OFFICIAL_ACQUISITION,
+        CIFAR100C_OFFICIAL_ACQUISITION, CIFAR100C_HF_ACQUISITION,
         SCHEMA_VERSION as ARTIFACT_SCHEMA_VERSION,
         default_sidecar_path,
         resolve_clip_model,
@@ -32,7 +32,7 @@ try:  # Supports both ``python -m runtime...`` and direct-file invocation.
 except ImportError:  # pragma: no cover - exercised only by direct invocation
     from preflight import validate_dataset_layout
     from artifact_provenance import (
-        CIFAR100C_OFFICIAL_ACQUISITION,
+        CIFAR100C_OFFICIAL_ACQUISITION, CIFAR100C_HF_ACQUISITION,
         SCHEMA_VERSION as ARTIFACT_SCHEMA_VERSION,
         default_sidecar_path,
         resolve_clip_model,
@@ -925,6 +925,9 @@ def _validate_artifact_evidence(artifacts: object, run: ExperimentRun) -> None:
     expected_sidecar = str(default_sidecar_path(root, dataset_key).absolute())
     _require_equal(sidecar, expected_sidecar, "manifest.artifacts.dataset.sidecar", run)
     expected_acquisition = CIFAR100C_OFFICIAL_ACQUISITION if run.dataset == "CIFAR100C" else {}
+    if run.dataset == "CIFAR100C" and dataset.get("acquisition") == CIFAR100C_HF_ACQUISITION:
+        expected_acquisition = CIFAR100C_HF_ACQUISITION
+        _require_equal(dataset.get("file_count"), 20, "manifest.artifacts.dataset.file_count", run)
     _require_equal(dataset.get("acquisition"), expected_acquisition, "manifest.artifacts.dataset.acquisition", run)
 
 
