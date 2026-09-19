@@ -107,7 +107,7 @@ run([PYTHON, REPO / "notebooks/kaggle/prepare-huggingface-data.py"], env=env)
 command = [PYTHON, REPO / "scripts/run-oracle-support-utility.py", "--diagnostic", "qcgs",
            "--execute", "--data-root", DATA, "--evidence-dir", EVIDENCE]
 # runtime chỉ chứa setup; --resume dùng lại campaign nếu đã có preflight lock.
-if (EVIDENCE / "locks/preflight.json").exists():
+if (EVIDENCE / "locks").exists():
     command.append("--resume")
 run(command, env=env)
 '''))

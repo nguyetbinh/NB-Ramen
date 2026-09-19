@@ -9,9 +9,9 @@ import unittest
 import numpy as np
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
-from runtime.query_gradient_registry import assigned_stage,build_registry,validate_registry,CELLS,digest,write_json
-from evaluation.query_gradient_utility import decide,sensitivity,uncertainty,correlations,freeze_bins,analyze
-from runtime.query_gradient_campaign import make_job,ledger_commit,verify_ledger,freeze_file
+from runtime.query_gradient_registry import assigned_stage,build_registry,validate_registry,CELLS,digest,write_json,file_sha
+from evaluation.query_gradient_utility import decide,sensitivity,uncertainty,correlations,freeze_bins,analyze,ANALYSIS
+from runtime.query_gradient_campaign import make_job,ledger_commit,verify_ledger,freeze_file,audit_campaign
 
 
 def registry():
@@ -64,6 +64,22 @@ class RegistryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'frozen input changed'):freeze_file(locks/'launch.json',{'changed':True})
             (locks/'launch.json').write_text('{}')
             with self.assertRaisesRegex(ValueError,'committed ledger'):verify_ledger(locks)
+
+    def test_offline_audit_checks_frozen_analysis_and_content_hashes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);locks=root/'locks';locks.mkdir()
+            r=registry();write_json(locks/'registry.json',r)
+            write_json(locks/'preflight.json',{'source':{'revision':'f'*40},'analysis':ANALYSIS,'artifacts':{}})
+            jobs=[make_job(locks,root/'runs',root/'data',stage,cell,r['cells'][cell]['max_eval_samples'],'a'*64,'f'*40,locks/'registry.json')
+                  for stage in ('stage-a','stage-b') for cell in CELLS]
+            launch={'jobs':jobs,'source_revision':'f'*40,'registry_sha256':r['sha256'],
+                    'registry_file_sha256':file_sha(locks/'registry.json'),'preflight_sha256':file_sha(locks/'preflight.json'),
+                    'analysis_sha256':digest(ANALYSIS)}
+            write_json(locks/'launch.json',launch);ledger_commit(locks,'chore: freeze unexecuted test inputs')
+            self.assertEqual(audit_campaign(root)['decision'],'INCONCLUSIVE')
+            launch['analysis_sha256']='0'*64
+            write_json(locks/'launch.json',launch);ledger_commit(locks,'test: change analysis lock')
+            with self.assertRaisesRegex(ValueError,'analysis specification'):audit_campaign(root)
 
 
 class AnalysisTests(unittest.TestCase):
