@@ -216,7 +216,7 @@ Tái sử dụng các ranh giới module hiện có:
 
 Mode riêng: `--diagnostic qcgs-multiview`, schema 2, registry namespace `qcgs-multiview-rescue-v1`. Lệnh `--diagnostic qcgs` giữ protocol cũ.
 
-- [Notebook rescue](../../notebooks/kaggle/kaggle-qcgs-multiview.ipynb): source nhúng và cố định; bật Internet/GPU, chạy từ trên xuống hoặc Save & Run All. Xuất `qcgs-multiview-evidence.zip`; Stage B chỉ chạy sau GO_CONFIRM đã commit trong ledger.
+- [Notebook rescue](../../notebooks/kaggle/kaggle-qcgs-multiview.ipynb): source tải từ GitHub tại commit cố định, kiểm tra commit/tree hash; bật Internet/GPU, chạy từ trên xuống hoặc Save & Run All. Xuất `qcgs-multiview-evidence.zip`; Stage B chỉ chạy sau GO_CONFIRM đã commit trong ledger.
 - [Trạng thái triển khai và validation](../../plans/20260919-qcgs-multiview-rescue/reports/results.md).
 - Selector/view: [pure helpers](../../src/methods/query_gradient_multiview.py), [probe](../../src/methods/MultiViewQueryGradientUtilityProbe.py); [audit/gates](../../src/evaluation/query_gradient_multiview.py); [config và exclusions](../../cfg/research/query-gradient-multiview/).
 
