@@ -200,6 +200,9 @@ class OpenSetDomainDataset:
             "is_ood": known_label == -1,
         }
 
+    def diagnostic_raw_image(self, index: int):
+        return self.dataset.diagnostic_raw_image(index)
+
 
 class OpenSetCIFAR100C(CIFAR100C):
     """CIFAR-100-C with an 80-class model vocabulary and 20 held-out classes."""

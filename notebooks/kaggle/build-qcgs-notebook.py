@@ -11,7 +11,7 @@ import textwrap
 ROOT=Path(__file__).resolve().parents[2]
 
 
-def build(revision, bundle):
+def build(revision, bundle, *, rescue=False):
     checksum=hashlib.sha256(bundle).hexdigest()
     def cell(kind,source):
         result={'cell_type':kind,'metadata':{},'source':textwrap.dedent(source).strip().splitlines(keepends=True)}
@@ -121,21 +121,40 @@ display(Markdown((EVIDENCE / "report.md").read_text()))
 display(FileLink(str(EVIDENCE.with_suffix(".zip"))))
 print("Nếu Save & Run All: tải qcgs-label-free-evidence.zip trong tab Output.")
 '''))
+    if rescue:
+        for c in cells:
+            text = ''.join(c['source'])
+            for before, after in (
+                ('QCGS label-free diagnostic — Stage A → Stage B', 'QCGS multi-view rescue — Stage A gate → Stage B'),
+                ('qcgs-label-free-evidence', 'qcgs-multiview-evidence'),
+                ('NB-Ramen-QCGS', 'NB-Ramen-QCGS-MV'),
+                ('nb-ramen-qcgs-', 'nb-ramen-qcgs-mv-'),
+                ('qcgs-source.bundle', 'qcgs-multiview-source.bundle'),
+                ('"qcgs"', '"qcgs-multiview"'),
+                ('3a80623b074f16b8ef87d8d5507427277ea2a54f', 'cb3c92cded0e6ad4601b5e1f876835a9cf3992c4'),
+                ('A → bins → B', 'A → committed GO_CONFIRM → B'),
+                ('Stage A có exact oracle.', 'Stage A có exact oracle. Stage B chỉ chạy khi cả hai cell đạt GO_CONFIRM; nếu STOP thì notebook xuất báo cáo và ZIP ngay.'),
+            ):
+                text = text.replace(before, after)
+            c['source'] = text.splitlines(keepends=True)
     return {'nbformat':4,'nbformat_minor':5,'metadata':{'kernelspec':{'display_name':'Python 3','language':'python','name':'python3'},
-            'language_info':{'name':'python'},'qcgs':{'source_revision':revision,'bundle_sha256':checksum,'experimental_outputs':False}},'cells':cells}
+            'language_info':{'name':'python'},'qcgs':{'source_revision':revision,'bundle_sha256':checksum,'experimental_outputs':False, **({'diagnostic':'qcgs-multiview'} if rescue else {})}},'cells':cells}
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output',type=Path,default=Path(__file__).with_name('kaggle-qcgs-label-free.ipynb'))
+    parser.add_argument('--output',type=Path)
+    parser.add_argument('--multiview',action='store_true')
     args=parser.parse_args()
+    if args.output is None:
+        args.output=Path(__file__).with_name('kaggle-qcgs-multiview.ipynb' if args.multiview else 'kaggle-qcgs-label-free.ipynb')
     revision=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
     subprocess.run(['git','diff','--exit-code','HEAD','--','src','scripts','cfg','tests','pytest.ini',
-                    'docs/research/query-conditioned-gradient-selection.md','notebooks/kaggle/build-qcgs-notebook.py'],cwd=ROOT,check=True,stdout=subprocess.DEVNULL)
+                    'docs/research/query-conditioned-gradient-selection.md','docs/research/qcgs-multiview-rescue-protocol.md','notebooks/kaggle/build-qcgs-notebook.py'],cwd=ROOT,check=True,stdout=subprocess.DEVNULL)
     with tempfile.TemporaryDirectory() as tmp:
         bundle=Path(tmp)/'source.bundle'
         subprocess.run(['git','bundle','create',str(bundle),'HEAD'],cwd=ROOT,check=True)
-        notebook=build(revision,bundle.read_bytes())
+        notebook=build(revision,bundle.read_bytes(),rescue=args.multiview)
     for i,c in enumerate(notebook['cells']):
         c['id']=f'qcgs-{i}'
         if c['cell_type']=='code': compile(''.join(c['source']),f'cell-{i}','exec')

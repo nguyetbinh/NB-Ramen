@@ -30,6 +30,8 @@ def synchronize(device):
 
 class QueryGradientUtilityProbe(OracleSupportUtilityProbe):
     diagnostic_kind = "qcgs"
+    schema_version = 1
+    score_names = ("entropy_sign", "entropy_cosine")
 
     def __init__(self, model, datasets, args):
         super().__init__(model, datasets, args)
@@ -105,6 +107,27 @@ class QueryGradientUtilityProbe(OracleSupportUtilityProbe):
         self.verification_forwards = getattr(self, 'verification_forwards', 0) + 1
         return super()._temporary_logits(x, gradient)
 
+    def prepare_signals(self, x, base, baseline, query_gradients, selected):
+        """Extension point called only for scored batches, without label context."""
+
+    def score_candidates(self, b, query_gradient, base, gradients, incoming, outgoing):
+        return score_swaps(query_gradient, base, gradients, incoming, outgoing, self.cfg['lr'])
+
+    def random_choices(self, count, choices):
+        return {'random': random_swap(count, self.rng)}
+
+    def install_reference_anchor(self, x, base):
+        self.model.reset_parameters()
+        self.model.optimizer.zero_grad()
+
+    def reference_choice(self, values):
+        # Historical diagnostic intentionally forces the best legal swap.
+        index = max(range(len(values)), key=values.__getitem__)
+        return {'index': index, 'score': values[index], 'reason': 'supervised_reference', 'invalid': False}
+
+    def extra_record(self, b, label, baseline, job):
+        return {}
+
     def _forward(self, x, labels, is_ood, domains):
         start = self.counter
         features = self.model.featurize(x)
@@ -157,6 +180,8 @@ class QueryGradientUtilityProbe(OracleSupportUtilityProbe):
         if self.mode == "scan" or not selected:
             return baseline
 
+        self.prepare_signals(x, base, baseline, query_gradients, selected)
+
         with torch.no_grad():
             synchronize(self.device)
             retrieval_started = time.perf_counter()
@@ -205,11 +230,11 @@ class QueryGradientUtilityProbe(OracleSupportUtilityProbe):
                 gradients = aggregate_swaps(pools, base[b], swaps)
                 incoming = torch.stack([pools[s["class"]]["values"][s["in"]] for s in swaps])
                 outgoing = torch.stack([pools[s["class"]]["values"][s["out"]] for s in swaps])
-                scores = score_swaps(query_gradients[b], base[b], gradients, incoming, outgoing, self.cfg["lr"])
+                scores = self.score_candidates(b, query_gradients[b], base[b], gradients, incoming, outgoing)
                 choices = {name: select_positive(scores[name], scores["reasons"].get(name))
-                           for name in ("entropy_sign", "entropy_cosine")}
+                           for name in self.score_names}
                 rng_hash = digest(self.rng.getstate())
-                choices["random"] = random_swap(len(swaps), self.rng)
+                choices.update(self.random_choices(len(swaps), choices))
                 draw = self.draw_number
                 self.draw_number += 1
                 synchronize(self.device)
@@ -231,7 +256,7 @@ class QueryGradientUtilityProbe(OracleSupportUtilityProbe):
                 records = {}
                 for i, swap in enumerate(swaps):
                     record = {"index": i, **swap, "direction_changed": directions[i] != base_key}
-                    for name in ("entropy_sign", "entropy_cosine"):
+                    for name in self.score_names:
                         record[name+"_score"] = float(scores[name][i]) if scores[name] is not None else None
                     p = pools[swap["class"]]
                     for prefix, rank in (("incoming", swap["in"]), ("outgoing", swap["out"])):
@@ -262,8 +287,7 @@ class QueryGradientUtilityProbe(OracleSupportUtilityProbe):
         # This reference uses labels solely inside the evaluator, after selection.
         if any(bool(is_ood[j["b"]]) for j in jobs):
             raise ValueError("registered query became OOD")
-        self.model.reset_parameters()
-        self.model.optimizer.zero_grad()
+        self.install_reference_anchor(x, base)
         reference = self.model(x)
         selected_indices = [j["b"] for j in jobs]
         F.cross_entropy(reference.float()[selected_indices], labels[selected_indices], reduction="sum").backward()
@@ -280,18 +304,16 @@ class QueryGradientUtilityProbe(OracleSupportUtilityProbe):
                     values.append(score)
                 if not all(torch.isfinite(torch.tensor(v)) for v in values):
                     raise ValueError("nonfinite supervised reference")
-                # Preserve the old first-order control: forced best legal swap.
-                index = max(range(len(values)), key=values.__getitem__)
-                job["choices"]["supervised_reference"] = {"index": index, "score": values[index], "reason": "supervised_reference", "invalid": False}
+                job["choices"]["supervised_reference"] = self.reference_choice(values)
                 selected_swaps = (range(len(values)) if self.mode == "stage-a" else
                                   sorted({c["index"] for c in job["choices"].values() if c["index"] is not None}))
                 job["records"] = {i: job["all_records"][i] for i in selected_swaps}
                 job["directions"] = {i: job["all_directions"][i] for i in selected_swaps}
-                job["base"] = self.trial_metrics(baseline[b], labels[b])
+                job["base"] = self.query_metrics(baseline[b], labels[b], b)
                 job["metrics"] = {job["base_key"]: job["base"]}
                 job["pending"] = list(dict.fromkeys(k for k in job["directions"].values() if k != job["base_key"]))
                 job["candidate_scores"] = {name: [r[name+"_score"] for r in job["all_records"].values()]
-                                           for name in ("entropy_sign", "entropy_cosine", "supervised_reference")}
+                                           for name in (*self.score_names, "supervised_reference")}
                 job["direction_changes"] = [r["direction_changed"] for r in job["all_records"].values()]
                 del job["all_directions"], job["all_records"]
             synchronize(self.device)
@@ -323,7 +345,7 @@ class QueryGradientUtilityProbe(OracleSupportUtilityProbe):
                 for policy in policies.values():
                     policy["exact_oracle_regret"] = best - policy["supervised_utility"] if self.mode == "stage-a" else None
                     policy["regret_to_verified_set"] = best - policy["supervised_utility"]
-                self.rows.append({"schema_version": 1, "stage": self.mode, "ood_cell": self.cell,
+                self.rows.append({"schema_version": self.schema_version, "stage": self.mode, "ood_cell": self.cell,
                     "timestep": start+b, "sample_idx": self.batch_ids[b], "domain": int(domains[b]),
                     "batch": (start+b)//100, "block": (start+b)//64, "eligible": eligible,
                     "source_revision": self.cfg.get("source_revision"), "config_sha256": digest(self.cfg),
@@ -345,7 +367,8 @@ class QueryGradientUtilityProbe(OracleSupportUtilityProbe):
                     "evaluator_peak_extra_bytes": evaluator_peak, "baseline_replay_batch_ms": replay_ms,
                     "verification_batch_forward_count": self.verification_forwards,
                     "verification_batch_ms": elapsed, "retained_memory_bytes": self.memory_bytes,
-                    "peak_device_memory_bytes": self.device_memory_summary()['bytes'] if self.device.type == "cuda" else None})
+                    "peak_device_memory_bytes": self.device_memory_summary()['bytes'] if self.device.type == "cuda" else None,
+                    **self.extra_record(b, labels[b], baseline[b], job)})
                 if getattr(self, "probe_progress", None):
                     self.probe_progress()
         return baseline
