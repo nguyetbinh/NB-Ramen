@@ -233,6 +233,14 @@ def audit_campaign(evidence):
     registry=json.loads((locks/'registry.json').read_text());validate_registry(registry)
     bins=json.loads((locks/'bins.json').read_text()) if (locks/'bins.json').exists() else None
     frozen=json.loads((locks/'preflight.json').read_text())
+    require(launch['preflight_sha256']==file_sha(locks/'preflight.json'), 'preflight content lock mismatch')
+    require(launch['registry_file_sha256']==file_sha(locks/'registry.json')
+            and launch['registry_sha256']==registry['sha256'], 'registry content lock mismatch')
+    require(launch['analysis_sha256']==digest(ANALYSIS) and frozen['analysis']==ANALYSIS,
+            'analysis specification changed; use the pinned diagnostic implementation')
+    require(launch['source_revision']==frozen['source']['revision']==registry['source_revision'], 'launch source lock mismatch')
+    require(len(launch['jobs'])==4 and {(j['mode'],j['cell']) for j in launch['jobs']}=={(s,c) for s in STAGES for c in CELLS},
+            'launch must contain each registered stage/cell exactly once')
     cells={s:{c:[] for c in CELLS} for s in STAGES}
     failure=evidence/'integrity-failure.json'
     errors=[json.loads(failure.read_text())['reason']] if failure.exists() else []
