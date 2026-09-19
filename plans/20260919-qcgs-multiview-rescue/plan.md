@@ -1,6 +1,6 @@
 # QCGS multi-view rescue diagnostic
 
-Status: implementation in progress; CUDA unavailable locally. No rescue outcomes collected.
+Status: local implementation, independent review, CPU preflight and pinned Kaggle handoff complete. CUDA unavailable locally; smoke, scientific registry and Stage A/B remain unrun. See [validation/status report](reports/results.md).
 
 Protocol: [frozen design](../../docs/research/qcgs-multiview-rescue-protocol.md).
 

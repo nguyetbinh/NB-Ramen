@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "source_revision": "b96488cd410f6d28e6de52a308338ddb4879e779",
+  "notebook": "notebooks/kaggle/kaggle-qcgs-multiview.ipynb",
+  "notebook_sha256": "a9239b79f9f60f2abf9238d83bb988bbdb78cc8f61b3f5ab795008f2d2c6b232",
+  "bundle_sha256": "7397fa4f7d327db2e7a183df8ed0a08460893136026654d216f692ebe03a1417",
+  "embedded_source_restored_clean": true,
+  "code_cells_compiled": 6,
+  "cpu_preflight_receipt": "evidence/qcgs-multiview-cpu/preflight.json",
+  "cpu_preflight_sha256": "ac9893a3f944560c6fc06932af2a0f492c82be38a4b3363fe08a4ce47017fa5f",
+  "tests": {
+    "cpu-tests-0.log": {
+      "sha256": "cf49e952a449456ee9fd416ad45f631278721b4db502f935ec484d9ff62fcc59",
+      "summary": "34 passed in 5.62s"
+    },
+    "cpu-tests-1.log": {
+      "sha256": "dcdaea933fd9c63261cfbb6e16aaf56477eee3c4c9ce9bccf7f4d2bee744a4db",
+      "summary": "417 passed, 5 skipped in 14.14s"
+    }
+  },
+  "cuda_available": false,
+  "cuda_smoke_run": false,
+  "stage_a_queries": 0,
+  "stage_b_queries": 0,
+  "scientific_registry_created": false,
+  "research_decision": "INCONCLUSIVE",
+  "reason": "CUDA unavailable; implementation validation only",
+  "old_analysis_recomputed_sha256": "eeb8f0c2df01ec208593025e4b08487333ff80553793614ed5384e0660ecf813",
+  "old_decision": "STOP"
+}
