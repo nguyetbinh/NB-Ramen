@@ -3,7 +3,7 @@
 **Ngày:** 2026-09-19\
 **Nhánh:** `qcgs-label-free-diagnostic`\
 **Base code đã đọc:** `cb3c92cded0e6ad4601b5e1f876835a9cf3992c4`\
-**Trạng thái:** đã implement và kiểm thử CPU; chưa chạy CUDA smoke/Stage A/Stage B, chưa có kết quả khoa học cho biến thể này.\
+**Trạng thái (audit 2026-09-23):** **STOP tại Stage A**; CUDA smoke và 16 query/cell hoàn thành, Stage B không chạy theo gate. Xem [báo cáo đã kiểm chứng](../../plans/20260919-qcgs-multiview-rescue/reports/results.md). Thiết kế/gates bên dưới giữ nguyên phiên bản dùng thu evidence tại source `b96488c`.\
 **Phạm vi:** một selector chính, same-pseudo-class one-swap; Stage A 16 và Stage B 128 query mới mỗi mức OOD 0 / 0.5.
 
 ## 1. Quyết định nghiên cứu

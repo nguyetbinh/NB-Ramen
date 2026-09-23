@@ -1,27 +1,55 @@
-# QCGS multi-view rescue — trạng thái triển khai
+# QCGS multi-view rescue — kết quả diagnostic
 
-Ngày 2026-09-19, nhánh `qcgs-label-free-diagnostic`.
+Audit ngày **2026-09-23**, nhánh `qcgs-label-free-diagnostic`.
 
-**INCONCLUSIVE — chưa có evidence CUDA cho rescue.** Máy local có PyTorch 2.4.1 nhưng không có CUDA. Chưa chạy smoke trên CLIP, chưa tạo registry khoa học từ dataset thật, chưa chạy Stage A/Stage B. Unit tests và notebook không phải kết quả thí nghiệm. STOP của entropy-sign một view giữ nguyên.
+**STOP tại Stage A theo protocol đã khóa.** Evidence hợp lệ qua các kiểm tra offline và đủ 16 query ID/cell. Primary có CE gain trung bình dương ở cả hai mức OOD, nhưng mean per-query Spearman giữa score và true utility âm ở OOD=0.5. Stage B **không chạy**, đúng điều kiện dừng; đây không phải thiếu evidence do lỗi vận hành. Kết luận chỉ áp dụng cho biến thể MV-target-θ_R và thiết lập này, không chứng minh mọi QCGS label-free đều bất khả thi.
 
-Đã implement [protocol](../../../docs/research/qcgs-multiview-rescue-protocol.md): 8 view cố định từ ảnh corrupted, teacher tại θ₀, primary gradient tại θ_R, entropy controls, hai random controls chung draw, hai ensemble controls và supervised reference. Baseline/cache vẫn là Ramen; mọi candidate reset θ₀ rồi đúng một update. Schema 2 và namespace mới loại 507 ảnh gốc cũ, sau đó thêm smoke của campaign mới. Registry/config/source/view/provenance được khóa trước Stage A.
+## Evidence và kiểm chứng
 
-Runner audit raw records, xác minh Stage A exhaustive, tính U/D/E và Spearman từng query. Chỉ GO_CONFIRM đã commit trong ledger mới cho chạy Stage B; Stage B báo best-verified subset, không gọi là exact oracle. Mean/drop-two gates, transitions, uncertainty theo block, teacher trên query Ramen sai và chi phí từng nhánh được tính lại từ raw records.
+- ZIP nhận lại: `qcgs-multiview-evidence.zip`, 17.794.842 bytes; SHA-256 `033877f5642d8a8c4ae09704561b0d87ef126c6ef540da12011282825f86983d`.
+- [Raw queries](../../../evidence/qcgs-multiview-kaggle-033877f5642d/qcgs-multiview-evidence/queries.jsonl), [analysis đầy đủ](../../../evidence/qcgs-multiview-kaggle-033877f5642d/qcgs-multiview-evidence/analysis.json), [preflight/provenance](../../../evidence/qcgs-multiview-kaggle-033877f5642d/qcgs-multiview-evidence/locks/preflight.json), [registry](../../../evidence/qcgs-multiview-kaggle-033877f5642d/qcgs-multiview-evidence/locks/registry.json), [gate đã commit](../../../evidence/qcgs-multiview-kaggle-033877f5642d/qcgs-multiview-evidence/locks/stage-a-gate.json). Raw evidence lưu local trong `evidence/`, không commit; khôi phục từ ZIP có SHA trên để dùng các liên kết này ở máy khác.
+- [Receipt audit đã commit](scientific-validation.json) lưu hashes, 8 completed-run receipts, provenance và metrics tính độc lập. Source thực nghiệm `b96488cd410f6d28e6de52a308338ddb4879e779`; tree `8a182373f67a4c9fa9b92163c07c639440b41b5e`. Protocol đúng phiên bản trong commit này; không thay gate sau kết quả.
+- Đã kiểm CRC/path ZIP, Git ledger sạch và `fsck`, config/source/model/data/view/parameter-order locks, exclusions/RNG, registry replay, legal action coverage, selected-action arithmetic và mọi completed artifact hash. Rebuild registry từ scan không chấm utility; tiền tố 600 chưa đủ quota, 1.200 đủ. Hai cell có cap đã khóa 800/1.100.
+- Chạy auditor tin cậy vào thư mục tạm, tính lại analysis/gate từ raw; kết quả **khớp chính xác** aggregate trong ZIP. Tính riêng U/D/E, drop-two, exact oracle và tied-rank Spearman từ CE/score với Python `statistics`/`math`, khớp trong `1e-12`. Canonical analysis SHA-256: `c7a017f38e09513f48ecb85628de292c91b29bbe255dbf8dda95c9557ada8dde`. Toàn bộ 209 file evidence giữ nguyên bytes.
 
-Validation CPU: kiểm thử autograd thật với B=100/k=5/M=10; output/cache parity; label isolation; crop/flip và batch slots; target detach; finite-difference tại θ_R; no-swap/ties/shared RNG; reset khi lỗi; raw-record mutations; registry/exclusion/gate; ZIP atomic và notebook/source bundle. Review độc lập đã kiểm tra các ranh giới khoa học; các thiếu sót về phân tích phụ, chi phí evaluator và finite difference đã được bổ sung.
+Kaggle ghi nhận Python 3.11.16, PyTorch 2.4.1+cu121, CUDA 12.1, Tesla T4; máy liệt kê 2 GPU, không suy ra chạy song song trên cả hai. CPU preflight trong ZIP: **33 passed, 1 skipped** focused; **416 passed, 6 skipped** full (MPS không có trên Linux và CUDA bị ẩn trong CPU tests). Sau đó **CUDA smoke 2 query/cell**, 4 scan và 2 Stage A run hoàn thành. [Receipt CPU/đóng gói trước đây](validation.json) là lịch sử local, không thay cho evidence Kaggle này; notebook vẫn dùng source pin trên và nhỏ hơn 1 MB.
 
-CPU preflight ban đầu đã khôi phục bundle nhúng vào checkout sạch, kiểm tra source pin `b96488cd410f6d28e6de52a308338ddb4879e779`, compile cả 6 code cell và chạy CPU preflight tại checkout đó:
+## Kết quả Stage A và quyết định theo thứ tự gate
 
-- Focused: **34 passed**; full suite: **417 passed, 5 skipped** (các test cần CUDA).
-- [Receipt đã commit](validation.json) giữ SHA-256 notebook hiện tại, bundle ban đầu, preflight và logs; [raw CPU preflight](../../../evidence/qcgs-multiview-cpu/preflight.json), [focused log](../../../evidence/qcgs-multiview-cpu/cpu-tests-0.log), [full-suite log](../../../evidence/qcgs-multiview-cpu/cpu-tests-1.log) nằm local trong `evidence/`, không commit raw evidence.
-- Tám test downloader cần localhost nên lần chạy trong sandbox bị chặn bind; preflight cuối chạy với quyền localhost và qua toàn bộ. Không bỏ hoặc sửa yếu các test này.
-- Đã sửa và kiểm tra hồi quy round-trip JSON của stable query identities, tránh gate sai khi audit/resume. Review độc lập đã xác nhận ba finding ban đầu được xử lý.
-- Tái tính read-only analysis cũ từ raw records cho cùng canonical JSON SHA-256 `eeb8f0c2df01ec208593025e4b08487333ff80553793614ed5384e0660ecf813` và quyết định **STOP**; không sửa artifact cũ.
+U = CE_Ramen − CE_primary; D = CE_random-matched − CE_primary; E = CE_Ramen-MV − CE_primary. Giá trị dương là có lợi; đơn vị CE, không phải điểm phần trăm accuracy.
 
-CUDA smoke và cả hai scored stages vẫn phải chạy trên Kaggle. Vì chưa thu query mới, chưa áp dụng được gate khoa học ngoài trạng thái thiếu evidence (**INCONCLUSIVE**). Chưa có ước tính GPU time đã đo cho biến thể này.
+| Chỉ số | OOD=0 | OOD=0.5 |
+|---|---:|---:|
+| Query / primary swaps / rho xác định | 16 / 16 / 16 | 16 / 16 / 16 |
+| Mean exact-oracle U | +0.326281 | +0.407242 |
+| Mean primary U | +0.171246 | +0.123769 |
+| Mean D | +0.172130 | +0.120197 |
+| Mean E | +0.255355 | +0.021415 |
+| Mean per-query Spearman primary | +0.014331 | **−0.125254** |
+| Accuracy Ramen → primary | 8/16 → 9/16 | 8/16 → 10/16 |
+| Wrong→correct / correct→wrong | 1 / 0 | 2 / 0 |
 
-Chạy [notebook rescue](../../../notebooks/kaggle/kaggle-qcgs-multiview.ipynb) với Internet/GPU từ trên xuống hoặc Save & Run All. Notebook tải source tại đúng commit đã kiểm thử, dùng pipeline Hugging Face và lưu `qcgs-multiview-evidence.zip`. Nếu Stage A STOP, notebook xuất báo cáo/ZIP và không chạy Stage B. Nếu ngắt, thêm ZIP làm Kaggle Input, đặt `RESUME_ARCHIVE` rồi chạy lại cùng notebook.
+1. **INVALID:** không phát hiện vi phạm qua audit raw, receipts và các guards/tests của source đã khóa. Giới hạn xác minh offline được nêu bên dưới.
+2. **INCONCLUSIVE:** không áp dụng; đủ quota Stage A và exhaustive verification: **16.500 / 17.965 legal swaps**, cộng no-swap. Mỗi query có positive exact-oracle headroom trong không gian này.
+3. **GO_CONFIRM:** OOD=0 qua mọi điều kiện. OOD=0.5 qua oracle/U/D/E/quota/replacements nhưng **không qua mean rho>0**. Gate yêu cầu cả hai cell cùng qua.
+4. **STOP:** dừng diagnostic rescue; không mở Stage B, full matrix, reranking hay adaptive support. Không đổi control thành primary hoặc chỉnh score/threshold từ kết quả này. Không có quyết định REVISE trong protocol rescue.
 
-Sau khi tải ZIP về, cần audit lại artifact trước khi kết luận nghiên cứu. Không mở full matrix, full reranking hoặc adaptive support size trong task này.
+Không có số liệu Stage B để báo best-verified subset hay áp gate GO_PILOT. Exact oracle ở bảng trên chỉ tối ưu same-pseudo-class one-swap của Stage A, không bao gồm ensemble prediction controls.
 
-Sửa đóng gói sau khi Kaggle từ chối kernel source ≥1 MB: bản nhúng bundle cũ dài 2.068.014 bytes. Bản thay thế tải Git tại cùng commit `b96488c`, xác minh cả commit và tree hash, rồi mới chạy các cell còn lại. Mã thí nghiệm, dependencies và gate không đổi. Builder kiểm tra kích thước UTF-8 của toàn bộ notebook trước khi ghi; clone được staging để lỗi mạng không để lại checkout dở dang. Các kiểm thử đóng gói xác minh checkout thực tế, rerun, phát hiện thay đổi source, sai tree hash và giới hạn dung lượng. Bản mới **9.394 bytes** (code cells: **5.566 bytes**); **4 packaging tests passed**. Đã chạy chính cell setup tải từ GitHub công khai không dùng credential, so sánh toàn bộ tracked tree với pin local, xác nhận checkout sạch và chạy lại thành công. [Receipt tải Git](../../../evidence/qcgs-multiview-cpu/git-source-validation.json) và [log packaging tests](../../../evidence/qcgs-multiview-cpu/notebook-packaging-tests.log) nằm local; [validation.json](validation.json) ghi các SHA và kết quả. Không chạy lại thí nghiệm hoặc thay gate trong lần sửa này.
+## Diễn giải và giới hạn
+
+Kết quả này **không phải mọi chỉ số đều âm**: CE/accuracy trung bình có cải thiện. Tuy nhiên, khả năng xếp hạng swap theo utility chưa ổn định và lợi ích nhạy với vài ảnh:
+
+| Kiểm tra độ nhạy: mean sau bỏ hai giá trị lớn nhất của từng metric | OOD=0 | OOD=0.5 |
+|---|---:|---:|
+| U | −0.015157 | −0.184415 |
+| D | −0.016155 | −0.185216 |
+| E | +0.131841 | −0.153928 |
+
+Hai ảnh đóng góp U lớn nhất ở **cả hai cell** là `sample_idx=6345` và `8165`, nằm trong tập ảnh trùng giữa OOD. Drop-two là phân tích độ nhạy đã định trước, **không phải lý do áp gate STOP ở Stage A**. Các khoảng bootstrap block 95% của U/D/E đều chứa 0; đây là mô tả có điều kiện trên một stream, không phải kiểm định với các lần chạy độc lập.
+
+Supervised reference tại cùng anchor đạt mean rho **0.9280 / 0.9098**, trong khi primary đạt **0.0143 / −0.1253**. Teacher Frozen-MV không sửa đúng prediction nào trong 8 query Ramen sai ở mỗi cell, dù tăng xác suất nhãn thật ở 4/8. Phân nhóm evaluator cho thấy mean primary U trên query Ramen sai là **+0.5113 / +0.6173**, nhưng trên query Ramen đúng là **−0.1688 / −0.3697**. Những quan sát này phù hợp với việc soft target chưa cung cấp hướng sửa đáng tin cho mọi query; chúng chưa xác lập nguyên nhân duy nhất. Correctness dùng nhãn thật nên không thể dùng trực tiếp thành selector label-free.
+
+32 quan sát Stage A tương ứng **27 ảnh gốc khác nhau**, với 5 ảnh trùng giữa hai OOD cell (`1219, 1719, 4407, 6345, 8165`); không trùng trong mỗi cell, giữa A/B đã đăng ký, hoặc với exclusions. Mỗi cell chỉ có seed 0, một stream và 7 scored blocks. Không suy generalization từ mẫu nhỏ hoặc coi các candidate swaps/views là replicate độc lập.
+
+Audit offline xác minh arithmetic, selection, registry và provenance đã lưu; không chạy lại CUDA hay khôi phục logits/gradient từ model. Dataset/checkpoint không nằm trong ZIP, nên checksum của chúng được đối chiếu từ receipts của source đã pin, không phải rehash lại bytes local. STOP là quyết định dừng đầu tư theo gate bảo thủ đã đăng ký, không phải chứng minh hiệu ứng thật bằng 0. **Giữ STOP cũ của single-view; đóng cả lần cứu multi-view này trong thiết lập hiện tại.**

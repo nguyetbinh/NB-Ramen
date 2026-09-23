@@ -1,0 +1,359 @@
+{
+  "analysis_canonical_sha256": "c7a017f38e09513f48ecb85628de292c91b29bbe255dbf8dda95c9557ada8dde",
+  "analysis_matches_supplied_exactly": true,
+  "archive": {
+    "bytes": 17794842,
+    "crc_and_member_paths_verified": true,
+    "entries": 209,
+    "filename": "qcgs-multiview-evidence.zip",
+    "sha256": "033877f5642d8a8c4ae09704561b0d87ef126c6ef540da12011282825f86983d"
+  },
+  "artifacts": {
+    "dataset": {
+      "acquisition": {
+        "files": {
+          "brightness.npy": "f22d7195aecd6abb541e27fca230c171",
+          "contrast.npy": "322bb385f1d05154ee197ca16535f71e",
+          "defocus_blur.npy": "d923e3d9c585a27f0956e2f2ad832564",
+          "elastic_transform.npy": "a0792bd6581f6810878be71acedfc65a",
+          "fog.npy": "4efc7ebd5e82b028bdbe13048e3ea564",
+          "frost.npy": "3a39c6823bdfaa0bf8b12fe7004b8117",
+          "gaussian_blur.npy": "5204ba0d557839772ef5a4196a052c3e",
+          "gaussian_noise.npy": "ecc4d366eac432bdf25c024086f5e97d",
+          "glass_blur.npy": "0bf384f38e5ccbf8dd479d9059b913e1",
+          "impulse_noise.npy": "3b3c210ddfa0b5cb918ff4537a429fef",
+          "jpeg_compression.npy": "c851b7f1324e1d2ffddeb76920576d11",
+          "labels.npy": "bb4026e9ce52996b95f439544568cdb2",
+          "motion_blur.npy": "732a7e2e54152ff97c742d4c388c5516",
+          "pixelate.npy": "96c00c60f144539e14cffb02ddbd0640",
+          "saturate.npy": "c0697e9fdd646916a61e9c312c77bf6b",
+          "shot_noise.npy": "b0a1fa6e1e465a747c1b204b1914048a",
+          "snow.npy": "0237be164583af146b7b144e73b43465",
+          "spatter.npy": "12ccf41d62564d36e1f6a6ada5022728",
+          "speckle_noise.npy": "e3f215b1a0f9fd9fd6f0d1cf94a7ce99",
+          "zoom_blur.npy": "0204613400c034a81c4830d5df81cb82"
+        },
+        "publisher": "Hugging Face community mirror",
+        "repository": "WNJXYK/TTA-CIFAR-100-C",
+        "revision": "a12f0bcc1da33fa26d8c76ce8c1fb32e6f913bea",
+        "upstream_doi": "10.5281/zenodo.3555552",
+        "url": "https://huggingface.co/datasets/WNJXYK/TTA-CIFAR-100-C/tree/a12f0bcc1da33fa26d8c76ce8c1fb32e6f913bea",
+        "verification": "reconstructed_original_npy_md5"
+      },
+      "content_algorithm": "sha256",
+      "dataset": "cifar100c",
+      "file_count": 20,
+      "root": "/tmp/nb-ramen-qcgs-mv-data/corruption/CIFAR-100-C",
+      "root_digest": "e316a95d0b0d1fd946c5303c435deff479b97b30a9124e6b134e2e23c8d43b1d",
+      "schema_version": 1,
+      "sidecar": "/tmp/nb-ramen-qcgs-mv-data/corruption/CIFAR-100-C/.nb-ramen-provenance/cifar100c-v1.json",
+      "sidecar_sha256": "f0c78dc0b0628a72587f64032b6cae23e87ffa7f6d6af2358f91f70213c8019b",
+      "verified_exact": true
+    },
+    "model": {
+      "actual_sha256": "5806e77cd80f8b59890b7e101eabd078d9fb84e6937f9e85e4ecb61988df416f",
+      "expected_sha256": "5806e77cd80f8b59890b7e101eabd078d9fb84e6937f9e85e4ecb61988df416f",
+      "filename": "ViT-B-16.pt",
+      "model": "clip_vitbase16",
+      "official_name": "ViT-B/16",
+      "path": "/root/.cache/clip/ViT-B-16.pt",
+      "publisher": "OpenAI",
+      "size_bytes": 350837078,
+      "trust": "pinned_official",
+      "url": "https://openaipublic.azureedge.net/clip/models/5806e77cd80f8b59890b7e101eabd078d9fb84e6937f9e85e4ecb61988df416f/ViT-B-16.pt"
+    }
+  },
+  "audit_date": "2026-09-23",
+  "audit_method": "Trusted campaign.audit_campaign wrote only to a temporary output directory, with original locks/runs read through links and GIT_OPTIONAL_LOCKS=0. File SHA-256 inventory before/after matched. U/D/E, drop-two, exact-oracle means and tied-rank Spearman were independently recalculated from CE and candidate scores using Python statistics/math; tolerance 1e-12.",
+  "audit_scientific_code_identical_to_run_pin": true,
+  "audit_source_revision": "e7d3cbac60ddd771e2ddda5b25268fac32be2e37",
+  "complete_protocol": true,
+  "decision": "STOP",
+  "environment": {
+    "allow_tf32": false,
+    "cuda_available": true,
+    "deterministic_algorithms": true,
+    "driver": "580.159.04\n580.159.04",
+    "gpu_names": [
+      "Tesla T4",
+      "Tesla T4"
+    ],
+    "packages": {
+      "Pillow": "10.4.0",
+      "PyYAML": "6.0.2",
+      "clip": "1.0",
+      "numpy": "1.26.4",
+      "pytest": "8.2.2",
+      "torch": "2.4.1+cu121",
+      "torchvision": "0.19.1+cu121",
+      "tqdm": "4.66.5"
+    },
+    "python": "3.11.16",
+    "torch_cuda": "12.1"
+  },
+  "evidence_root": "evidence/qcgs-multiview-kaggle-033877f5642d/qcgs-multiview-evidence",
+  "hashes": {
+    "analysis.json": "a1a32c771eb1516c9e63089a49aad46700521c7ccc5cb6551919b4df52e3faec",
+    "locks/launch.json": "d25f8ef7b547e5e45018d36e542f33336286dda7435f050505bb7751a1bcdd3b",
+    "locks/preflight.json": "e3d0369e8accabca3f3fed880f6887db964f52533a030fa25734afa5346fb01c",
+    "locks/registry.json": "27423a550be966d13db191350e5b76f769d5ac39987b06fdc33d5ac1e242a85a",
+    "locks/stage-a-gate.json": "d2a31b28f2a792e44f3b2a5d6d37c6353203498ebd09d453ed652cb2d59cd147",
+    "queries.jsonl": "cf8c2529c6e5418bd85c89e5484c649a2fb68da33299127345c41f35d46776c2",
+    "report.md": "5fabf8e61cc2e2805acf050b7d60e32acb4439e50b23e7b622e42ef913e6c365",
+    "runtime/source-git.json": "78b7193a730655f6a103152d0213c046702142b3e8b8702f0db351ce64dc3831"
+  },
+  "historical_excluded_count": 507,
+  "independent_metrics": {
+    "0": {
+      "defined_rho": 16,
+      "drop_two_largest_means": {
+        "D": -0.01615524917308773,
+        "E": 0.13184134994766541,
+        "U": -0.015156905432896954
+      },
+      "exact_oracle_mean": 0.32628106651827693,
+      "failed_checks": [],
+      "legal_swaps_per_query_min_max": [
+        705,
+        1230
+      ],
+      "mean_rho": 0.01433112725105688,
+      "means": {
+        "D": 0.17213032592553645,
+        "E": 0.25535472959745675,
+        "U": 0.1712459420086816
+      },
+      "positive_headroom_queries": 16,
+      "primary_accuracy": 0.5625,
+      "primary_correct_to_wrong": 0,
+      "primary_mean_U_by_baseline_correctness": {
+        "False": 0.5112891793251038,
+        "True": -0.16879729530774057
+      },
+      "primary_top_two_U_sample_indices": [
+        6345,
+        8165
+      ],
+      "primary_wrong_to_correct": 1,
+      "queries": 16,
+      "ramen_accuracy": 0.5,
+      "stage_a_gate_checks": {
+        "D_mean_positive": true,
+        "E_mean_positive": true,
+        "U_mean_positive": true,
+        "at_least_3_replacements": true,
+        "at_least_8_defined_rho": true,
+        "exact_oracle_positive": true,
+        "mean_rho_positive": true
+      },
+      "supervised_reference_mean_rho": 0.9280325345015674,
+      "teacher_on_ramen_errors": {
+        "increased_true_label_probability": 4,
+        "primary_correct_count": 1,
+        "queries": 8,
+        "teacher_correct_count": 0,
+        "true_label_probability_gain": {
+          "count": 8,
+          "mean": 0.027676680694098985,
+          "median": 0.0023287304817834168,
+          "p25_p75": [
+            -0.013880264036478254,
+            0.02211386253493018
+          ]
+        }
+      },
+      "verified_swap_count": 16500
+    },
+    "0.5": {
+      "defined_rho": 16,
+      "drop_two_largest_means": {
+        "D": -0.18521610161821758,
+        "E": -0.15392799129975693,
+        "U": -0.1844147135104452
+      },
+      "exact_oracle_mean": 0.40724186893203296,
+      "failed_checks": [
+        "mean_rho_positive"
+      ],
+      "legal_swaps_per_query_min_max": [
+        945,
+        1320
+      ],
+      "mean_rho": -0.12525351230096365,
+      "means": {
+        "D": 0.12019681796664372,
+        "E": 0.021414764341898263,
+        "U": 0.12376918829977512
+      },
+      "positive_headroom_queries": 16,
+      "primary_accuracy": 0.625,
+      "primary_correct_to_wrong": 0,
+      "primary_mean_U_by_baseline_correctness": {
+        "False": 0.6172743979841471,
+        "True": -0.3697360213845968
+      },
+      "primary_top_two_U_sample_indices": [
+        6345,
+        8165
+      ],
+      "primary_wrong_to_correct": 2,
+      "queries": 16,
+      "ramen_accuracy": 0.5,
+      "stage_a_gate_checks": {
+        "D_mean_positive": true,
+        "E_mean_positive": true,
+        "U_mean_positive": true,
+        "at_least_3_replacements": true,
+        "at_least_8_defined_rho": true,
+        "exact_oracle_positive": true,
+        "mean_rho_positive": false
+      },
+      "supervised_reference_mean_rho": 0.909807042374755,
+      "teacher_on_ramen_errors": {
+        "increased_true_label_probability": 4,
+        "primary_correct_count": 2,
+        "queries": 8,
+        "teacher_correct_count": 0,
+        "true_label_probability_gain": {
+          "count": 8,
+          "mean": 0.00779773734834811,
+          "median": 0.000489352886674234,
+          "p25_p75": [
+            -0.010324703517415119,
+            0.008596101199350769
+          ]
+        }
+      },
+      "verified_swap_count": 17965
+    }
+  },
+  "input_files_unchanged": true,
+  "kaggle_cpu_tests": {
+    "cpu-tests-0.log": {
+      "sha256": "28d45d6c6d9ef7b413a42694f5a27118a721127b7abc3c8dd101ebadf0204f20",
+      "summary": "33 passed, 1 skipped in 5.18s"
+    },
+    "cpu-tests-1.log": {
+      "sha256": "41aed6a67209b54ded3feaea934db36228df13b034466303cf13ddac5d56431e",
+      "summary": "416 passed, 6 skipped in 15.09s"
+    }
+  },
+  "ledger_head": "d26cda502c39a84d051873887d8271a16ffe4d2a",
+  "limits": [
+    "No local CUDA rerun; audit recomputes saved arithmetic, selections, ranks and gate, not model logits or gradient tensors.",
+    "Dataset/checkpoint bytes absent from ZIP; content checks are backed by pinned-run checksum receipts, not a new local dataset/model rehash.",
+    "One seed/stream per cell; 32 Stage A observations include 5 shared base images across OOD cells.",
+    "Stage A STOP because mean per-query rho is negative at OOD=0.5; drop-two sensitivity is not a Stage A decision gate."
+  ],
+  "registry_rebuilt_from_unscored_scan": true,
+  "registry_sha256": "8d8263cd60f55ab51b24ff80553c67f21cd68eda065ccf9427b2891177842a31",
+  "schema_version": 1,
+  "smoke": [
+    {
+      "base_image_indices": [
+        5100,
+        2962
+      ],
+      "cell": "0",
+      "queries_sha256": "4a3f0836c85f882af801235c9acb07504ac5c0a7f0dcd6945b8722bf1d5935a4"
+    },
+    {
+      "base_image_indices": [
+        7431,
+        7921
+      ],
+      "cell": "0.5",
+      "queries_sha256": "cfe22e4965784244ca9a75f3b8dcb7557f369f5652006ff9f6a2fb4563420cda"
+    }
+  ],
+  "source": {
+    "base_revision": "cb3c92cded0e6ad4601b5e1f876835a9cf3992c4",
+    "dirty": false,
+    "exclusions_sha256": "13393c15e965ceefbe90ad4cca2db194b541070b0947fcf05ddacfb4b775b5eb",
+    "protocol_sha256": "691433f6006fbb7ada277ba5c841727b6b4a0de86c0f0b058df0225c952e5038",
+    "revision": "b96488cd410f6d28e6de52a308338ddb4879e779",
+    "spec_sha256": "ee51a17cd6e1d13e87a616eafa4fc70d2b7a495950c60a081363f37eb3552d48",
+    "split_sha256": "91cc03ef1e802fa468722b1eb653ccb7c615863582265776ae0d60872ce8b3ec",
+    "tree": "8a182373f67a4c9fa9b92163c07c639440b41b5e"
+  },
+  "stage_a_cross_ood_base_image_overlap": [
+    1219,
+    1719,
+    4407,
+    6345,
+    8165
+  ],
+  "stage_a_distinct_base_images": 27,
+  "stage_b_outcomes_collected": false,
+  "validated_runs": {
+    "scan-ood-0-n1200": {
+      "completed_sha256": "c8ba0747a00e45a637ef88e8f45b5192d77bec60ceb322de3f5536f87a7f8b96",
+      "files_verified": 8,
+      "input_commit": "9b3b18707aa0ede3a6603c77f320ef02a1622cb3",
+      "scored_queries": 0,
+      "stream_observations": 1200
+    },
+    "scan-ood-0-n600": {
+      "completed_sha256": "8e9c67e72e05de858285c2878e228ef8c392a597c783316c93a0fb8a06f69010",
+      "files_verified": 8,
+      "input_commit": "ac7ea56dd98822f2adc5fa80540de53f748205c4",
+      "scored_queries": 0,
+      "stream_observations": 600
+    },
+    "scan-ood-0.5-n1200": {
+      "completed_sha256": "c05e0d3e1d080b36205799999e683a06564be75e389583028e000e049b0f9f07",
+      "files_verified": 8,
+      "input_commit": "5942b472b95b48ff995de5a997a7788d2c013a5a",
+      "scored_queries": 0,
+      "stream_observations": 1200
+    },
+    "scan-ood-0.5-n600": {
+      "completed_sha256": "384b21d409457b1306305af713385cdbf6b2fff100ed57ac3f7b6cfa22e91057",
+      "files_verified": 8,
+      "input_commit": "feba6deb568581c2909cb126d652b2e7a855e564",
+      "scored_queries": 0,
+      "stream_observations": 600
+    },
+    "smoke-ood-0-n600": {
+      "completed_sha256": "0c6170b87413ac7870c9dcd5bbe959cf33d806649a6258bbf62d738265ca6bac",
+      "files_verified": 8,
+      "input_commit": "af4ff9640f507fe186540e4a5501b24f76121c2a",
+      "scored_queries": 2,
+      "stream_observations": 600
+    },
+    "smoke-ood-0.5-n600": {
+      "completed_sha256": "9432df6dcc3d08656b83d0eeadbbbbf1a54f98899f58760b0b0d07e7df3506f1",
+      "files_verified": 8,
+      "input_commit": "dc46dc3c1405ff20fcb4ee4a3ace6e40a9902bd8",
+      "scored_queries": 2,
+      "stream_observations": 600
+    },
+    "stage-a-ood-0-n800": {
+      "completed_sha256": "2c623062cfc685c057d0ecbc01f188efa6f66adaeeff6f484fb0714d08dacd73",
+      "files_verified": 8,
+      "input_commit": "abb191ed6aae348b9238b6ce5eea4ecef4d24d82",
+      "scored_queries": 16,
+      "stream_observations": 800
+    },
+    "stage-a-ood-0.5-n1100": {
+      "completed_sha256": "3d458cac51ed100233c79fd8109dc87fbb7d0759f85ed5cba1f6322199d4dee1",
+      "files_verified": 8,
+      "input_commit": "abb191ed6aae348b9238b6ce5eea4ecef4d24d82",
+      "scored_queries": 16,
+      "stream_observations": 1100
+    }
+  },
+  "validation_checks": [
+    "ZIP CRC/path/duplicate/symlink validation",
+    "Scientific source/tree/protocol/spec/split/exclusions match pinned Git objects",
+    "Git evidence ledger clean and fsck passed; preflight/job/launch objects present in each completed receipt input commit",
+    "All 8 completed receipts and their 64 run artifact hashes match; all 4 stage configs match locked launch",
+    "CPU test log hashes match preflight; CUDA manifest/config/parameter/view/data/model identities match",
+    "Registry reconstructed from unscored 1200-sample scans; 600-sample prefixes lack quotas; exclusions exactly historical union smoke",
+    "Legal same-pseudo-class action space, exhaustive Stage A verification, label-free argmax, independent shared RNG and stored utility arithmetic validated",
+    "Root raw records equal completed-run concatenation; supplied analysis/report/committed Stage A gate exactly recomputed",
+    "Independent statistics and Stage A pass/fail conditions agree",
+    "Stage B directories/outcomes absent; no interruption or integrity failure marker; original evidence unchanged"
+  ],
+  "with_smoke_excluded_count": 507
+}
