@@ -32,6 +32,8 @@ An independent outcome-free script applied the frozen SHA-256 assignment formula
 
 This confirms only that the frozen partition has enough *base IDs* in principle. It does not verify ID eligibility, cache candidate eligibility, the earliest selected stream prefix, or absence from historical unscored cache streams. P3 registry replay must validate those from the actual locked scan before scoring. If eligible quotas are short by the 6,000-row cap, the result is INCONCLUSIVE; the hash rule and exclusions remain unchanged.
 
+The archived multi-view validation receipt reports 16,500 / 17,965 verified legal swaps across its two 16-query Stage-A cells, with per-query ranges 705–1,230 / 945–1,320. This is a scale reference only: its raw archive is missing and the new fresh-query cache states may yield different action counts. The new runner must emit exact attempted/enumerated/completed counts; smoke timing, not this historical report, locks the action chunk and confirms the Stage-A cost cap.
+
 ## Run state
 
 - P0 data and CLIP checkpoint identities passed their pinned checks; historical raw result archives are absent, so the old reports are not newly reproduced.
