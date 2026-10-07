@@ -72,7 +72,8 @@ Implementation vẫn phục vụ synthesis §24: đo exact objective-to-utility 
 
 - Resource-policy/profile implementation committed at `5f486e4ada84fb5b6a1c4794c3a00dc9015654d5`; execution-report update committed at `f06094431ebe47258fcb8d4be4a1cdee074caf8f`. Protocol v1.2 SHA-256: `397e769d2eda50bad9a4744efbd7d928bf06640b9b15b06745ecd45955a5df03`.
 - Focused suite: 36 pass; syntax, protocol JSON and diff checks pass. Fresh targeted review has no remaining findings. The 600-row registry check accepted high smoke peaks but requested 1,200-row scans after OOD=0 was short by 8 Stage-A and 51 Stage-B eligible queries.
-- Cost-only profile jobs are now running serially on already excluded IDs: `profile-ood-0-s0-v12-20261008` (config SHA `582b8f23399d4f9dc8c75f9046a33d5e872d893d7c243733f73348b8438ff3be`) and `profile-ood-05-s0-v12-20261008` (config SHA `9f8dbd016b7ac4bdbf881dcb0b0ce2bcd4ac8e0bcf52cf66573c2f013a26385a`). Logs: `log/qcgs-exact-objective-audit/profile-only-v12/`. Stage A has not launched.
+- First profile launch attempt used a mistyped source SHA (`f0609445…` vs the actual `f06094431…`). OOD=0 completed but failed provenance audit; OOD=0.5 was stopped at 500 scan rows before scoring. Both attempts are preserved in `evidence/qcgs-exact-objective-audit/decisions/profile-source-revision-mismatch-20261008.json` and excluded from profile conclusions.
+- Corrected profile-only jobs are running serially on the same excluded IDs: `profile-ood-0-s0-v12r1-20261008` (config SHA `68ae21e62ea799269e903a89e5d89014e261134f291ab08c0179710a88f2ac45`) and `profile-ood-05-s0-v12r1-20261008` (config SHA `643fda47be89d1586b18242b1fc1e7b5705dd4c63e12b4893f66c36047bdedbc`). Logs: `log/qcgs-exact-objective-audit/profile-only-v12-correct/`. Stage A has not launched.
 
 ## 2. Phạm vi và nguyên tắc thực thi
 
