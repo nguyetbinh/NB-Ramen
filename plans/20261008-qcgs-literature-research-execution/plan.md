@@ -43,11 +43,11 @@ Implementation vẫn phục vụ synthesis §24: đo exact objective-to-utility 
 
 ## Execution update — P3 implementation validation (2026-10-08)
 
-- Implementation đang ở worktree riêng `qcgs-exact-objective-code`, base `d823bd511da74d838e329d0d2533ea9cec048373`; source diff đã được đối chiếu với protocol v1.1. Git global identity là `[historical Git identity redacted]`.
+- Implementation đã commit trên branch/worktree `qcgs-exact-objective-code`: `b33549ad2e4e35e349a42909f7dbd4e32286ce58`, base `d823bd511da74d838e329d0d2533ea9cec048373`. Source-tree SHA-256 là `116f180b890309cc7a951c9633298053e4c6efa32d565ce96498d81ae2c37e4e` (Git archive tar của `src`); config-bundle SHA-256 là `f2ba05f37e8c8755d7f76ca6ff2d03ee8a1afb33a7f9c821629ad8c5743fd05d`; protocol SHA-256 là `f4c4ad4b9221da9293915c9b9009e5517c63ee087cbe60cb597db6a04da3d860`. Commit author/committer dùng Git global identity `[historical Git identity redacted]`.
 - 32 exact-objective tests pass; full repository suite pass: 440 tests, 1 skipped. Final targeted `gpt-6.1-sol`/low review trên random-control utility, isolation receipt và direct objective replay regression không còn finding. Dispositions được ghi ở [instrument implementation review](reports/instrument-implementation-review.md).
 - Review sửa các lỗi interrupted-run status/JSONL, unpaired action identity, scan suffix continuity, smoke receipt completeness, Stage-B prerequisite/objective binding và random-forced utility recomputation. Formula regression independently replays all three objective calculations on each real scorer baseline/action tensor in the deterministic CPU fixture.
 - `action_chunk_size` nhóm query theo action index. Raw receipt nêu rõ GPU isolation sampling scope: action đầu tiên của query chunk đầu, tối đa hai query. CPU parity regression so sánh chunked/serial objective outputs trên mọi query/action của fixture; campaign mặc định dùng chunk 1.
-- P3 chưa đóng: source vẫn chưa commit; chưa chạy scans, CUDA smoke, scored inference hoặc tạo registry/launch lock. Vì vậy peak memory/cost trên CLIP CUDA và smoke cap 60 phút chưa được kiểm chứng.
+- P3 chưa đóng: chưa chạy scans, CUDA smoke, scored inference hoặc tạo registry/launch lock. Vì vậy peak memory/cost trên CLIP CUDA và smoke cap 60 phút chưa được kiểm chứng.
 
 ## 2. Phạm vi và nguyên tắc thực thi
 
@@ -221,7 +221,8 @@ Module: [Instrument](../../.agents/skills/research-orchestrator/references/build
 - [x] Validate formula/sign trên known cases: no-swap=0, reward/loss orientation, rank ties, constant objective, empty positive set, action ordering, random expectation và non-finite/undefined treatment. Direct scorer replay test checks all three formulas and caption-bank mapping; per-run tensor replay remains outside the raw JSONL analyzer.
 - [x] Regression cho label isolation, trial order independence/reset, unchanged cache, baseline exact parity và exhaustive action coverage. Focused suite 32 pass; full suite 440 pass (1 skipped). CPU checks không chứng minh CUDA parity.
 - [x] Reviewer fresh context kiểm diff theo protocol và acceptance criteria; fix concrete findings rồi rerun checks bị ảnh hưởng. Final targeted `gpt-6.1-sol`/low review reported no remaining findings in the last diff.
-- [ ] Freeze source/config/registry/protocol hashes và commit implementation trước CUDA; record dependency/runtime deviations và reproduction command.
+- [x] Freeze implementation source tree, config bundle, protocol SHA-256 và commit reviewed source trước CUDA; commit `b33549ad2e4e35e349a42909f7dbd4e32286ce58` dùng Git global identity đã khóa.
+- [ ] Freeze registry/exclusion, smoke receipts, exact commands/run IDs và hoàn tất launch lock sau scans + smoke, trước scored Stage A; ghi runtime/device differences và reproduction commands.
 - [ ] Chạy real CUDA smoke trên separate smoke queries, kiểm baseline/raw/log/provenance với numerical tolerance đã định trước; không dùng utility smoke để tune objective.
 
 Các command đã có trong repo, thực thi sau khi xác nhận data root/runtime phù hợp:

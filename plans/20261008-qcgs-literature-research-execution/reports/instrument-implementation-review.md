@@ -7,6 +7,9 @@
 | Protocol | `qcgs-exact-objective-audit-v1.1` (`f4c4ad4b9221da9293915c9b9009e5517c63ee087cbe60cb597db6a04da3d860`) |
 | Implementation branch/worktree | `qcgs-exact-objective-code` / `/home/thinkpad/NB-Ramen-qcgs-exact-objective-code` |
 | Base revision | `d823bd511da74d838e329d0d2533ea9cec048373` |
+| Implementation commit | `b33549ad2e4e35e349a42909f7dbd4e32286ce58` |
+| Source tree SHA-256 | `116f180b890309cc7a951c9633298053e4c6efa32d565ce96498d81ae2c37e4e` (SHA-256 of `git archive --format=tar <commit> src`) |
+| Config bundle SHA-256 | `f2ba05f37e8c8755d7f76ca6ff2d03ee8a1afb33a7f9c821629ad8c5743fd05d` (canonical path→file-SHA manifest) |
 
 ## Review outcome
 
@@ -39,4 +42,4 @@ Stage B currently computes the three objective values in the scorer path while p
 
 ## Remaining P3 evidence gates
 
-No CUDA scan, CUDA smoke, scored inference, or registry has run. CPU tests do not establish the CLIP/CUDA implementation's baseline parity, view mapping, cache/reset behavior, peak allocation, or cost. The next steps are to commit the reviewed source, run outcome-blind scans and smoke on separately excluded IDs, measure actual wall time/forwards/peak memory, then freeze the launch lock. Stage A remains closed until those receipts and hashes exist.
+The reviewed source is committed, but no CUDA scan, CUDA smoke, scored inference, or registry has run. CPU tests do not establish the CLIP/CUDA implementation's baseline parity, view mapping, cache/reset behavior, peak allocation, or cost. Next run outcome-blind scans and smoke on separately excluded IDs, measure actual wall time/forwards/peak memory, then freeze the launch lock. Stage A remains closed until those receipts and hashes exist.
