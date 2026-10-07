@@ -27,7 +27,10 @@ Plan này đã được commit tại `45ea8f4`; P0 reconstruction, P1 bounded li
 - P2a: source-only instrument/parity audit hoàn tất ở [instrument audit](reports/instrument-audit.md). Không có code hoặc inference chạy trong task này.
 - P1: bounded source-backed map hoàn tất ở [literature verification](reports/literature-verification.md), [gap reassessment](reports/literature-gap-reassessment.md), và [problem map](reports/problem-map.md). Action identifiability đã được nghiên cứu ở mức whole-stream actions; selective adapt/skip và CAS đã được công bố ở ECCV 2026; CATE là neighbor hiện tại cho consensus/calibration. G1/G3 rộng không còn là novelty claims. Query-local same-cache support-action audit vẫn là giả thuyết mở, không phải novelty đã xác lập.
 - Historical query exclusion: do không có raw MV registry, đã lập danh sách superset outcome-independent từ toàn bộ bucket Stage-A theo registry fingerprint/namespace đã khóa, gộp với 507 ID cũ: 1.499 ID bị loại, còn 8.501. Danh sách/hashes ở `reports/historical-exclusion-audit.json`; cache-stream exposure vẫn cần phân biệt.
-- P2: đang đóng băng ba formulation xác định (single-view entropy, MEMO marginal entropy, và image→text soft-contrastive component của CLIPTTA), exhaustive same-query swaps, metric units, Stage A/B, reliability dependency và compute limits. Chưa có code, smoke hoặc scored campaign mới.
+- P2: scientific protocol frozen and committed as `973d81d`. Protocol SHA-256 `bd0db538d01cd719bbd7a163e0a470fa14bbf85371a6a8531ce026859ca13221`; it locks three objectives, exhaustive swaps, Stage A/B, controls, gates and caps.
+- P3a: fresh `gpt-6-luna`/`max` coder is implementing on isolated branch `qcgs-exact-objective-code` / worktree `/home/thinkpad/NB-Ramen-qcgs-exact-objective-code`. No code diff is integrated or reviewed yet.
+- P3b/P3c: independent registry partition check and pre-run case card are in [case readiness](reports/case-execution-readiness.md): after exclusions, 8,501 base IDs partition to 926 Stage A / 7,575 Stage B under the frozen namespace and current fingerprint. This does not validate stream eligibility or quotas.
+- No new tests, CUDA smoke, or scored campaign have run. Exact launch command, smoke IDs, action chunk size, implementation hashes and run IDs remain open until code review.
 
 ## 2. Phạm vi và nguyên tắc thực thi
 
@@ -295,7 +298,7 @@ Trước khi đánh dấu toàn bộ chu kỳ hoàn tất:
 
 1. P0 inventory and runtime/data probes are recorded in `reports/research-state.md`.
 2. P2a read-only instrument audit and P1 bounded source verification/problem map are complete; broad G1/G3 novelty claims were narrowed.
-3. P2 scientific contract is frozen in `docs/research/qcgs-exact-label-free-objective-audit.md`; validate links/format, hash it, and commit reports/protocol on this branch before the code worktree.
-4. Then launch a fresh `gpt-6-luna`/`max` coder in a separate worktree, review the diff with fresh `gpt-6.1-sol`/`low`, and only open scored execution after tests, CUDA smoke and launch-lock freeze.
+3. P2 scientific contract and P0–P2 reports were validated and committed at `973d81d` before creating the coding worktree.
+4. The fresh `gpt-6-luna`/`max` coder is active in the separate worktree. The independent registry/case-card work is complete; review the implementation with a fresh `gpt-6.1-sol`/`low` context, then open scored execution only after tests, CUDA smoke and launch-lock freeze.
 
 Việc viết plan này không tự launch workers, tests hoặc CUDA campaign. Khi thực thi, launcher tiếp tục theo authorization hiện có, không chèn approval gates vào từng variant; chỉ dừng để lấy thông tin thực sự thiếu khiến bước phụ thuộc không thể tiến hành đúng.
