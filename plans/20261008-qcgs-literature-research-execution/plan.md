@@ -76,7 +76,7 @@ Implementation vẫn phục vụ synthesis §24: đo exact objective-to-utility 
 
 ### Trạng thái thực thi dưới revision hiện hành
 
-- Protocol/config/validator v1.2 được cập nhật trong coding worktree. Focused exact-objective suite: 36 pass; syntax/JSON/diff checks pass; targeted read-only review không còn finding. Thay đổi đang chờ commit và profile runs.
+- Protocol/config/validator v1.2 đã commit ở `5f486e4ada84fb5b6a1c4794c3a00dc9015654d5` (`src/` archive SHA-256 `bd8404099e12d4094166cfe171f1385305fd0cfee22b85f95288de9273a038ef`). Focused exact-objective suite: 36 pass; syntax/JSON/diff checks pass; targeted read-only review không còn finding. Profile runs chưa chạy.
 - Registry regression nhận complete smoke peaks `8,358,872,576` và `8,368,574,976` bytes, ghi chúng vào provenance và tách receipt source/protocol v1.1 khỏi active v1.2 policy. Builder thử trực tiếp receipts cũ nhận peak nhưng scan 600 rows chưa đủ quota ở OOD=0: thiếu 8 Stage-A và 51 Stage-B IDs; quy tắc scan yêu cầu mở rộng lên 1.200 rows/cell.
 - Component profiler đã thêm cho cost-only smoke; GPU profile chưa chạy. Thử nghiệm CPU tối ưu forward từng query bị loại vì logits không bitwise-equal với batch gốc; production path giữ forward full-batch. Chi tiết ở [resource-policy revision](reports/resource-policy-revision.md).
 - Chưa có scientific registry/launch lock, Stage-A outcomes hoặc scientific decision. Next: commit v1.2 instrument, profile cost-only smokes trên excluded IDs, optimize chỉ bottleneck đo được với parity, run 1.200-row scans, freeze registry/lock, launch Stage A.

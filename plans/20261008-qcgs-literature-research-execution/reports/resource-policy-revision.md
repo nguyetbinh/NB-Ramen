@@ -4,6 +4,7 @@
 **Status:** P3 active; Stage A not launched
 **Active protocol:** `qcgs-exact-objective-audit-v1.2`, SHA-256 `397e769d2eda50bad9a4744efbd7d928bf06640b9b15b06745ecd45955a5df03`
 **Policy config:** [protocol.json](../../../cfg/research/qcgs-exact-objective-audit/protocol.json), SHA-256 `7cb61cee21407103b0220cb20ab8ed33dd5ccf4928a70185e7f88d41e6272c0b`
+**Reviewed policy commit:** `5f486e4ada84fb5b6a1c4794c3a00dc9015654d5`; `src/` archive SHA-256 `bd8404099e12d4094166cfe171f1385305fd0cfee22b85f95288de9273a038ef`
 
 ## Current decision
 
@@ -23,12 +24,11 @@ Existing smoke timings show `candidate_action_ms` of about 700 seconds at 485 sw
 
 A targeted CPU optimization attempt that forwarded only the target query did not meet bitwise full-batch parity and was discarded. The production path still forwards the complete Ramen batch. No CUDA profile or speed optimization has run yet. Any later optimization must be selected from measured component costs and compared on the same workload with baseline/objective values, selections, reset/cache behavior, legal-action coverage, label isolation, runtime and peak allocation. Approximation, action/view reduction, formula changes and altered batch visibility remain outside scope.
 
-The focused exact-objective suite passes 36 tests; syntax compilation, protocol JSON parsing, and `git diff --check` pass. A fresh targeted read-only `gpt-6.1-sol`/low review initially found two profiling issues; both were fixed, and its follow-up review reported no remaining concrete findings. The full repository suite and GPU profile have not been rerun for this policy-only/profiling revision, per the plan.
+The policy/profile changes are committed at `5f486e4ada84fb5b6a1c4794c3a00dc9015654d5`. The focused exact-objective suite passes 36 tests; syntax compilation, protocol JSON parsing, and `git diff --check` pass. A fresh targeted read-only `gpt-6.1-sol`/low review initially found two profiling issues; both were fixed, and its follow-up review reported no remaining concrete findings. The full repository suite and GPU profile have not been rerun for this policy-only/profiling revision, per the plan.
 
 ## Next gated actions
 
-1. Commit the v1.2 protocol, config, registry validation, provenance and profiling changes using the configured global Git identity.
-2. Run one profile-only query in each OOD cell on already excluded smoke IDs. Preserve per-batch timing scope and cost receipts.
-3. Optimize only a measured bottleneck if an exact, parity-preserving change is justified; otherwise retain the reviewed full-batch path.
-4. Run 1,200-row unscored scans in both cells, validate quota and provenance, then build the scientific registry. Freeze source/config/protocol/data/transform hashes and unique Stage-A run IDs in the launch lock.
-5. Run Stage A serially on the single GPU within the frozen budgets and classify only from independently audited raw outcomes.
+1. Run one profile-only query in each OOD cell on already excluded smoke IDs. Preserve per-batch timing scope and cost receipts.
+2. Optimize only a measured bottleneck if an exact, parity-preserving change is justified; otherwise retain the reviewed full-batch path.
+3. Run 1,200-row unscored scans in both cells, validate quota and provenance, then build the scientific registry. Freeze source/config/protocol/data/transform hashes and unique Stage-A run IDs in the launch lock.
+4. Run Stage A serially on the single GPU within the frozen budgets and classify only from independently audited raw outcomes.
