@@ -2,6 +2,20 @@
 
 ## Environment
 
+For local development on Linux with an NVIDIA GPU, create the Python 3.11 /
+PyTorch 2.6.0 / torchvision 0.21.0 / CUDA 12.4 environment with uv:
+
+```shell
+uv sync --locked
+source .venv/bin/activate
+```
+
+`uv.lock` locks the dependencies and CLIP source commit. With the required
+packages already cached, use `uv sync --locked --offline` to avoid downloads.
+To run commands without activation, use `uv run --locked python ...`.
+This local environment differs from the historical PyTorch 2.4.1 research
+environment; use the original Conda files below to reproduce those runs.
+
 Create the pinned Python 3.11 / PyTorch 2.4.1 CPU/MPS environment:
 
 ```shell

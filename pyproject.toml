@@ -1,0 +1,21 @@
+[project]
+name = "nb-ramen"
+version = "0.1.0"
+description = "CLIP test-time adaptation and gradient-memory research"
+requires-python = "==3.11.*"
+dependencies = [
+    "torch==2.6.0",
+    "torchvision==0.21.0",
+    "numpy==1.26.4",
+    "pillow==10.4.0",
+    "pyyaml==6.0.2",
+    "tqdm==4.66.5",
+    "pip==24.2",
+    "clip",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+clip = { git = "https://github.com/openai/CLIP.git", rev = "d05afc436d78f1c48dc0dbf8e5980a9d471f35f6" }

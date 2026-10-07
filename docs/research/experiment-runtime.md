@@ -211,6 +211,21 @@ config, and evidence paths still use their canonical resolved identities.
 
 From the repository root:
 
+For local Linux/NVIDIA development, uv creates a Python 3.11 environment with
+PyTorch 2.6.0, torchvision 0.21.0, CUDA 12.4, and the pinned CLIP commit:
+
+```shell
+uv sync --locked
+source .venv/bin/activate
+```
+
+The uv environment uses `pyproject.toml` and `uv.lock`; add `--offline` to
+`uv sync --locked` when the packages are cached. This is a local development
+environment, distinct from the historical PyTorch 2.4.1 research runtime.
+Use the Conda manifests below for that runtime or CPU/MPS. Existing source
+pins in archived campaigns remain unchanged; repeat runtime checks and record
+version differences before collecting new evidence.
+
 ```shell
 conda env create -f environment.yml
 conda activate nb-ramen
