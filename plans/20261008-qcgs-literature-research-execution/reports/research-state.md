@@ -8,7 +8,7 @@
 
 ## Stage and question
 
-P0 state reconstruction, P1 bounded literature mapping, and P2a source inspection are complete. P2 scientific protocol is being frozen. P3 code, smoke and scored campaigns remain unlaunched.
+P0 state reconstruction, P1 bounded literature mapping, and P2a source inspection are complete. P2 scientific protocol v1.1 is frozen after the independent consistency audit; P3 code review, smoke and scored campaigns remain unlaunched.
 
 The current candidate question is narrower than generic TTA method selection: within one fixed Ramen query, cache snapshot, update rule and legal same-pseudo-class one-support-swap set, do label-free observations or exact post-update objective changes rank that query's supervised CE utility? This is provisional pending the current literature comparison. It does not claim a general theorem about identifying the best TTA action across deployment worlds.
 
