@@ -287,6 +287,29 @@ class ScorerBoundaryAndParityTests(unittest.TestCase):
         torch.testing.assert_close(cache.values, reference.values, rtol=0, atol=0)
         torch.testing.assert_close(cache.priorities, reference.priorities, rtol=0, atol=0)
 
+    def test_view_logits_use_one_query_per_forward_independent_of_schedule_batch(self):
+        x, _, _ = make_batch()
+        probe = make_exact_probe()
+        view_tensors = [[x[row] for _ in range(8)] for row in (0, 1)]
+        observed_batch_sizes = []
+        original_featurize = probe.model.featurize
+
+        def record_batch_size(values):
+            observed_batch_sizes.append(values.shape[0])
+            return original_featurize(values)
+
+        with patch.object(probe.model, "featurize", side_effect=record_batch_size):
+            combined = probe._view_logits([0, 1], view_tensors)
+        self.assertEqual(observed_batch_sizes, [8, 8])
+
+        individual = []
+        for row in range(2):
+            with patch.object(probe.model, "featurize", wraps=probe.model.featurize) as featurize:
+                individual.append(probe._view_logits([row], [view_tensors[row]]))
+                self.assertEqual(featurize.call_count, 1)
+                self.assertEqual(featurize.call_args.args[0].shape[0], 8)
+        torch.testing.assert_close(combined, torch.cat(individual, dim=0), rtol=0, atol=0)
+
     def test_real_scorer_exhaustive_actions_labels_isolation_reset_and_cache_parity(self):
         x, pixels, preprocess = make_batch()
         probe, baseline = make_exact_probe(), make_ramen_baseline()

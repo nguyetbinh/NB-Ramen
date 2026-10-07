@@ -78,8 +78,8 @@ Implementation vẫn phục vụ synthesis §24: đo exact objective-to-utility 
 
 - Protocol/config/validator v1.2 đã commit ở `5f486e4ada84fb5b6a1c4794c3a00dc9015654d5` (`src/` archive SHA-256 `bd8404099e12d4094166cfe171f1385305fd0cfee22b85f95288de9273a038ef`). Focused exact-objective suite: 36 pass; syntax/JSON/diff checks pass; targeted read-only review không còn finding. Profile runs chưa chạy.
 - Registry regression nhận complete smoke peaks `8,358,872,576` và `8,368,574,976` bytes, ghi chúng vào provenance và tách receipt source/protocol v1.1 khỏi active v1.2 policy. Builder thử trực tiếp receipts cũ nhận peak nhưng scan 600 rows chưa đủ quota ở OOD=0: thiếu 8 Stage-A và 51 Stage-B IDs; quy tắc scan yêu cầu mở rộng lên 1.200 rows/cell.
-- Component profiler đã thêm cho cost-only smoke; GPU profile chưa chạy. Thử nghiệm CPU tối ưu forward từng query bị loại vì logits không bitwise-equal với batch gốc; production path giữ forward full-batch. Chi tiết ở [resource-policy revision](reports/resource-policy-revision.md).
-- Chưa có scientific registry/launch lock, Stage-A outcomes hoặc scientific decision. Next: commit v1.2 instrument, profile cost-only smokes trên excluded IDs, optimize chỉ bottleneck đo được với parity, run 1.200-row scans, freeze registry/lock, launch Stage A.
+- Hai v1.2 profile-only runs r1 trên excluded IDs đã hoàn tất và qua scorer/provenance audit. Full-batch action forward chiếm phần lớn GPU component time; không có speed optimization exact nào được chọn. Candidate losses khớp smoke cũ bitwise, nhưng baseline MEMO entropy lệch theo kích thước batch view. Code hiện sửa baseline/candidate view forward về một query mỗi lần và có regression test; focused suite 37 tests pass. Cần commit fix và chạy lại profile pair dưới source mới trước scans. Chi tiết/hashes ở [resource-policy revision](reports/resource-policy-revision.md).
+- Chưa có scientific registry/launch lock, Stage-A outcomes hoặc scientific decision. Next: commit view-parity fix, rerun cost-only profiles, run 1.200-row scans, freeze registry/lock, launch Stage A.
 
 ## 2. Phạm vi và nguyên tắc thực thi
 
@@ -237,16 +237,17 @@ Module: [Instrument](../../.agents/skills/research-orchestrator/references/build
 |---|---|
 | Grouped isolation check chỉ lấy mẫu hai query đầu của action đầu. | Đã ghi `action_chunk_isolation_scope` và số forward checks trong raw receipt. CPU regression so sánh kết quả chunked/serial cho toàn bộ action/query fixture. Launch config mặc định chunk 1. CUDA receipt vẫn phải báo số check thực và không gọi sampled check là exhaustive. |
 | Raw audit không giữ tất cả objective tensors để tính lại từng raw value. | Đã thêm independent direct-formula replay trên tensor logits/view logits/feature/caption bank ở mọi baseline/action scorer call trong deterministic fixture; mapping caption bank so với per-row Ramen predictions được assert. Raw campaign analyzer vẫn xác minh scalar arithmetic, hashes và source/config/protocol provenance; report nêu rõ nó không dựng lại mọi tensor objective từ JSONL. |
-| Cost trên CLIP CUDA/8 GiB. | Hai v1.1 smokes hoàn chỉnh trong `35:08`, với 485 / 850 legal swaps/query; peaks `8,358,872,576` / `8,368,574,976` bytes nay là report-only. New v1.2 component profile chưa chạy; Stage-A compute estimate chưa khóa. |
+| Cost trên CLIP CUDA/8 GiB. | Hai v1.1 smokes hoàn chỉnh trong `35:08`, với 485 / 850 legal swaps/query; peaks `8,358,872,576` / `8,368,574,976` bytes nay là report-only. V1.2 r1 profiles đo full-batch candidate forwards `298.5` / `541.9` GPU seconds mỗi query; Stage-A compute estimate chưa khóa. Rerun profiles sau per-query view-parity fix, rồi khóa estimate. |
 | Stage B tính ba objective values dù chỉ lưu winner. | Chưa tối ưu trước `GO_CONFIRM`; đo cost smoke/Stage A và chỉ xem lại nếu đây là cost blocker. Bất kỳ thay đổi nào phải giữ winner score/selection và observation access theo protocol. |
 
 ### Thứ tự hoàn tất P3
 
 1. Reconcile source với v1.1 và disposition code-review findings; hoàn tất ở commit `04abdba` với fresh `gpt-6.1-sol`/low review không còn finding.
-2. Required suite pass (35 focused; 443 full, 1 skipped); implementation fix đã commit cùng source/protocol hashes và runtime differences.
-3. Reuse old v1.1 scans/smokes only with explicit source/protocol provenance. The 600-row prefix is quota-short, so run 1,200-row scans under the frozen v1.2 source/policy; preserve both the 600-row and earlier failed attempts.
-4. Run one profile-only query per OOD cell on already excluded smoke IDs. Optimize only a measured bottleneck and keep exact action/view/formula coverage and bitwise batch parity; reprofile a changed execution path on the same workload.
-5. Freeze registry, exact CLI, source/config/protocol/transform hashes, smoke receipt và unique run IDs trong launch lock; cập nhật live state/readiness. Chỉ sau đó mở scored Stage A.
+2. Resource-policy/provenance/profiler commit `f060944` và the first corrected v1.2 profile pair are complete. The measured full-batch candidate forward dominates; retain it because target-only forwarding failed bitwise parity.
+3. The profile found a schedule-batch-dependent baseline MEMO value. Fix `_view_logits` to use one query per forward for baseline and candidates, add regression, pass the focused 37-test suite, and commit before continuing.
+4. Rerun one profile-only query per OOD cell on already excluded smoke IDs under the committed fix. Keep timing scope/cost receipts; do not introduce an unmeasured speed optimization.
+5. Reuse old v1.1 scans/smokes only with explicit source/protocol provenance. The 600-row prefix is quota-short, so run 1,200-row scans under the frozen v1.2 source/policy; preserve both the 600-row and earlier failed attempts.
+6. Freeze registry, exact CLI, source/config/protocol/transform hashes, smoke receipt and unique run IDs in the launch lock; update live state/readiness. Only then open scored Stage A.
 
 - [x] Inspect `src/evaluation/oracle_support_utility.py`, `src/runtime/query_gradient_registry.py`, existing diagnostic/notebook paths và relevant configs; xác định phần reuse và sửa tối thiểu cần để đo exact objectives.
 - [x] Ghi action records đủ tái tính: query/action opaque keys, candidate snapshot/hash, baseline/action outcomes cho objective, evaluator CE/predictions riêng, valid/undefined reasons và costs.
@@ -275,7 +276,7 @@ PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py'
 
 Module: [Research loop](../../.agents/skills/research-orchestrator/references/run-research-loop.md). Budget đúng launch plan P2/P3; lưu actual costs và failed attempts.
 
-**Trạng thái:** not started. v1.2 allows high complete-run peaks, but component profile, 1,200-row quota scans, scientific registry and launch lock remain unfinished. No Stage-A outcome or scientific result exists.
+**Trạng thái:** not started. v1.2 allows high complete-run peaks. Preliminary cost-only profiles completed, but their baseline MEMO batch-shape finding has a tested working-tree fix that must be committed and reprofiled. The 1,200-row quota scans, scientific registry and launch lock remain unfinished. No Stage-A outcome or scientific result exists.
 
 **Bước kế tiếp sau P3:** chỉ launch Stage A 16 registered queries/cell và ba objectives đã freeze. `GO_CONFIRM` chọn một winner theo protocol trước khi mở Stage B 128 fresh queries/cell. `GO_P6` chỉ có sau independent Stage-B confirmation; Stage-A screening không trực tiếp mở estimator design.
 
@@ -382,13 +383,13 @@ These checkboxes record the previous resource-gate handoff only; they do not com
 ## 14. Execution history — v1.1 resource-gate snapshot (superseded)
 
 1. Reconciled implementation với protocol v1.1, user-edited plan và worktree/source state; P0–P2 reports và registry partition check được tái sử dụng.
-2. Fresh targeted source review, cache-memory regressions, 35 focused tests và 443-test full suite (1 skipped) hoàn tất; implementation fix được commit trước các GPU checks.
-3. Hai unscored scans và hai smoke cells chạy serial trên GPU theo locks/configs riêng. Coverage/provenance/parity receipts complete, nhưng memory cap fail trên cả hai cells; time cap pass. Mọi attempts và builder rejection được giữ.
-4. Under v1.1 the memory gate stopped registry construction before Stage A. Its rejection and `INCONCLUSIVE/resource` handoff are retained as history; the user’s v1.2 revision supersedes that decision.
+2. Fresh targeted source review, cache-memory regressions, 35 focused tests và 443-test full suite (1 skipped) hoàn tất; implementation fix được commit trước các v1.1 GPU checks.
+3. Hai v1.1 unscored scans và hai smoke cells chạy serial trên GPU theo locks/configs riêng. Coverage/provenance/parity receipts complete; old memory rejection and all attempts remain historical. Under v1.2, peak is report-only.
+4. The corrected v1.2 profile pair is complete and cost-only. It exposed batch-size-dependent baseline MEMO arithmetic; the working tree now fixes this with per-query view forwards and a 37-test focused pass. Commit the fix and rerun profiles before 1,200-row scans.
 
 ## 15. Current execution order — v1.2
 
-1. Commit the resource-policy, legacy-provenance and component-profile changes after the targeted review and focused validation.
-2. Run cost-only profile smoke jobs on already excluded IDs; record per-batch component timings and decide whether measured bottlenecks justify a parity-preserving optimization.
+1. Commit the per-query baseline/candidate view-forward parity fix with its regression and updated cost-profile decision.
+2. Rerun cost-only profile smoke jobs on excluded IDs under that committed source; preserve per-batch cost receipts and apply no unmeasured optimization.
 3. Run 1,200-row unscored scans in both cells, validate eligibility/quota and build the current registry with separate v1.1 smoke receipt provenance.
 4. Freeze the launch lock and run Stage A 16 queries/cell within ≤8 GPU-hours/cell and ≤16 total. Analyze raw records; only `GO_CONFIRM` opens Stage B, and only Stage-B `GO_P6` opens P6.

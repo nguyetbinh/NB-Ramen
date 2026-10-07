@@ -387,9 +387,13 @@ class QCGSExactObjectiveAudit(Ramen):
 
     def _view_logits(self, source_rows, view_tensors):
         results = []
-        max_rows = min(12, self.cfg.get("max_batch_size", 100) // 8)
-        if max_rows < 1:
+        if self.cfg.get("max_batch_size", 100) < 8:
             raise ValueError("max adapted batch size must fit all eight views")
+        # Keep each query's eight-view forward independent of which neighboring
+        # queries are scheduled together. Candidate actions use action chunks
+        # that may be smaller than the baseline batch, and CUDA kernels can
+        # produce shape-dependent rounding when those batch sizes differ.
+        max_rows = 1
         snapshots = self._capture_packed_source_rows(source_rows)
         for start in range(0, len(source_rows), max_rows):
             rows = source_rows[start:start + max_rows]
@@ -610,7 +614,6 @@ class QCGSExactObjectiveAudit(Ramen):
         view_forward_calls = 0
         action_forward_calls = 0
         grouped_isolation_forwards = 0
-        view_query_chunk = min(12, self.cfg.get("max_batch_size", 100) // 8)
         action_started = time.perf_counter()
         for action_index in range(max_actions):
             active_jobs = [job for job in jobs if action_index < len(job["swaps"])]
@@ -633,7 +636,7 @@ class QCGSExactObjectiveAudit(Ramen):
                 view_forward_event = self._profile_event_start()
                 action_view_logits = self._view_logits(active_rows, packed_views)
                 self._profile_event_stop("candidate_view_forward_gpu_ms", view_forward_event)
-                view_forward_calls += (len(chunk) + view_query_chunk - 1) // view_query_chunk
+                view_forward_calls += len(chunk)
                 self.forward_counts["action_view_rows"] += len(chunk) * 8
                 for position, job in enumerate(chunk):
                     row = job["row"]
