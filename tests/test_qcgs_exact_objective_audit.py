@@ -194,6 +194,76 @@ def make_ramen_baseline():
 
 
 class ScorerBoundaryAndParityTests(unittest.TestCase):
+    def test_audit_constructor_uses_lazy_cache_without_eager_priority_allocations(self):
+        cfg = exact_cfg("scan")
+        cfg["clip_logit_scale"] = 100.0
+        args = SimpleNamespace(config=cfg)
+        datasets = SimpleNamespace(num_classes=80, classes=list(range(80)))
+        model = nn.Linear(2, 2)
+
+        with patch("methods.Ramen.CLIPModelForBySampleTTA", return_value=TinyExactCLIP()), \
+             patch("methods.Ramen.PriorityCache", side_effect=AssertionError("eager cache allocated")):
+            audit = QCGSExactObjectiveAudit(model, datasets, args)
+
+        self.assertEqual(len(audit.cache), 80)
+        self.assertTrue(all(isinstance(cache, IdentityCache) for cache in audit.cache))
+        self.assertTrue(all(cache.keys.shape[0] == 0 for cache in audit.cache))
+
+    def test_identity_cache_grows_lazily_and_matches_priority_cache(self):
+        capacity = 750
+        device = torch.device("cpu")
+        dtype = torch.float16
+        cache = IdentityCache(capacity, 3, 5, device, dtype)
+        reference = PriorityCache(capacity, 3, 5, device, dtype)
+        reference_ids = [None] * capacity
+
+        for index in range(capacity + 1):
+            key = torch.tensor([index, index + 1, index + 2], dtype=torch.float32)
+            value = torch.arange(5, dtype=torch.float32) + index
+            entropy = torch.tensor(index / 1000, dtype=torch.float32)
+            priority = torch.tensor(index % 997, dtype=torch.float32)
+            identity = {"timestep": index, "sample_idx": index}
+            target = reference.size if reference.size < capacity else int(reference.priorities.argmin())
+            admitted = (reference.size < capacity or bool(priority > reference.priorities[target]))
+            reference.add(key, value, entropy.reshape(1), priority.reshape(1))
+            if admitted:
+                reference_ids[target] = identity
+            cache.add_identity(key, value, entropy, priority, identity)
+            if index == 19:
+                self.assertLess(cache.keys.shape[0], capacity)
+
+        self.assertEqual(cache.size, reference.size)
+        self.assertEqual(cache.identities, reference_ids)
+        for name in ("keys", "values", "entropies", "priorities"):
+            torch.testing.assert_close(getattr(cache, name)[:cache.size],
+                                       getattr(reference, name)[:reference.size], rtol=0, atol=0)
+        allocated_capacity = cache.keys.shape[0]
+        cache.reset()
+        self.assertEqual(cache.size, 0)
+        self.assertTrue(all(identity is None for identity in cache.identities))
+        self.assertEqual(cache.keys.shape[0], allocated_capacity)
+
+    def test_identity_cache_compares_unrounded_priority_like_priority_cache(self):
+        cache = IdentityCache(1, 1, 1, "cpu", torch.float16)
+        reference = PriorityCache(1, 1, 1, "cpu", torch.float16)
+        entries = ((1.0, "kept-first"), (1.0001, "kept-second"), (1.0, "equal-priority-tie"))
+        for key_value, (priority_value, identity) in enumerate(entries):
+            key = torch.tensor([key_value], dtype=torch.float32)
+            value = torch.tensor([key_value], dtype=torch.float32)
+            entropy = torch.tensor([0.0], dtype=torch.float32)
+            priority = torch.tensor([priority_value], dtype=torch.float32)
+            target = int(reference.priorities.argmin()) if reference.size == 1 else 0
+            admitted = reference.size == 0 or bool(priority[0] > reference.priorities[target])
+            reference.add(key, value, entropy, priority)
+            cache.add_identity(key, value, entropy[0], priority[0], identity)
+            if admitted:
+                expected_identity = identity
+
+        self.assertEqual(cache.identities, [expected_identity])
+        torch.testing.assert_close(cache.keys, reference.keys, rtol=0, atol=0)
+        torch.testing.assert_close(cache.values, reference.values, rtol=0, atol=0)
+        torch.testing.assert_close(cache.priorities, reference.priorities, rtol=0, atol=0)
+
     def test_real_scorer_exhaustive_actions_labels_isolation_reset_and_cache_parity(self):
         x, pixels, preprocess = make_batch()
         probe, baseline = make_exact_probe(), make_ramen_baseline()

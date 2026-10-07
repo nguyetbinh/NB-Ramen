@@ -43,15 +43,65 @@ def preprocess_spec(transform):
 class IdentityCache(PriorityCache):
     """Ramen cache with opaque stream identities, never evaluator metadata."""
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, max_capacity, key_dim, value_dim, device, dtype):
+        # The exact audit never observes more than the scanned prefix, which
+        # can be far smaller than 750 supports times all 80 pseudo-classes.
+        # Allocate storage geometrically as samples are admitted while keeping
+        # the same logical per-class capacity and priority eviction rule.
+        self.max_capacity = max_capacity
+        self.key_dim = key_dim
+        self.value_dim = value_dim
+        self.device = device
+        self.dtype = dtype
+        self.keys = torch.empty((0, key_dim), device=device, dtype=dtype)
+        self.values = torch.empty((0, value_dim), device=device, dtype=dtype)
+        self.priorities = torch.empty((0,), device=device, dtype=dtype)
+        self.entropies = torch.empty((0,), device=device, dtype=dtype)
+        self.size = 0
         self.identities = [None] * self.max_capacity
 
+    def _ensure_capacity(self, required):
+        current = self.keys.shape[0]
+        if required <= current:
+            return
+        target = min(self.max_capacity, max(required, 16 if current == 0 else current * 2))
+        keys = torch.empty((target, self.key_dim), device=self.device, dtype=self.dtype)
+        values = torch.empty((target, self.value_dim), device=self.device, dtype=self.dtype)
+        priorities = torch.full((target,), float('-inf'), device=self.device, dtype=self.dtype)
+        entropies = torch.full((target,), float('inf'), device=self.device, dtype=self.dtype)
+        if self.size:
+            keys[:self.size].copy_(self.keys[:self.size])
+            values[:self.size].copy_(self.values[:self.size])
+            priorities[:self.size].copy_(self.priorities[:self.size])
+            entropies[:self.size].copy_(self.entropies[:self.size])
+        self.keys, self.values = keys, values
+        self.priorities, self.entropies = priorities, entropies
+
     def add_identity(self, key, value, entropy, priority, identity):
-        target = self.size if self.size < self.max_capacity else int(self.priorities.argmin())
-        admitted = self.size < self.max_capacity or bool(priority > self.priorities[target])
-        super().add(key, value, entropy.reshape(1), priority.reshape(1))
-        if admitted:
+        key = key.detach().to(device=self.device, dtype=self.dtype).reshape(-1)
+        value = value.detach().to(device=self.device, dtype=self.dtype).reshape(-1)
+        entropy = entropy.detach().to(device=self.device, dtype=self.dtype).reshape(())
+        # PriorityCache compares the incoming priority in its original dtype,
+        # then casts only when assigning it to the backing cache tensor.
+        compare_priority = priority.detach().to(device=self.device).reshape(())
+        if key.numel() != self.key_dim or value.numel() != self.value_dim:
+            raise ValueError("identity cache key/value dimension mismatch")
+        if self.size < self.max_capacity:
+            target = self.size
+            self._ensure_capacity(target + 1)
+            self.keys[target] = key
+            self.values[target] = value
+            self.entropies[target] = entropy
+            self.priorities[target] = priority
+            self.size += 1
+            self.identities[target] = identity
+            return
+        target = int(self.priorities.argmin())
+        if bool(compare_priority > self.priorities[target]):
+            self.keys[target] = key
+            self.values[target] = value
+            self.entropies[target] = entropy
+            self.priorities[target] = compare_priority
             self.identities[target] = identity
 
     def reset(self):
@@ -90,9 +140,11 @@ class QCGSExactObjectiveAudit(Ramen):
         super().__init__(model, datasets, args)
         if self.num_classes != 80:
             raise ValueError("exact-objective audit requires the locked 80-known-class label space")
-        self.cache = [IdentityCache(cfg["max_capacity"], self.feat_dim, self.grad_dim,
-                                    self.device, self.dtype) for _ in self.cache]
         self._initialize_audit(args)
+
+    def _make_cache(self):
+        return IdentityCache(self.cfg["max_capacity"], self.feat_dim, self.grad_dim,
+                             self.device, self.dtype)
 
     def _initialize_audit(self, args):
         self.mode = self.cfg.get("qcgs_mode", "scan")

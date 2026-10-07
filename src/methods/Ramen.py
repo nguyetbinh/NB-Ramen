@@ -133,13 +133,16 @@ class Ramen(TTABase):
         self.loss_fn = lambda logits: softmax_entropy(logits, reduction='sum')
         # use sum since we compute by-sample gradient
 
-        self.cache = [PriorityCache(max_capacity=self.cfg['max_capacity'],
-                                    key_dim=self.feat_dim, value_dim=self.grad_dim,
-                                    device=self.device, dtype=self.dtype)
-                      for c in range(self.num_classes)]
+        self.cache = [self._make_cache() for _ in range(self.num_classes)]
 
         self.counter = 0
         self.last_diagnostics = {}
+
+    def _make_cache(self):
+        """Construct one cache; subclasses can preserve their cache contract."""
+        return PriorityCache(max_capacity=self.cfg['max_capacity'],
+                             key_dim=self.feat_dim, value_dim=self.grad_dim,
+                             device=self.device, dtype=self.dtype)
 
     @property
     def memory_bytes(self) -> int:
