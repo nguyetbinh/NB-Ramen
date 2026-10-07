@@ -126,6 +126,8 @@ class QCGSExactObjectiveAudit(Ramen):
 
     def __init__(self, model, datasets, args):
         cfg = args.config
+        if cfg.get("peak_memory_policy") != "report_only":
+            raise ValueError("exact-objective audit requires report-only peak-memory policy")
         if cfg.get("optimizer") != "signsgd" or cfg.get("lr") != 0.01:
             raise ValueError("exact-objective audit requires frozen state-free SignSGD at lr=.01")
         if (cfg.get("topk"), cfg.get("candidate_m"), cfg.get("max_capacity"), cfg.get("beta")) != (5, 10, 750, 5.0):
@@ -148,6 +150,12 @@ class QCGSExactObjectiveAudit(Ramen):
 
     def _initialize_audit(self, args):
         self.mode = self.cfg.get("qcgs_mode", "scan")
+        self.profile_cost_components = bool(self.cfg.get("profile_cost_components", False))
+        self.profile_only = bool(self.cfg.get("profile_only", False))
+        if self.profile_cost_components and self.mode != "smoke":
+            raise ValueError("component profiling is restricted to cost-only smoke runs")
+        if self.profile_only and (self.mode != "smoke" or not self.profile_cost_components):
+            raise ValueError("profile-only jobs must be cost-profiled smoke runs")
         if self.mode not in ("scan", "smoke", "stage-a", "stage-b"):
             raise ValueError("invalid exact-objective audit mode")
         self.objective_stage = self.cfg.get("objective_stage", "all")
@@ -193,8 +201,9 @@ class QCGSExactObjectiveAudit(Ramen):
             raise ValueError("Stage A must score exactly 16 registered queries")
         if self.mode == "stage-b" and len(self.query_schedule) != 128:
             raise ValueError("Stage B must score exactly 128 registered queries")
-        if self.mode == "smoke" and len(self.query_schedule) != 2:
-            raise ValueError("smoke mode requires two separately registered queries per cell")
+        if self.mode == "smoke" and ((not self.profile_only and len(self.query_schedule) != 2) or
+                                      (self.profile_only and len(self.query_schedule) != 1)):
+            raise ValueError("smoke mode requires two queries, or one explicitly profile-only query")
         self.identity = None
         self.raw_context = None
         self.view_state = {"view_spec": EXACT_VIEW_SPEC, "preprocess": None}
@@ -222,6 +231,58 @@ class QCGSExactObjectiveAudit(Ramen):
         self.view_state_sha256 = None
         self.forward_counts = {"ramen_full_batch": 0, "baseline_view_rows": 0,
                                "action_full_batch": 0, "action_view_rows": 0}
+        self._reset_profile_timers()
+
+    def _reset_profile_timers(self):
+        self._profile_wall_ms = {}
+        self._profile_cuda_events = {}
+        self.profile_components_ms = {}
+        self.profile_record_hash_ms = 0.0
+
+    def _profile_sync(self):
+        if self.profile_cost_components and self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+
+    def _profile_wall_start(self):
+        if not self.profile_cost_components:
+            return None
+        self._profile_sync()
+        return time.perf_counter()
+
+    def _profile_wall_stop(self, name, started):
+        if started is None:
+            return
+        self._profile_sync()
+        self._profile_wall_ms[name] = self._profile_wall_ms.get(name, 0.0) + (time.perf_counter() - started) * 1000.0
+
+    def _profile_event_start(self):
+        if not self.profile_cost_components:
+            return None
+        if self.device.type == "cuda":
+            event = torch.cuda.Event(enable_timing=True)
+            event.record()
+            return ("cuda", event)
+        return ("wall", time.perf_counter())
+
+    def _profile_event_stop(self, name, started):
+        if started is None:
+            return
+        kind, value = started
+        if kind == "cuda":
+            end = torch.cuda.Event(enable_timing=True)
+            end.record()
+            self._profile_cuda_events.setdefault(name, []).append((value, end))
+        else:
+            self._profile_wall_ms[name] = self._profile_wall_ms.get(name, 0.0) + (time.perf_counter() - value) * 1000.0
+
+    def _profile_finish(self):
+        if self._profile_cuda_events:
+            torch.cuda.synchronize(self.device)
+        result = dict(self._profile_wall_ms)
+        for name, events in self._profile_cuda_events.items():
+            result[name] = result.get(name, 0.0) + sum(start.elapsed_time(end) for start, end in events)
+        self.profile_components_ms = result
+        return result
 
     def set_query_identity(self, sample_indices):
         if self.identity is not None:
@@ -263,6 +324,7 @@ class QCGSExactObjectiveAudit(Ramen):
         self._written_scan_count = 0
         self.forward_counts = {"ramen_full_batch": 0, "baseline_view_rows": 0,
                                "action_full_batch": 0, "action_view_rows": 0}
+        self._reset_profile_timers()
 
     def forward(self, x):
         identity, self.identity = self.identity, None
@@ -387,9 +449,11 @@ class QCGSExactObjectiveAudit(Ramen):
     def _forward_exact(self, x):
         if len(x) != 100:
             raise ValueError("exact-objective audit requires complete 100-row Ramen batches")
+        self._reset_profile_timers()
         started = time.perf_counter()
         self._current_batch = x
         start = self.counter
+        baseline_forward_backward_started = self._profile_wall_start()
         features = self.model.featurize(x)
         logits = self.model.classify(features)
         predictions = logits.argmax(-1)
@@ -397,6 +461,7 @@ class QCGSExactObjectiveAudit(Ramen):
                                  "pre_adaptation_ood_score": -torch.logsumexp(logits.detach(), dim=1)}
         self.loss_fn(logits).backward()
         gradients = self.model.get_by_sample_grad().detach().clone()
+        self._profile_wall_stop("baseline_forward_backward_ms", baseline_forward_backward_started)
         with torch.no_grad():
             entropies = softmax_entropy(logits, reduction="none")
             priorities = torch.arange(start, start + len(x), device=self.device, dtype=self.dtype)
@@ -416,7 +481,9 @@ class QCGSExactObjectiveAudit(Ramen):
                 base += (values * weights.unsqueeze(2)).sum(1)
                 active_classes += 1
             base /= active_classes
+        baseline_output_started = self._profile_event_start()
         baseline, baseline_features = self._temporary_outputs(x, base)
+        self._profile_event_stop("baseline_adapted_output_gpu_ms", baseline_output_started)
         self.forward_counts["ramen_full_batch"] += 1
         if not torch.isfinite(base).all() or not torch.isfinite(baseline).all():
             raise ValueError("nonfinite exact-objective Ramen baseline")
@@ -468,7 +535,9 @@ class QCGSExactObjectiveAudit(Ramen):
             view_records[row] = record
         # θ_R view objectives use the exact Ramen parameter row copied to each
         # of its eight raw views. The ordinary output/cache have already been frozen.
+        baseline_view_started = self._profile_event_start()
         baseline_view_logits = self._view_logits(scheduled, view_tensors)
+        self._profile_event_stop("baseline_view_forward_gpu_ms", baseline_view_started)
         self.forward_counts["baseline_view_rows"] += len(scheduled) * 8
         baseline_predictions = baseline.argmax(-1)
         caption_ids = baseline_predictions.detach().cpu().tolist()
@@ -487,6 +556,7 @@ class QCGSExactObjectiveAudit(Ramen):
             raise ValueError("exact-objective baseline replay changed Ramen logits")
 
         jobs = []
+        candidate_prep_started = self._profile_wall_start()
         with torch.no_grad():
             for row in scheduled:
                 pools, candidate_pool = self._candidate_pools(features, row, retrieved)
@@ -502,10 +572,12 @@ class QCGSExactObjectiveAudit(Ramen):
                 action_records = []
                 packed_directions = []
                 for index, action in enumerate(swaps):
+                    aggregation_event = self._profile_event_start()
                     serial_gradient = aggregate_pools(pools, base[row], action)
                     vectorized_gradient = aggregate_swaps(pools, base[row], [action])[0]
                     if not torch.equal(serial_gradient, vectorized_gradient):
                         raise ValueError("vectorized candidate aggregate differs from serial Ramen arithmetic")
+                    self._profile_event_stop("candidate_gradient_aggregation_gpu_ms", aggregation_event)
                     pool = pools[action["class"]]
                     direction = _pack_signs(serial_gradient) if self.mode == "stage-a" else None
                     if direction is not None:
@@ -532,6 +604,7 @@ class QCGSExactObjectiveAudit(Ramen):
                              "baseline_objectives": baseline_objectives[row],
                              "view_tensors": view_tensors[scheduled.index(row)],
                              "view_record": view_records[row]})
+        self._profile_wall_stop("candidate_enumeration_hash_wall_ms", candidate_prep_started)
 
         max_actions = max(len(job["swaps"]) for job in jobs)
         view_forward_calls = 0
@@ -546,21 +619,30 @@ class QCGSExactObjectiveAudit(Ramen):
                 trial_gradient = base.clone()
                 for job in chunk:
                     action = job["swaps"][action_index]
-                    trial_gradient[job["row"]] = aggregate_pools(job["pools"], base[job["row"]], action)
+                    aggregation_event = self._profile_event_start()
+                    trial_gradient[job["row"]] = aggregate_pools(
+                        job["pools"], base[job["row"]], action)
+                    self._profile_event_stop("candidate_gradient_aggregation_gpu_ms", aggregation_event)
+                action_forward_event = self._profile_event_start()
                 trial_logits, trial_features = self._temporary_outputs(x, trial_gradient)
+                self._profile_event_stop("candidate_full_batch_action_forward_gpu_ms", action_forward_event)
                 action_forward_calls += 1
                 self.forward_counts["action_full_batch"] += 1
                 active_rows = [job["row"] for job in chunk]
                 packed_views = [job["view_tensors"] for job in chunk]
+                view_forward_event = self._profile_event_start()
                 action_view_logits = self._view_logits(active_rows, packed_views)
+                self._profile_event_stop("candidate_view_forward_gpu_ms", view_forward_event)
                 view_forward_calls += (len(chunk) + view_query_chunk - 1) // view_query_chunk
                 self.forward_counts["action_view_rows"] += len(chunk) * 8
                 for position, job in enumerate(chunk):
                     row = job["row"]
                     job["trial_logits"][action_index] = trial_logits[row].detach().float().cpu()
+                    objective_event = self._profile_event_start()
                     job["trial_objectives"][action_index] = objective_values(
                         trial_logits[row], action_view_logits[position], trial_features[row],
                         caption_bank, self.clip_logit_scale)
+                    self._profile_event_stop("candidate_objective_compute_gpu_ms", objective_event)
                 if (action_index == 0 and chunk_start == 0 and
                         getattr(self.model, "model_type", None) == "vit" and len(chunk) > 1):
                     for job in chunk[:2]:
@@ -579,9 +661,12 @@ class QCGSExactObjectiveAudit(Ramen):
         cache_snapshot_end = self._cache_membership_snapshot()
         if cache_snapshot_end != cache_snapshot_sha:
             raise ValueError("exact action trials changed Ramen cache membership/history")
+        self._profile_sync()
         scoring_ms = (time.perf_counter() - action_started) * 1000.0
+        component_timing_ms = self._profile_finish() if self.profile_cost_components else {}
         for job in jobs:
             row = job["row"]
+            record_assembly_started = self._profile_wall_start()
             objective_vectors = {name: [] for name in self.score_names}
             for index, action_record in enumerate(job["action_records"]):
                 values = job["trial_objectives"][index]
@@ -603,7 +688,7 @@ class QCGSExactObjectiveAudit(Ramen):
                             "batch": (start + row) // 100, "block": (start + row) // 64,
                             "batch_row": row}
             record = {
-                "schema_version": self.schema_version, "protocol": "qcgs-exact-objective-audit-v1.1",
+                "schema_version": self.schema_version, "protocol": "qcgs-exact-objective-audit-v1.2",
                 "stage": self.mode, "query": row_identity,
                 "dataset_fingerprint": self.fingerprint, "source_revision": self.source_revision,
                 "registry_source_revision": self.registry_source_revision,
@@ -640,7 +725,7 @@ class QCGSExactObjectiveAudit(Ramen):
                                "serial_no_grouped_queries" if self.cfg["action_chunk_size"] == 1 else
                                "single_query_chunk_no_grouping" if len(jobs) <= 1 else
                                "first_action_first_chunk_first_two_queries"),
-                           "ordinary_ramen_logits_returned": True},
+                "ordinary_ramen_logits_returned": True},
                 "costs": {"retrieval_batch_ms": retrieval_ms, "candidate_action_ms": scoring_ms,
                           "candidate_trial_count": len(job["swaps"]),
                           "full_batch_action_forwards_batch": action_forward_calls,
@@ -653,7 +738,17 @@ class QCGSExactObjectiveAudit(Ramen):
                           "peak_device_memory_bytes": (self.device_memory_summary()["bytes"]
                               if self.device.type == "cuda" and hasattr(self, "device_memory_summary") else None)},
             }
+            if self.profile_cost_components:
+                self._profile_wall_stop("scorer_record_assembly_wall_ms", record_assembly_started)
+                record["costs"]["profile_components_ms"] = {
+                    **component_timing_ms,
+                    "scorer_record_assembly_wall_ms": self._profile_wall_ms.get(
+                        "scorer_record_assembly_wall_ms", 0.0),
+                }
+            record_hash_started = time.perf_counter() if self.profile_cost_components else None
             record["record_sha256"] = digest(record)
+            if record_hash_started is not None:
+                self.profile_record_hash_ms += (time.perf_counter() - record_hash_started) * 1000.0
             self.action_rows.append(record)
             evaluator_actions = []
             for index, action_record in enumerate(job["action_records"]):

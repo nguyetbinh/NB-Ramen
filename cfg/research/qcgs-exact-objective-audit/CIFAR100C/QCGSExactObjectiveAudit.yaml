@@ -5,6 +5,8 @@ optimizer: signsgd
 lr: 0.01
 topk: 5
 action_chunk_size: 1
+peak_memory_policy: report_only
+profile_cost_components: false
 qcgs_mode: scan
 objective_stage: all
 query_schedule: []

@@ -11,6 +11,8 @@ CELLS = ("0", "0.5")
 EXACT_OBJECTIVE_NAMESPACE = "qcgs-exact-objective-audit-v1"
 EXACT_OBJECTIVE_STAGES = {"stage-a": 16, "stage-b": 128}
 EXACT_OBJECTIVE_SCAN_CAPS = (600, 1200, 2400, 4800, 6000)
+EXACT_OBJECTIVE_PROTOCOL = "qcgs-exact-objective-audit-v1.2"
+EXACT_OBJECTIVE_LEGACY_PROTOCOL_SHA256 = "f4c4ad4b9221da9293915c9b9009e5517c63ee087cbe60cb597db6a04da3d860"
 
 
 def digest(value):
@@ -197,11 +199,39 @@ def validate_exact_objective_registry(value):
         raise ValueError("invalid exact-objective source revision")
     if set(value["cells"]) != set(CELLS):
         raise ValueError("exact-objective registry cell mismatch")
-    chunk_size = value.get("provenance", {}).get("action_chunk_size")
+    provenance = value.get("provenance", {})
+    if provenance.get("active_protocol") != EXACT_OBJECTIVE_PROTOCOL:
+        raise ValueError("exact-objective registry active protocol mismatch")
+    protocol_path = Path(__file__).resolve().parents[2] / "docs/research/qcgs-exact-label-free-objective-audit.md"
+    if provenance.get("active_protocol_sha256") != file_sha(protocol_path):
+        raise ValueError("exact-objective registry protocol hash differs from the current protocol")
+    if provenance.get("peak_memory_policy") != "report_only":
+        raise ValueError("exact-objective registry must use report-only peak memory policy")
+    for key in ("scan_source_revision", "smoke_source_revision"):
+        revision = provenance.get(key)
+        if (not isinstance(revision, str) or len(revision) != 40 or
+                any(char not in "0123456789abcdef" for char in revision)):
+            raise ValueError("exact-objective registry lacks valid " + key)
+    current_protocol_sha = file_sha(protocol_path)
+    for key in ("scan_protocol_sha256", "smoke_protocol_sha256"):
+        protocol_sha = provenance.get(key)
+        if protocol_sha not in (current_protocol_sha, EXACT_OBJECTIVE_LEGACY_PROTOCOL_SHA256):
+            raise ValueError("exact-objective registry has unsupported reused " + key)
+    peak_by_cell = provenance.get("smoke_peak_device_memory_bytes")
+    peaks_by_query = provenance.get("smoke_peak_device_memory_by_query_bytes")
+    if set(peak_by_cell or {}) != set(CELLS) or set(peaks_by_query or {}) != set(CELLS):
+        raise ValueError("exact-objective registry lacks report-only smoke peak measurements")
+    for cell in CELLS:
+        peaks = peaks_by_query[cell]
+        if (not isinstance(peaks, list) or len(peaks) != 2 or
+                any(type(peak) is not int or peak < 0 for peak in peaks) or
+                type(peak_by_cell[cell]) is not int or peak_by_cell[cell] != max(peaks)):
+            raise ValueError("exact-objective registry smoke peak measurement is invalid")
+    chunk_size = provenance.get("action_chunk_size")
     if type(chunk_size) is not int or chunk_size <= 0:
         raise ValueError("exact-objective registry lacks the smoke-locked action chunk size")
     for key in ("view_state_sha256", "parameter_order_sha256"):
-        locked_hash = value.get("provenance", {}).get(key)
+        locked_hash = provenance.get(key)
         if not isinstance(locked_hash, str) or len(locked_hash) != 64 or any(
                 char not in "0123456789abcdef" for char in locked_hash):
             raise ValueError("exact-objective registry lacks smoke-locked " + key)

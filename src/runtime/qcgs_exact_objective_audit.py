@@ -278,7 +278,8 @@ def _verify_committed_stage_a_decision(analysis, analysis_path, evidence_dir, re
     return recomputed, head
 
 
-def _scan_run(run_dir, *, cell=None, fingerprint=None, source_revision=None):
+def _scan_run(run_dir, *, cell=None, fingerprint=None, source_revision=None,
+              expected_protocol_sha256=None):
     root = Path(run_dir)
     scanner = read_jsonl(root / "qcgs-exact-scan.jsonl")
     trace = read_jsonl(root / "trace.jsonl")
@@ -301,7 +302,8 @@ def _scan_run(run_dir, *, cell=None, fingerprint=None, source_revision=None):
         raise ValueError("scan row count must follow 600-row doubling, capped at 6000")
     if cell is not None:
         from evaluation.qcgs_exact_objective_audit import audit_run_provenance
-        receipt = audit_run_provenance(root, [], [])
+        receipt = audit_run_provenance(root, [], [],
+                                       expected_protocol_sha256=expected_protocol_sha256)
         manifest = json.loads((root / "manifest.json").read_text())
         config = manifest["config"]
         if (receipt["ood_cell"] != cell or receipt["dataset_fingerprint"] != fingerprint or
@@ -365,24 +367,47 @@ def validate_smoke_registry(value):
 
 
 def build_registry(scan_runs, smoke_registry, smoke_runs, fingerprint, source_revision,
-                   historical_path=HISTORICAL_EXCLUSIONS):
+                   historical_path=HISTORICAL_EXCLUSIONS, *, scan_source_revision=None,
+                   smoke_source_revision=None, scan_protocol_sha256=None,
+                   smoke_protocol_sha256=None):
     validate_smoke_registry(smoke_registry)
     if set(scan_runs) != set(CELLS) or set(smoke_runs) != set(CELLS):
         raise ValueError("scientific registry requires scans and smoke runs for both cells")
+    scan_source_revision = scan_source_revision or source_revision
+    smoke_source_revision = smoke_source_revision or source_revision
+    active_protocol_sha256 = file_sha(ROOT / "docs/research/qcgs-exact-label-free-objective-audit.md")
+    scan_protocol_sha256 = scan_protocol_sha256 or active_protocol_sha256
+    smoke_protocol_sha256 = smoke_protocol_sha256 or active_protocol_sha256
+    from evaluation.qcgs_exact_objective_audit import (
+        CURRENT_PROTOCOL, LEGACY_PROTOCOL_SHA256, LEGACY_SMOKE_PROTOCOL,
+    )
+    supported_protocol_hashes = {active_protocol_sha256, LEGACY_PROTOCOL_SHA256}
+    if scan_protocol_sha256 not in supported_protocol_hashes or smoke_protocol_sha256 not in supported_protocol_hashes:
+        raise ValueError("registry inputs must use the current protocol or the frozen v1.1 receipts")
+    for name, revision in (("registry", source_revision), ("scan", scan_source_revision),
+                           ("smoke", smoke_source_revision)):
+        if (not isinstance(revision, str) or len(revision) != 40 or
+                any(char not in "0123456789abcdef" for char in revision)):
+            raise ValueError("invalid " + name + " source revision")
     historical, historical_sha = _historical(historical_path)
     smoke_ids = []
     smoke_rows_by_cell = {}
     from evaluation.qcgs_exact_objective_audit import audit_run_provenance, audit_scorer_rows
+    accepted_smoke_protocol = (CURRENT_PROTOCOL if smoke_protocol_sha256 == active_protocol_sha256
+                               else LEGACY_SMOKE_PROTOCOL)
     for cell in CELLS:
         selected = smoke_registry["cells"][cell]["selected"]
         run_dir = Path(smoke_runs[cell])
         actual = read_jsonl(run_dir / "qcgs-exact-actions.jsonl")
-        audit_scorer_rows(actual)
+        audit_scorer_rows(actual, allowed_protocols={accepted_smoke_protocol})
         if len(actual) != 2 or any(row["stage"] != "smoke" for row in actual):
             raise ValueError("smoke run must preserve exactly two scorer-only query records")
-        receipt = audit_run_provenance(run_dir, actual, [])
+        receipt = audit_run_provenance(run_dir, actual, [],
+                                       expected_protocol_sha256=smoke_protocol_sha256)
         if (receipt["ood_cell"] != cell or receipt["registry_sha256"] != smoke_registry["sha256"] or
-                receipt["dataset_fingerprint"] != fingerprint or receipt["source_revision"] != source_revision or
+                receipt["dataset_fingerprint"] != fingerprint or
+                receipt["source_revision"] != smoke_source_revision or
+                receipt["protocol_sha256"] != smoke_protocol_sha256 or
                 not receipt["scorer_complete"] or receipt["evaluator_complete"] is not None or
                 not receipt["trace_complete"] or receipt["interrupted_jsonl_artifacts"] or
                 receipt["scan_rows"] != json.loads((run_dir / "manifest.json").read_text())[
@@ -390,7 +415,8 @@ def build_registry(scan_runs, smoke_registry, smoke_runs, fingerprint, source_re
                 any(row.get("registry_sha256") != smoke_registry["sha256"] for row in actual)):
             raise ValueError("smoke receipt is incomplete or bound to different source, data, cell or registry")
         if any(row.get("dataset_fingerprint") != fingerprint or
-               row.get("source_revision") != source_revision for row in actual):
+               row.get("source_revision") != smoke_source_revision or
+               row.get("protocol_sha256") != smoke_protocol_sha256 for row in actual):
             raise ValueError("smoke source/data provenance differs from the frozen registry inputs")
         expected = {(row["timestep"], row["sample_idx"]) for row in selected}
         observed = {(row["query"]["timestep"], row["query"]["sample_idx"]) for row in actual}
@@ -406,10 +432,12 @@ def build_registry(scan_runs, smoke_registry, smoke_runs, fingerprint, source_re
     if len(smoke_chunk_sizes) != 1:
         raise ValueError("smoke runs must use one identical locked action chunk size")
     locked_chunk_size = next(iter(smoke_chunk_sizes))
-    peak_bytes = [row["costs"].get("peak_device_memory_bytes")
-                  for cell in CELLS for row in read_jsonl(Path(smoke_runs[cell]) / "qcgs-exact-actions.jsonl")]
-    if any(type(value) is not int or value >= 7.5 * 1024 ** 3 for value in peak_bytes):
-        raise ValueError("smoke must measure allocator peak below the frozen 7.5 GiB cap")
+    peaks_by_cell = {
+        cell: [row["costs"].get("peak_device_memory_bytes") for row in smoke_rows_by_cell[cell]]
+        for cell in CELLS
+    }
+    if any(type(peak) is not int or peak < 0 for peaks in peaks_by_cell.values() for peak in peaks):
+        raise ValueError("smoke must record a nonnegative CUDA allocator peak for every query")
     view_state_hashes = {row.get("view_state", {}).get("sha256")
                          for rows in smoke_rows_by_cell.values() for row in rows}
     parameter_order_hashes = {row.get("parameter_order_sha256")
@@ -428,6 +456,15 @@ def build_registry(scan_runs, smoke_registry, smoke_runs, fingerprint, source_re
                   "interpretation_limit": "Historical raw archives are unavailable; prior unscored cache exposure is not certified."}
     scans = {cell: scan_runs[cell] for cell in CELLS}
     provenance = {"smoke_registry_sha256": smoke_registry["sha256"],
+                  "active_protocol": CURRENT_PROTOCOL,
+                  "active_protocol_sha256": active_protocol_sha256,
+                  "peak_memory_policy": "report_only",
+                  "scan_source_revision": scan_source_revision,
+                  "scan_protocol_sha256": scan_protocol_sha256,
+                  "smoke_source_revision": smoke_source_revision,
+                  "smoke_protocol_sha256": smoke_protocol_sha256,
+                  "smoke_peak_device_memory_bytes": {cell: max(peaks_by_cell[cell]) for cell in CELLS},
+                  "smoke_peak_device_memory_by_query_bytes": peaks_by_cell,
                   "action_chunk_size": locked_chunk_size,
                   "view_state_sha256": next(iter(view_state_hashes)),
                   "parameter_order_sha256": next(iter(parameter_order_hashes)),
@@ -471,13 +508,18 @@ def _stage_schedule(stage, cell, registry, smoke_registry, analysis):
 def make_job(stage, cell, output_config, *, data_root, evidence_dir, run_id,
              max_eval_samples=None, fingerprint=None, source_revision=None,
              registry=None, smoke_registry=None, analysis=None, analysis_path=None,
-             stage_a_evidence_dir=None, action_chunk_size=1):
+             stage_a_evidence_dir=None, action_chunk_size=1, profile_cost_components=False,
+             profile_only=False, profile_query_index=0):
     if stage not in ("scan", "smoke", "stage-a", "stage-b") or cell not in CELLS:
         raise ValueError("unknown exact-objective stage/cell")
     if not RUN_ID_PATTERN.fullmatch(run_id) or ".." in run_id:
         raise ValueError("run_id must be path-safe")
     if type(action_chunk_size) is not int or action_chunk_size <= 0:
         raise ValueError("action chunk size must be a positive integer")
+    if profile_cost_components and stage != "smoke":
+        raise ValueError("component profiling is restricted to cost-only smoke jobs")
+    if profile_only and (stage != "smoke" or not profile_cost_components or profile_query_index not in (0, 1)):
+        raise ValueError("profile-only jobs require one of the two separately excluded smoke IDs")
     if stage in ("scan", "smoke") and (not fingerprint or not source_revision):
         raise ValueError("scan/smoke jobs require the preflight dataset fingerprint and frozen source revision")
     run_source_revision = source_revision
@@ -492,6 +534,8 @@ def make_job(stage, cell, output_config, *, data_root, evidence_dir, run_id,
                 analysis, analysis_path, stage_a_evidence_dir, registry)
         schedule, registry_sha, frozen, prefix = _stage_schedule(
             stage, cell, registry, smoke_registry, analysis)
+        if profile_only:
+            schedule = [schedule[profile_query_index]]
         if stage in ("stage-a", "stage-b"):
             locked_chunk = registry.get("provenance", {}).get("action_chunk_size")
             if locked_chunk is None or locked_chunk != action_chunk_size:
@@ -502,7 +546,9 @@ def make_job(stage, cell, output_config, *, data_root, evidence_dir, run_id,
                   source_revision=run_source_revision, registry_sha256=registry_sha,
                   protocol_sha256=file_sha(ROOT / "docs/research/qcgs-exact-label-free-objective-audit.md"),
                   random_seed=0, run_token=uuid.uuid4().hex,
-                  action_chunk_size=action_chunk_size)
+                  action_chunk_size=action_chunk_size,
+                  profile_cost_components=bool(profile_cost_components),
+                  profile_only=bool(profile_only))
     if stage in ("stage-a", "stage-b"):
         config["dataset_fingerprint"] = registry["dataset_fingerprint"]
         config["registry_source_revision"] = registry["source_revision"]
@@ -558,6 +604,14 @@ def _parser():
     registry.add_argument("--historical-exclusions", type=Path, default=HISTORICAL_EXCLUSIONS)
     registry.add_argument("--dataset-fingerprint", required=True)
     registry.add_argument("--source-revision", required=True)
+    registry.add_argument("--scan-source-revision",
+                          help="source revision of reused scans; defaults to --source-revision")
+    registry.add_argument("--smoke-source-revision",
+                          help="source revision of reused smoke receipts; defaults to --source-revision")
+    registry.add_argument("--scan-protocol-sha256",
+                          help="protocol hash of reused scans; defaults to the active protocol")
+    registry.add_argument("--smoke-protocol-sha256",
+                          help="protocol hash of reused smokes; defaults to the active protocol")
     registry.add_argument("--output", type=Path, required=True)
     job = subparsers.add_parser("job", help="write a locked per-cell config and print the exact launcher command")
     job.add_argument("--stage", choices=("scan", "smoke", "stage-a", "stage-b"), required=True)
@@ -569,6 +623,12 @@ def _parser():
     job.add_argument("--max-eval-samples", type=int)
     job.add_argument("--action-chunk-size", type=int, default=1,
                      help="maximum concurrent query actions per exact trial; every action is still evaluated")
+    job.add_argument("--profile-cost-components", action="store_true",
+                     help="record detailed timings for a cost-only smoke run")
+    job.add_argument("--profile-only", action="store_true",
+                     help="run one separately excluded smoke ID for component profiling")
+    job.add_argument("--profile-query-index", type=int, default=0,
+                     help="0 or 1: select one query from the frozen smoke registry for profile-only mode")
     job.add_argument("--dataset-fingerprint")
     job.add_argument("--source-revision")
     job.add_argument("--registry", type=Path)
@@ -597,13 +657,23 @@ def main(argv=None):
         return
     if args.command == "build-registry":
         paths = {"0": args.scan_0, "0.5": args.scan_05}
+        scan_source_revision = args.scan_source_revision or args.source_revision
+        smoke_source_revision = args.smoke_source_revision or args.source_revision
+        active_protocol_sha256 = file_sha(ROOT / "docs/research/qcgs-exact-label-free-objective-audit.md")
+        scan_protocol_sha256 = args.scan_protocol_sha256 or active_protocol_sha256
+        smoke_protocol_sha256 = args.smoke_protocol_sha256 or active_protocol_sha256
         scans = {cell: _scan_run(paths[cell], cell=cell, fingerprint=args.dataset_fingerprint,
-                                 source_revision=args.source_revision) for cell in CELLS}
+                                 source_revision=scan_source_revision,
+                                 expected_protocol_sha256=scan_protocol_sha256) for cell in CELLS}
         smoke_registry = json.loads(args.smoke_registry.read_text())
         smoke_runs = {"0": args.smoke_run_0, "0.5": args.smoke_run_05}
         try:
             value = build_registry(scans, smoke_registry, smoke_runs, args.dataset_fingerprint,
-                                   args.source_revision, args.historical_exclusions)
+                                   args.source_revision, args.historical_exclusions,
+                                   scan_source_revision=scan_source_revision,
+                                   smoke_source_revision=smoke_source_revision,
+                                   scan_protocol_sha256=scan_protocol_sha256,
+                                   smoke_protocol_sha256=smoke_protocol_sha256)
         except ValueError as exc:
             if not str(exc).startswith("insufficient eligible unseen exact-objective queries"):
                 raise
@@ -635,7 +705,9 @@ def main(argv=None):
                           fingerprint=args.dataset_fingerprint,
                           source_revision=args.source_revision, registry=registry,
                           smoke_registry=smoke_registry, analysis=analysis,
-                          analysis_path=args.analysis, stage_a_evidence_dir=args.stage_a_evidence_dir)
+                          analysis_path=args.analysis, stage_a_evidence_dir=args.stage_a_evidence_dir,
+                          profile_cost_components=args.profile_cost_components,
+                          profile_only=args.profile_only, profile_query_index=args.profile_query_index)
         print(json.dumps(result, indent=2))
         return
     if args.command == "analyze":

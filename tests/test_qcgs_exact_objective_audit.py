@@ -20,6 +20,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from evaluation.qcgs_exact_objective_audit import (
+    CURRENT_PROTOCOL, LEGACY_PROTOCOL_SHA256, LEGACY_SMOKE_PROTOCOL,
     ExactObjectiveEvaluator, _audit_trace_prefix, _block_bootstrap, _holm_adjusted_pvalues, _rho,
     _reconcile_status_completion, _reconcile_status_count, analyze_raw,
     audit_raw, audit_scorer_rows, stage_a_gate, stage_b_gate, write_evaluator_outputs,
@@ -45,6 +46,27 @@ from runtime.query_gradient_registry import (
 
 ROOT = Path(__file__).resolve().parents[1]
 HISTORICAL_PATH = ROOT / "cfg/research/qcgs-exact-objective-audit/historical-exclusions.json"
+
+
+def registry_provenance(**overrides):
+    current_protocol_sha = hashlib.sha256(
+        (ROOT / "docs/research/qcgs-exact-label-free-objective-audit.md").read_bytes()).hexdigest()
+    value = {
+        "active_protocol": CURRENT_PROTOCOL,
+        "active_protocol_sha256": current_protocol_sha,
+        "peak_memory_policy": "report_only",
+        "scan_source_revision": "1" * 40,
+        "scan_protocol_sha256": current_protocol_sha,
+        "smoke_source_revision": "1" * 40,
+        "smoke_protocol_sha256": current_protocol_sha,
+        "smoke_peak_device_memory_bytes": {"0": 1024, "0.5": 2048},
+        "smoke_peak_device_memory_by_query_bytes": {"0": [1024, 1024], "0.5": [1024, 2048]},
+        "action_chunk_size": 1,
+        "view_state_sha256": "d" * 64,
+        "parameter_order_sha256": "e" * 64,
+    }
+    value.update(overrides)
+    return value
 
 
 class ObjectiveArithmeticTests(unittest.TestCase):
@@ -149,7 +171,8 @@ def exact_cfg(mode="stage-a", schedule=None):
             "run_token": "0" * 32,
             "query_schedule": ([{"timestep": i, "sample_idx": i} for i in range(16)]
                                if schedule is None and mode == "stage-a" else schedule or []),
-            "max_batch_size": 100, "random_seed": 0, "action_chunk_size": 1}
+            "max_batch_size": 100, "random_seed": 0, "action_chunk_size": 1,
+            "peak_memory_policy": "report_only"}
 
 
 def make_exact_probe(mode="stage-a", schedule=None):
@@ -387,6 +410,27 @@ class ScorerBoundaryAndParityTests(unittest.TestCase):
             self.assertEqual([row["timestep"] for row in rows], list(range(200)))
             self.assertEqual(len({row["sample_idx"] for row in rows}), 200)
 
+    def test_cost_profile_sidecar_records_component_and_jsonl_timings(self):
+        x, pixels, preprocess = make_batch()
+        schedule = [{"timestep": 0, "sample_idx": 0}, {"timestep": 1, "sample_idx": 1}]
+        probe = make_exact_probe(mode="smoke", schedule=schedule)
+        probe.profile_cost_components = True
+        probe.cfg["profile_cost_components"] = True
+        probe.set_query_identity(torch.arange(100, dtype=torch.long))
+        probe.set_query_images(pixels, preprocess)
+        probe(x)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            write_scorer_outputs(probe, temp_dir)
+            profile = json.loads((Path(temp_dir) / "qcgs-exact-profile.json").read_text())
+        self.assertEqual(profile["scored_query_count"], 2)
+        self.assertEqual(profile["batches"][0]["query_count"], 2)
+        self.assertGreaterEqual(profile["batches"][0]["jsonl_serialization_ms"], 0)
+        self.assertIn("candidate_gradient_aggregation_gpu_ms", profile["batches"][0]["component_timing_ms"])
+        self.assertIn("candidate_full_batch_action_forward_gpu_ms", profile["batches"][0]["component_timing_ms"])
+        self.assertIn("candidate_view_forward_gpu_ms", profile["batches"][0]["component_timing_ms"])
+        self.assertIn("scorer_record_assembly_wall_ms", profile["batches"][0]["component_timing_ms"])
+        self.assertGreaterEqual(profile["batches"][0]["record_sha256_ms"], 0)
+
     def test_startup_status_preserves_stage_b_failure_before_first_query(self):
         schedule = [{"timestep": index, "sample_idx": index} for index in range(128)]
         probe = make_exact_probe(mode="stage-b", schedule=schedule)
@@ -506,7 +550,7 @@ def stage_a_raw_fixture(timestep=100, sample_idx=5000, cell="0", run_identity="6
         OBJECTIVE_NAMES[2]: [-0.1, 0.1],
     }.items():
         selections[name] = select_objective_action(values)
-    row = {"schema_version": 1, "protocol": "qcgs-exact-objective-audit-v1.1", "stage": "stage-a",
+    row = {"schema_version": 1, "protocol": CURRENT_PROTOCOL, "stage": "stage-a",
         "query": {"timestep": timestep, "sample_idx": sample_idx, "batch": timestep // 100,
                   "block": timestep // 64, "batch_row": timestep % 100},
         "dataset_fingerprint": "f" * 64, "source_revision": "unit",
@@ -555,7 +599,7 @@ def stage_a_raw_fixture(timestep=100, sample_idx=5000, cell="0", run_identity="6
                                   "utility": -0.1 if random_index == 1 else 0.2}
     policies["supervised_first_order_reference"] = {"index": 0, "utility": 0.2,
         "score": 0.1, "scores": [0.1, -0.1], "reason": "positive_canonical_argmax"}
-    outcome = {"schema_version": 1, "protocol": "qcgs-exact-objective-audit-v1.1", "stage": "stage-a",
+    outcome = {"schema_version": 1, "protocol": CURRENT_PROTOCOL, "stage": "stage-a",
         "ood_cell": cell, "query": {**row["query"], "domain": 0, "known_label": 0, "is_ood": False},
         "scorer_record_sha256": row["record_sha256"], "candidate_pool_sha256": row["candidate_pool_sha256"],
         "registry_sha256": row["registry_sha256"],
@@ -600,7 +644,7 @@ def stage_b_raw_fixture(timestep, sample_idx, cell, run_identity, rng, draw,
         objective + "_random_matched": {"index": matched_index,
                                          "utility": random_utility if matched_index is not None else 0.0},
         "random_forced": {"index": random_index, "utility": random_utility}}
-    outcome = {"schema_version": 1, "protocol": "qcgs-exact-objective-audit-v1.1", "stage": "stage-b",
+    outcome = {"schema_version": 1, "protocol": CURRENT_PROTOCOL, "stage": "stage-b",
         "ood_cell": cell, "query": {**scorer["query"], "domain": 0, "known_label": 0, "is_ood": False},
         "scorer_record_sha256": scorer["record_sha256"], "candidate_pool_sha256": scorer["candidate_pool_sha256"],
         "registry_sha256": scorer["registry_sha256"],
@@ -638,8 +682,7 @@ class RegistryAndRawAnalysisTests(unittest.TestCase):
             "smoke_base_image_indices": sorted(smoke_ids),
             "smoke_base_image_indices_sha256": digest(sorted(smoke_ids))}
         registry = build_exact_objective_registry(scans, "a" * 64, exclusions,
-            source_revision="1" * 40, provenance={"scan_cap": 600, "action_chunk_size": 1,
-                "view_state_sha256": "d" * 64, "parameter_order_sha256": "e" * 64})
+            source_revision="1" * 40, provenance=registry_provenance(scan_cap=600))
         validate_exact_objective_registry(registry)
         a = {row["sample_idx"] for row in registry["cells"]["0"]["selected"]["stage-a"]}
         b = {row["sample_idx"] for row in registry["cells"]["0"]["selected"]["stage-b"]}
@@ -676,28 +719,59 @@ class RegistryAndRawAnalysisTests(unittest.TestCase):
                     row["source_revision"] = "1" * 40
                     row["registry_sha256"] = smoke["sha256"]
                     row["registry_source_revision"] = "1" * 40
+                    row["protocol"] = LEGACY_SMOKE_PROTOCOL
+                    row["protocol_sha256"] = LEGACY_PROTOCOL_SHA256
                     row["view_state"] = {"sha256": "d" * 64}
                     row["parameter_order_sha256"] = "e" * 64
-                    row["costs"]["peak_device_memory_bytes"] = 1024
+                    row["costs"]["peak_device_memory_bytes"] = (
+                        8358872576 if cell == "0" else 8368574976)
                     row["record_sha256"] = digest({key: value for key, value in row.items()
                                                     if key != "record_sha256"})
                     rows.append(row)
                 (run_dir / "qcgs-exact-actions.jsonl").write_text(
                     "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows))
                 smoke_runs[cell] = run_dir
-            def smoke_receipt(run_dir, *_):
+            def smoke_receipt(run_dir, *_, **__):
                 cell = "0" if Path(run_dir).name == "smoke-0" else "0.5"
                 return {"scorer_complete": True, "evaluator_complete": None, "trace_complete": True,
                         "interrupted_jsonl_artifacts": [],
                         "scan_rows": smoke["cells"][cell]["max_eval_samples"],
                         "ood_cell": cell, "registry_sha256": smoke["sha256"],
-                        "dataset_fingerprint": "a" * 64, "source_revision": "1" * 40}
+                        "dataset_fingerprint": "a" * 64, "source_revision": "1" * 40,
+                        "protocol_sha256": LEGACY_PROTOCOL_SHA256}
 
             with patch("evaluation.qcgs_exact_objective_audit.audit_run_provenance",
                        side_effect=smoke_receipt):
-                registry = build_registry(scans, smoke, smoke_runs, "a" * 64, "1" * 40)
+                registry = build_registry(
+                    scans, smoke, smoke_runs, "a" * 64, "2" * 40,
+                    scan_source_revision="1" * 40, smoke_source_revision="1" * 40,
+                    scan_protocol_sha256=LEGACY_PROTOCOL_SHA256,
+                    smoke_protocol_sha256=LEGACY_PROTOCOL_SHA256)
 
-            def interrupted_smoke_receipt(run_dir, *_):
+            self.assertEqual(registry["source_revision"], "2" * 40)
+            self.assertEqual(registry["provenance"]["smoke_source_revision"], "1" * 40)
+            self.assertEqual(registry["provenance"]["smoke_protocol_sha256"], LEGACY_PROTOCOL_SHA256)
+            self.assertEqual(registry["provenance"]["active_protocol"], CURRENT_PROTOCOL)
+            self.assertEqual(registry["provenance"]["peak_memory_policy"], "report_only")
+            self.assertEqual(registry["provenance"]["smoke_peak_device_memory_bytes"],
+                             {"0": 8358872576, "0.5": 8368574976})
+            self.assertGreater(registry["provenance"]["smoke_peak_device_memory_bytes"]["0"],
+                               7.5 * 1024 ** 3)
+
+            import yaml
+            profile_job = make_job(
+                "smoke", "0", Path(temp_dir) / "profile-config", data_root=temp_dir,
+                evidence_dir=Path(temp_dir) / "profile-evidence", run_id="smoke-profile-0",
+                fingerprint="a" * 64, source_revision="1" * 40, smoke_registry=smoke,
+                profile_cost_components=True, profile_only=True, profile_query_index=1)
+            profile_config = yaml.safe_load(Path(profile_job["config"]).read_text())
+            self.assertEqual(len(profile_config["query_schedule"]), 1)
+            self.assertEqual(profile_config["query_schedule"][0]["sample_idx"],
+                             smoke["cells"]["0"]["selected"][1]["sample_idx"])
+            self.assertTrue(profile_config["profile_only"])
+            self.assertTrue(profile_config["profile_cost_components"])
+
+            def interrupted_smoke_receipt(run_dir, *_, **__):
                 receipt = smoke_receipt(run_dir)
                 receipt["trace_complete"] = False
                 return receipt
@@ -705,7 +779,11 @@ class RegistryAndRawAnalysisTests(unittest.TestCase):
             with patch("evaluation.qcgs_exact_objective_audit.audit_run_provenance",
                        side_effect=interrupted_smoke_receipt):
                 with self.assertRaisesRegex(ValueError, "smoke receipt is incomplete"):
-                    build_registry(scans, smoke, smoke_runs, "a" * 64, "1" * 40)
+                    build_registry(
+                        scans, smoke, smoke_runs, "a" * 64, "2" * 40,
+                        scan_source_revision="1" * 40, smoke_source_revision="1" * 40,
+                        scan_protocol_sha256=LEGACY_PROTOCOL_SHA256,
+                        smoke_protocol_sha256=LEGACY_PROTOCOL_SHA256)
             scan_job = make_job("scan", "0", Path(temp_dir) / "scan-config", data_root=temp_dir,
                                 evidence_dir=Path(temp_dir) / "scan-evidence", run_id="scan-test",
                                 max_eval_samples=600, fingerprint="a" * 64,
@@ -713,7 +791,6 @@ class RegistryAndRawAnalysisTests(unittest.TestCase):
             job = make_job("stage-a", "0", Path(temp_dir) / "config", data_root=temp_dir,
                            evidence_dir=Path(temp_dir) / "evidence", run_id="stage-a-test",
                            registry=registry, action_chunk_size=1)
-            import yaml
             scan_config = yaml.safe_load(Path(scan_job["config"]).read_text())
             locked = yaml.safe_load(Path(job["config"]).read_text())
             self.assertEqual(scan_config["dataset_fingerprint"], "a" * 64)
@@ -991,14 +1068,12 @@ class RegistryAndRawAnalysisTests(unittest.TestCase):
             "smoke_base_image_indices_sha256": digest(smoke_ids)}
         with self.assertRaisesRegex(ValueError, "evaluator outcomes"):
             build_exact_objective_registry(scans, "a" * 64, exclusions,
-                source_revision="1" * 40, provenance={"action_chunk_size": 1,
-                    "view_state_sha256": "d" * 64, "parameter_order_sha256": "e" * 64})
+                source_revision="1" * 40, provenance=registry_provenance())
 
         clean_scans = self.scans()
         clean_registry = build_exact_objective_registry(
             clean_scans, "a" * 64, exclusions, source_revision="1" * 40,
-            provenance={"action_chunk_size": 1, "view_state_sha256": "d" * 64,
-                        "parameter_order_sha256": "e" * 64})
+            provenance=registry_provenance())
         tampered = copy.deepcopy(clean_registry)
         tampered["cells"]["0"]["max_eval_samples"] += 100
         tampered["sha256"] = digest({key: value for key, value in tampered.items() if key != "sha256"})
@@ -1019,8 +1094,7 @@ class RegistryAndRawAnalysisTests(unittest.TestCase):
                           for i in range(6001)]
         with self.assertRaisesRegex(ValueError, "6000"):
             build_exact_objective_registry(too_long, "a" * 64, exclusions,
-                source_revision="1" * 40, provenance={"action_chunk_size": 1,
-                    "view_state_sha256": "d" * 64, "parameter_order_sha256": "e" * 64})
+                source_revision="1" * 40, provenance=registry_provenance())
 
     def test_raw_records_must_match_all_registry_provenance_locks(self):
         scans = self.scans()
@@ -1038,8 +1112,7 @@ class RegistryAndRawAnalysisTests(unittest.TestCase):
              "smoke_base_image_indices": smoke_ids,
              "smoke_base_image_indices_sha256": digest(smoke_ids)},
             source_revision="1" * 40,
-            provenance={"action_chunk_size": 1, "view_state_sha256": "d" * 64,
-                        "parameter_order_sha256": "e" * 64})
+            provenance=registry_provenance())
         selected = registry["cells"]["0"]["selected"]["stage-a"][0]
         scorer, outcome = stage_a_raw_fixture(
             timestep=selected["timestep"], sample_idx=selected["sample_idx"], cell="0",

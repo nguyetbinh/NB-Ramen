@@ -1,10 +1,10 @@
 # Exact Label-Free Objective Audit for Ramen Support Actions
 
-**Protocol status:** P2 scientific protocol v1.1 frozen 2026-10-08 after an independent read-only consistency audit; executable command, source/config hashes and safe action chunk size are frozen in the P3 launch lock before any scored query is evaluated.
+**Protocol status:** P2 scientific gates from v1.1 remain frozen. Resource-policy revision v1.2 (2026-10-08) removes the 7.5 GiB precautionary peak-allocation cutoff; memory remains a reported cost. Existing scans/smokes remain receipts under v1.1 and may be reused only as documented cost/provenance inputs.
 
 **Question ID:** `CASE-QCGS-01`
 
-**Protocol version:** `qcgs-exact-objective-audit-v1.1`
+**Protocol version:** `qcgs-exact-objective-audit-v1.2`
 
 **Related synthesis:** [QCGS literature research synthesis](qcgs-literature-research-synthesis.md)
 
@@ -23,7 +23,7 @@ At least one frozen objective has positive per-query rank association with exact
 ### Alternatives and interpretation
 
 - A complete, valid Stage A that misses the objective investment gate is a scientific STOP for these formulations in this Ramen state; it is not called INCONCLUSIVE merely because no candidate passes. This does not establish that all label-free evidence is insufficient.
-- Stage A is INCONCLUSIVE only for insufficient eligible quota, fewer than four scored blocks in a cell, or an execution/resource interruption that prevents complete valid records. Non-finite/missing objective or utility values, leakage, parity/reset/provenance errors, or incorrect action coverage are INVALID.
+- Stage A is INCONCLUSIVE only for insufficient eligible quota, fewer than four scored blocks in a cell, an actual execution/resource interruption, or exhausted compute budget that prevents complete valid records. A high but finite measured peak for a complete run does not make it INCONCLUSIVE. Non-finite/missing objective or utility values, leakage, parity/reset/provenance errors, or incorrect action coverage are INVALID.
 - A constant valid objective vector or fewer than 8/16 defined query-level rho values is a valid no-information result for that objective and fails its Stage-A gate. It is not an execution defect. Unexpected undefined/non-finite values are INVALID.
 - A positive Stage-A result followed by a failed independent confirmation is a failed policy confirmation, not evidence of general non-identifiability.
 - Selective adapt/skip and view consensus are established literature. If later reliability work opens, use the published CAS baseline and make no novelty claim for adapt/skip itself.
@@ -150,7 +150,7 @@ Stage A screens up to three objectives, so its gates are an investment screen, n
 
 ### Stage-A investment gate
 
-Stage-A disposition is ordered: **INVALID** for leakage, provenance/parity/reset/numerical-contract failure, missing/non-finite objective or utility records, or action-coverage mismatch; **INCONCLUSIVE** for missing quota, interrupted/resource-capped execution, or fewer than four scored blocks in either cell; otherwise the complete run is scientifically valid and receives a **STOP** or **GO_CONFIRM**. The full 16-query/cell Stage A is valid only if all registered queries and every enumerated legal action have finite evaluator utility and all three objective values, parity/reset/provenance pass, and action counts independently verify. For an individual objective to pass the information screen, each cell must satisfy all of:
+Stage-A disposition is ordered: **INVALID** for leakage, provenance/parity/reset/numerical-contract failure, missing/non-finite objective or utility records, or action-coverage mismatch; **INCONCLUSIVE** for missing quota, actual interrupted/resource-failed execution, exhausted compute budget, or fewer than four scored blocks in either cell; otherwise the complete run is scientifically valid and receives a **STOP** or **GO_CONFIRM**. The full 16-query/cell Stage A is valid only if all registered queries and every enumerated legal action have finite evaluator utility and all three objective values, parity/reset/provenance pass, and action counts independently verify. For an individual objective to pass the information screen, each cell must satisfy all of:
 
 1. At least 8/16 query-level rho values are defined and the cell mean rho is positive.
 2. Mean selected-action utility is positive and exceeds exact mean random-forced utility (uniform over legal swaps only).
@@ -167,7 +167,7 @@ For the single frozen objective, evaluate all label-free candidate scores/action
 2. Median selected utility is positive; the mean remains positive after removing the two largest positive utility contributors under the stable predeclared query-ID tie rule.
 3. At least 3/128 queries select a replacement, all 128 registered outcomes are complete, and transition balance across the two cells (`wrong→correct - correct→wrong`) is nonnegative.
 
-An integrity, provenance, leakage, reset or completeness failure is INVALID. A hard resource cap or too few queries/blocks is INCONCLUSIVE. A complete valid Stage B that misses one or more scientific GO gates is STOP for the frozen objective/policy in this setting; preserve all values and do not tune/re-run on the same registry. A positive GO opens a separate P6 case for approximating the exact objective and a new frozen confirmation, not a method-level claim.
+An integrity, provenance, leakage, reset or completeness failure is INVALID. An actual OOM/crash/interruption, exhausted compute budget, or too few queries/blocks is INCONCLUSIVE. A complete valid Stage B that misses one or more scientific GO gates is STOP for the frozen objective/policy in this setting; preserve all values and do not tune/re-run on the same registry. A positive GO opens a separate P6 case for approximating the exact objective and a new frozen confirmation, not a method-level claim.
 
 ## 8. Reliability and later branches
 
@@ -181,7 +181,7 @@ L3 evidence enrichment, L4 estimator geometry and L5 method confirmation remain 
 
 P3 must add meaningful regressions for: objective direction/loss arithmetic; hand-computable MEMO and pseudo-caption entropy; constant/undefined ranks; no-swap and positive tie behavior; random expectation versus one draw; action enumeration and serial/vectorized aggregate parity; label/metadata isolation; trial-order permutation; reset/cache immutability; fixed views and batch-row mapping; exhaustive Stage-A coverage; registry exclusions and Stage-A/Stage-B disjointness; raw-analysis recomputation. Then run the repository's required unit suite and a CUDA smoke on the separately excluded IDs. CPU success does not validate CUDA parity.
 
-P3 computes and locks an action chunk size using smoke-only peak-memory/time measurements; every action remains enumerated. Keep peak allocation below 7.5 GiB on the 8 GiB GPU. If exact scoring cannot stay within that bound, reduce chunk size before Stage A and rerun the smoke; never drop views/actions or alter formulas. The smoke is limited to 60 minutes total and may be resumed only under the same hashes.
+P3 profiles a smoke-only workload to select an action chunk size and report peak-memory/time costs; every action remains enumerated. **Peak allocation has no absolute acceptance cutoff.** Record exact allocator peaks and available device headroom; a complete run with a high peak remains valid. Actual OOM, crash or interruption is a failed/incomplete execution and is preserved. Do not drop views/actions or alter formulas. The smoke is limited to 60 minutes total and may be resumed only under the same hashes.
 
 Scored jobs run serially on the single GPU, with independent logs and unique run IDs:
 

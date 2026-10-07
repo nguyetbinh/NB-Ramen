@@ -1,6 +1,12 @@
 {
   "schema_version": 1,
-  "protocol": "qcgs-exact-objective-audit-v1.1",
+  "protocol": "qcgs-exact-objective-audit-v1.2",
+  "peak_memory_policy": "report_only",
+  "stage_a_gpu_hours_per_cell": 8,
+  "stage_a_gpu_hours_total": 16,
+  "stage_b_gpu_hours_per_cell": 24,
+  "stage_b_gpu_hours_total": 48,
+  "smoke_elapsed_minutes_total": 60,
   "dataset": "CIFAR100C",
   "severity": 5,
   "known_class_split": "open-set-cifar100-split-v1",

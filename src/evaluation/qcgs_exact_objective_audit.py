@@ -18,7 +18,10 @@ from runtime.query_gradient_registry import CELLS, digest, file_sha, validate_ex
 
 
 SCHEMA_VERSION = 1
-ANALYSIS = {"version": 1, "protocol": "qcgs-exact-objective-audit-v1.1", "bootstrap_seed": 917,
+CURRENT_PROTOCOL = "qcgs-exact-objective-audit-v1.2"
+LEGACY_SMOKE_PROTOCOL = "qcgs-exact-objective-audit-v1.1"
+LEGACY_PROTOCOL_SHA256 = "f4c4ad4b9221da9293915c9b9009e5517c63ee087cbe60cb597db6a04da3d860"
+ANALYSIS = {"version": 1, "protocol": CURRENT_PROTOCOL, "bootstrap_seed": 917,
             "bootstrap_draws": 10000, "block_size": 64, "minimum_blocks": 4,
             "stage_a_minimum_defined_rho": 8, "minimum_replacements": 3,
             "stage_b_remove_largest": 2, "stage_b_tie_rule": "utility descending, sample_idx ascending",
@@ -97,8 +100,10 @@ def write_scorer_outputs(method, run_dir):
     root = Path(run_dir)
     action_rows = method.action_rows[method._written_action_count:]
     scan_rows = method.scan[method._written_scan_count:]
+    serialization_started = time.perf_counter()
     append_jsonl(root / "qcgs-exact-actions.jsonl", action_rows)
     append_jsonl(root / "qcgs-exact-scan.jsonl", scan_rows)
+    jsonl_serialization_ms = (time.perf_counter() - serialization_started) * 1000.0
     method._written_action_count = len(method.action_rows)
     method._written_scan_count = len(method.scan)
     write_json(root / "qcgs-exact-state.json", {
@@ -124,6 +129,27 @@ def write_scorer_outputs(method, run_dir):
         status["evaluator_queries"] = evaluator_queries
         status["evaluator_complete"] = complete and evaluator_queries == len(method.query_schedule)
     write_json(status_path, status)
+    if getattr(method, "profile_cost_components", False) and action_rows:
+        profile_path = root / "qcgs-exact-profile.json"
+        profile = json.loads(profile_path.read_text()) if profile_path.exists() else {
+            "schema_version": 1,
+            "stage": method.mode,
+            "config_sha256": action_rows[-1]["config_sha256"],
+            "protocol_sha256": action_rows[-1]["protocol_sha256"],
+            "source_revision": action_rows[-1]["source_revision"],
+            "batches": [],
+            "profile_scope": "each entry describes one scored stream batch; row-hash time is sidecar-only because it cannot be embedded in its own hash; host wall and GPU event buckets may overlap",
+        }
+        profile["batches"].append({
+            "query_count": len(action_rows),
+            "queries": [{"timestep": row["query"]["timestep"],
+                         "sample_idx": row["query"]["sample_idx"]} for row in action_rows],
+            "component_timing_ms": action_rows[-1]["costs"].get("profile_components_ms", {}),
+            "record_sha256_ms": getattr(method, "profile_record_hash_ms", 0.0),
+            "jsonl_serialization_ms": jsonl_serialization_ms,
+        })
+        profile["scored_query_count"] = sum(batch["query_count"] for batch in profile["batches"])
+        write_json(profile_path, profile)
 
 
 def _metric(logits, label):
@@ -298,7 +324,7 @@ class ExactObjectiveEvaluator:
                     "score": 0.0 if ref_index is None else reference["scores"][ref_index],
                     "scores": reference["scores"], "reason": reference["reason"]}
             record = {
-                "schema_version": SCHEMA_VERSION, "protocol": "qcgs-exact-objective-audit-v1.1",
+                "schema_version": SCHEMA_VERSION, "protocol": CURRENT_PROTOCOL,
                 "stage": stage, "ood_cell": str(ood_cell),
                 "query": {**payload["query"], "domain": int(domains[row]),
                           "known_label": int(labels[row]), "is_ood": False},
@@ -382,8 +408,9 @@ def _canonical_actions(row):
     return expected
 
 
-def audit_scorer_rows(action_rows):
+def audit_scorer_rows(action_rows, *, allowed_protocols=None):
     """Check label-free action records without opening evaluator outcomes."""
+    allowed_protocols = {CURRENT_PROTOCOL} if allowed_protocols is None else set(allowed_protocols)
     forbidden = {"label", "known_label", "is_ood", "domain", "correct", "correctness", "utility", "oracle",
                  "supervised_gradient", "supervised_reference", "known_label_or_minus_one",
                  "corruption", "corruption_type", "corruption_name", "corruption_id", "severity",
@@ -404,7 +431,7 @@ def audit_scorer_rows(action_rows):
     seen = set()
     for row in action_rows:
         check_keys(row)
-        if row.get("schema_version") != SCHEMA_VERSION or row.get("protocol") != "qcgs-exact-objective-audit-v1.1":
+        if row.get("schema_version") != SCHEMA_VERSION or row.get("protocol") not in allowed_protocols:
             raise ValueError("unknown exact-objective scorer schema")
         if row.get("stage") not in ("smoke", "stage-a", "stage-b"):
             raise ValueError("scorer record lacks its frozen stage identity")
@@ -433,10 +460,11 @@ def audit_scorer_rows(action_rows):
         if type(row["baseline_pseudo_class"]) is not int or not 0 <= row["baseline_pseudo_class"] < 80:
             raise ValueError("invalid baseline Ramen pseudo-class")
         parity = row.get("parity", {})
-        if set(parity) != {"serial_aggregate_all_actions", "baseline_replay_before_trials",
+        required_parity = {"serial_aggregate_all_actions", "baseline_replay_before_trials",
                            "baseline_replay_after_trials", "cache_membership_unchanged",
                            "candidate_parameters_reset_per_trial", "action_chunk_isolation_verified",
-                           "action_chunk_isolation_scope", "ordinary_ramen_logits_returned"} or not all(
+                           "action_chunk_isolation_scope", "ordinary_ramen_logits_returned"}
+        if set(parity) != required_parity or not all(
                                value is True for key, value in parity.items()
                                if key != "action_chunk_isolation_scope"):
             raise ValueError("Ramen parity/reset/cache checks are incomplete")
@@ -507,6 +535,11 @@ def audit_scorer_rows(action_rows):
         chunk_size = row["costs"].get("action_chunk_size")
         if type(chunk_size) is not int or chunk_size <= 0:
             raise ValueError("missing positive locked action chunk size")
+        profile = row["costs"].get("profile_components_ms")
+        if profile is not None and (not isinstance(profile, dict) or any(
+                not isinstance(key, str) or not _finite(value) or value < 0
+                for key, value in profile.items())):
+            raise ValueError("invalid component-level smoke timing record")
         grouped_checks = row["costs"].get("grouped_isolation_check_forwards_batch")
         if type(grouped_checks) is not int or grouped_checks < 0:
             raise ValueError("missing grouped-query isolation check count")
@@ -526,7 +559,7 @@ def _verify_pair(action_row, outcome_row):
         if expected_hash != digest(payload):
             raise ValueError("exact-objective raw record hash mismatch")
     if (outcome_row.get("schema_version") != SCHEMA_VERSION or
-            outcome_row.get("protocol") != "qcgs-exact-objective-audit-v1.1"):
+            outcome_row.get("protocol") != CURRENT_PROTOCOL):
         raise ValueError("unknown exact-objective evaluator outcome schema")
     if action_row["stage"] != outcome_row["stage"] or action_row["query"] != {
             key: outcome_row["query"][key] for key in action_row["query"]}:
@@ -769,7 +802,7 @@ def audit_raw(action_rows, outcome_rows, registry=None, *, allow_unpaired_scorer
     return rows
 
 
-def audit_run_provenance(run_dir, action_rows, outcome_rows):
+def audit_run_provenance(run_dir, action_rows, outcome_rows, *, expected_protocol_sha256=None):
     """Bind scorer/evaluator records to the committed run, stream and Ramen trace."""
     root = Path(run_dir)
     manifest = json.loads((root / "manifest.json").read_text())
@@ -851,9 +884,12 @@ def audit_run_provenance(run_dir, action_rows, outcome_rows):
             status_reconciled_fields.append("evaluator_complete")
     if state["parameter_order_sha256"] != digest(state["parameter_order"]):
         raise ValueError("adapted parameter ordering hash mismatch")
-    if state["protocol_sha256"] != file_sha(Path(__file__).resolve().parents[2] /
-            "docs/research/qcgs-exact-label-free-objective-audit.md"):
+    protocol_path = Path(__file__).resolve().parents[2] / "docs/research/qcgs-exact-label-free-objective-audit.md"
+    expected_protocol_sha256 = expected_protocol_sha256 or file_sha(protocol_path)
+    if state["protocol_sha256"] != expected_protocol_sha256:
         raise ValueError("run protocol hash differs from the frozen audit")
+    if config.get("protocol_sha256") != state["protocol_sha256"]:
+        raise ValueError("run config and state protocol hashes disagree")
     if manifest["artifacts"]["status"] != "verified" or manifest["artifacts"]["dataset"].get("root_digest") != config.get("dataset_fingerprint"):
         raise ValueError("verified dataset fingerprint differs from scorer config")
     if args.get("dataset") != "CIFAR100C" or args.get("model") != "clip_vitbase16" or args.get("batch_size") != 100:
@@ -952,6 +988,7 @@ def audit_run_provenance(run_dir, action_rows, outcome_rows):
             "ood_cell": format(float(args["ood_ratio"]), "g"),
             "registry_sha256": config.get("registry_sha256"),
             "dataset_fingerprint": config.get("dataset_fingerprint"),
+            "protocol_sha256": state["protocol_sha256"],
             "source_revision": manifest["git"]["commit"]}
 
 

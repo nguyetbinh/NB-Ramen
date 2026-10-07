@@ -8,7 +8,7 @@
 
 ## Stage and question
 
-P0 state reconstruction, P1 bounded literature mapping, and P2a source inspection are complete. P2 scientific protocol v1.1 is frozen after the independent consistency audit; P3 code review, smoke and scored campaigns remain unlaunched.
+P0–P2 are complete. The implementation fix and v1.1 scans/smokes are historical completed inputs. Active policy is v1.2 with report-only peak allocation. P3 is open for component profiling, quota-complete scans and launch-lock construction; P4 Stage A has not started.
 
 The current candidate question is narrower than generic TTA method selection: within one fixed Ramen query, cache snapshot, update rule and legal same-pseudo-class one-support-swap set, do label-free observations or exact post-update objective changes rank that query's supervised CE utility? This is provisional pending the current literature comparison. It does not claim a general theorem about identifying the best TTA action across deployment worlds.
 
@@ -58,4 +58,12 @@ One report lists evaluator peak memory near 7.24 GiB on an 8 GiB device before a
 
 ## Next decision
 
-Finish source verification and map the overlap with the September 2026 identifiability paper, VLM-specific objective work, label-free performance estimation, and current TTA method-selection studies. Then revise the question and preregister the smallest local-action audit whose outcome would change the decision. Before scored execution, resolve historical query exclusions, dataset/model provenance, runtime parity, coverage, uncertainty, multiple-objective selection and device budget. If any of these remain unresolved, record the exact gap and keep scored execution closed.
+The v1.1 7.5 GiB rejection is preserved as history and superseded by the user's v1.2 revision. The current registry check accepts complete high-peak smoke receipts when their v1.1 source/protocol provenance is explicit. At the 600-row scan prefix, OOD=0 lacks 8 Stage-A and 51 Stage-B eligible IDs, so the frozen doubling rule requests 1,200 rows/cell. Run cost-only component profiles on excluded smoke IDs, then quota scans, build the registry and launch lock, and run Stage A within the frozen budgets. No objective-to-utility outcome exists yet.
+
+## P3 execution state — v1.1 receipts and v1.2 continuation
+
+The exact-objective implementation is committed on `qcgs-exact-objective-code` at `04abdbaab46f8c1d35f304e6cb8dbd1f43554b93`, after a lazy-cache memory fix and a fresh targeted review with no remaining findings. The focused suite passed 35 tests; the repository suite passed 443 tests with 1 skipped. The source archive SHA-256 is `35af0d707d7702af2990e022d34d858b13004c42a45d5b70190c546da805c511`.
+
+Under v1.1, two outcome-blind 600-row CUDA scans passed provenance/continuity checks but exceeded that protocol's 7.5 GiB precautionary cap. Both smoke cells completed with full registered action coverage and parity/provenance receipts. Their peaks were 8,358,872,576 bytes (OOD=0) and 8,368,574,976 bytes (OOD=0.5); combined process elapsed was 35:08. The v1.1 registry builder rejected construction at that gate. These are preserved cost observations, not evidence for or against any research hypothesis; v1.2 supersedes the peak threshold.
+
+The current protocol/config/validator and cost-profile instrumentation are in the active coding worktree, have 36 focused tests passing, and passed targeted review after two profiling findings were fixed. A CPU target-row optimization attempt failed bitwise batch parity and was not retained. The full-batch path remains in place. Current profile runs have not launched; current source has not yet been committed. See [resource-policy revision](resource-policy-revision.md) for hashes, checks, quota result and next actions.

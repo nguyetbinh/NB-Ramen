@@ -4,9 +4,9 @@
 
 **Experiment:** `EXP-QCGS-001`
 
-**Protocol:** [`qcgs-exact-objective-audit-v1.1`](../../../docs/research/qcgs-exact-label-free-objective-audit.md), SHA-256 `f4c4ad4b9221da9293915c9b9009e5517c63ee087cbe60cb597db6a04da3d860`
+**Scientific gates:** preserved from v1.1. **Active resource policy:** [`qcgs-exact-objective-audit-v1.2`](../../../docs/research/qcgs-exact-label-free-objective-audit.md), SHA-256 `397e769d2eda50bad9a4744efbd7d928bf06640b9b15b06745ecd45955a5df03`
 
-**Status:** case frozen; instrument implementation in progress; no smoke or scored run launched.
+**Status:** scientific case remains active. Reviewed source and two v1.1 scans/smokes are complete. High peaks are report-only under v1.2. Component profiles, 1,200-row scans, current registry and launch lock remain outstanding; Stage A has not launched.
 
 ## Case card
 
@@ -23,7 +23,7 @@
 | Controls | Ramen/no-swap, random-forced, random-matched, exact Stage-A oracle, evaluator-only local supervised first-order reference. |
 | Sampling | 16 Stage-A and 128 reserved Stage-B known-ID queries per OOD cell; outcome-blind SHA-256 registry; 1,499 historical query exclusions plus separately excluded smoke IDs; max 6,000 scanned stream rows/cell. |
 | Validity | Independent action enumeration, Ramen replay/cache/reset, label isolation, objective-value recomputation, registry replay, source/config/data/checkpoint hashes, review and CUDA smoke. Any failure is INVALID, not a scientific negative. |
-| Budget | Smoke ≤60 minutes total; Stage A ≤8 GPU-hours/cell; Stage B ≤24 GPU-hours/cell only if opened; one GPU and serial execution; peak allocation <7.5 GiB. |
+| Budget | Smoke ≤60 minutes total; Stage A ≤8 GPU-hours/cell and ≤16 total; Stage B ≤24 GPU-hours/cell and ≤48 total only if opened; one GPU and serial execution; peak allocation report-only. |
 | Decision | Stage A either freezes one passing candidate for fresh confirmation or stops this selector. Stage B GO opens a separate estimator case; valid failure is STOP for that frozen policy; resource/precision shortfall is INCONCLUSIVE. |
 
 ## Registry partition check
@@ -32,11 +32,18 @@ An independent outcome-free script applied the frozen SHA-256 assignment formula
 
 This confirms only that the frozen partition has enough *base IDs* in principle. It does not verify ID eligibility, cache candidate eligibility, the earliest selected stream prefix, or absence from historical unscored cache streams. P3 registry replay must validate those from the actual locked scan before scoring. If eligible quotas are short by the 6,000-row cap, the result is INCONCLUSIVE; the hash rule and exclusions remain unchanged.
 
+## Historical P3 CUDA receipts under v1.1 — 2026-10-08
+
+Reviewed source commit: `04abdbaab46f8c1d35f304e6cb8dbd1f43554b93`; source archive SHA-256: `35af0d707d7702af2990e022d34d858b13004c42a45d5b70190c546da805c511`. Both 600-row scans passed their scan/trace provenance checks on the reviewed revision, but allocator peaks were 8,369,873,408 bytes (OOD=0) and 8,368,574,976 bytes (OOD=0.5), above the frozen 7.5 GiB cap.
+
+The separate outcome-blind smoke registry SHA-256 is `40bd2afacb71482d01ddf65c33672c1a16340fc3fd9650eefdc6c70b5e014a8f`. Its OOD=0 run completed two registered queries and 485 legal swaps plus no-swap per query; peak was 8,358,872,576 bytes. OOD=0.5 completed two registered queries and 850 legal swaps plus no-swap per query; peak was 8,368,574,976 bytes. Both smoke scorer/provenance audits passed, and neither run persisted evaluator outcomes. Combined observed process elapsed was 35:08. A v1.1 builder rejected construction at its allocator cap; that policy decision is superseded. The source/protocol of these receipts remains v1.1 and must be recorded separately from active v1.2 registry provenance.
+
 The archived multi-view validation receipt reports 16,500 / 17,965 verified legal swaps across its two 16-query Stage-A cells, with per-query ranges 705–1,230 / 945–1,320. This is a scale reference only: its raw archive is missing and the new fresh-query cache states may yield different action counts. The new runner must emit exact attempted/enumerated/completed counts; smoke timing, not this historical report, locks the action chunk and confirms the Stage-A cost cap.
 
 ## Run state
 
 - P0 data and CLIP checkpoint identities passed their pinned checks; historical raw result archives are absent, so the old reports are not newly reproduced.
 - P1 literature mapping is committed. P2 v1 was committed at `973d81d`; the fresh read-only P2 audit and its four resolved corrections are recorded in [protocol review](protocol-consistency-review.md), with v1.1 hash above.
-- The coding context started from P2 v1 on separate branch `qcgs-exact-objective-code`; its output must be reconciled with v1.1 before code review or any launch. The source tree is not yet integrated or reviewed.
-- Smoke IDs, action chunk size, exact CLI, implementation hashes and run IDs remain P3 launch-lock fields. No inference, CUDA smoke, or scored evaluation has run.
+- Reviewed implementation/fix commit is `04abdbaab46f8c1d35f304e6cb8dbd1f43554b93` on `qcgs-exact-objective-code`; source archive SHA-256 is `35af0d707d7702af2990e022d34d858b13004c42a45d5b70190c546da805c511`. The latest fresh code review found no remaining findings; 35 focused tests and 443 repository tests (1 skipped) passed.
+- The 600-row scan prefix is quota-short: the v1.2 builder dry run reported 8 Stage-A and 51 Stage-B eligible IDs missing at OOD=0 and requested 1,200 rows/cell. The high smoke peaks did not trigger rejection. This is a quota extension, not a scientific result.
+- No current scientific registry or executable launch lock exists. Stage A and later conditional stages are not reached. CASE-QCGS-01 remains active; objective-to-utility is untested. See [active resource-policy revision](resource-policy-revision.md).

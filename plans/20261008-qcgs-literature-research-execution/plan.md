@@ -19,9 +19,9 @@ scope: "Thực thi toàn bộ synthesis theo các gate nghiên cứu; các bư�
 
 Synthesis báo cáo oracle headroom, STOP của single-view entropy-sign và STOP Stage A của MV-target-θ_R. Plan coi đây là đầu vào cần đối chiếu với reports/raw artifacts, chưa mặc nhiên là kết quả đã được xác minh lại trong chu kỳ này. Roadmap cũ không quyết định trạng thái hiện tại.
 
-Plan này đã được commit tại `45ea8f4`; P0 reconstruction, P1 bounded literature map, P2a instrument inspection và P2 scientific protocol freeze đã hoàn tất theo reports hiện có. P1 thu hẹp broad G1/G3 novelty claims. Source review ngày 2026-10-08 xác nhận bản nháp implementation P3 đã có trong workspace chính; chưa có receipts xác nhận required code review, tests, CUDA smoke hoặc scored campaign hoàn tất.
+Plan gốc đã được commit tại `45ea8f4`; P0–P2 và literature narrowing vẫn là completed inputs. Reviewed implementation/fix `04abdba` and both cost-only smokes are now complete. The active user revision is protocol v1.2: peak allocation is report-only, CASE-QCGS-01 remains active, and Stage A has not run.
 
-## Execution update — 2026-10-08
+## Execution snapshot — before P3 validation (2026-10-08)
 
 - P0: branch/commit, runtime, GPU, checkpoint, CIFAR-100-C arrays và thiếu raw artifacts đã được kiểm tra; chi tiết ở [research state](reports/research-state.md).
 - P2a: source-only instrument/parity audit hoàn tất ở [instrument audit](reports/instrument-audit.md). Không có code hoặc inference chạy trong task này.
@@ -47,7 +47,39 @@ Implementation vẫn phục vụ synthesis §24: đo exact objective-to-utility 
 - 32 exact-objective tests pass; full repository suite pass: 440 tests, 1 skipped. Final targeted `gpt-6.1-sol`/low review trên random-control utility, isolation receipt và direct objective replay regression không còn finding. Dispositions được ghi ở [instrument implementation review](reports/instrument-implementation-review.md).
 - Review sửa các lỗi interrupted-run status/JSONL, unpaired action identity, scan suffix continuity, smoke receipt completeness, Stage-B prerequisite/objective binding và random-forced utility recomputation. Formula regression independently replays all three objective calculations on each real scorer baseline/action tensor in the deterministic CPU fixture.
 - `action_chunk_size` nhóm query theo action index. Raw receipt nêu rõ GPU isolation sampling scope: action đầu tiên của query chunk đầu, tối đa hai query. CPU parity regression so sánh chunked/serial objective outputs trên mọi query/action của fixture; campaign mặc định dùng chunk 1.
-- P3 chưa đóng: chưa chạy scans, CUDA smoke, scored inference hoặc tạo registry/launch lock. Vì vậy peak memory/cost trên CLIP CUDA và smoke cap 60 phút chưa được kiểm chứng.
+- Snapshot tại commit `b33549a`: chưa chạy scans, CUDA smoke, scored inference hoặc tạo registry/launch lock; execution updates dưới đây supersede snapshot này.
+
+## Historical execution snapshot — v1.1 resource rejection (superseded)
+
+- Đã đọc lại plan hiện hành và tiếp tục theo đúng gate P3: reviewed source → scans → outcome-blind smoke → chỉ mở registry/Stage A nếu smoke đạt cap. Fresh source review phát hiện hai lỗi trong lazy-cache draft: priority phải so sánh ở dtype đầu vào như `PriorityCache`, và QCGS không được cấp phát cache eager trong `Ramen.__init__` trước khi thay thế. Đã sửa bằng cache-factory override; Ramen thường vẫn dùng `PriorityCache`.
+- Fix đã commit tại `04abdbaab46f8c1d35f304e6cb8dbd1f43554b93`; SHA-256 archive `src/`: `35af0d707d7702af2990e022d34d858b13004c42a45d5b70190c546da805c511`. Fresh `gpt-6.1-sol`/low review không còn finding. Focused suite: 35 pass; full suite: 443 pass, 1 skipped; `py_compile` và `git diff --check` pass. CPU tests không xác nhận CUDA parity.
+- Hai scans mới trên source này hoàn tất 600 rows và provenance audit pass: OOD=0 peak `8,369,873,408` bytes; OOD=0.5 peak `8,368,574,976` bytes. Cả hai cao hơn cap 7.5 GiB (`8,053,063,680` bytes). Scans cũ trên `d4ab6e0` đạt 600 rows nhưng peak `13,197,609,472` bytes; giữ làm feasibility attempts, không dùng chúng để tạo registry.
+- Outcome-blind smoke registry `40bd2afacb71482d01ddf65c33672c1a16340fc3fd9650eefdc6c70b5e014a8f` chọn queries riêng theo protocol. OOD=0 smoke hoàn tất 400 rows với 485 legal swaps + no-swap/query; peak `8,358,872,576` bytes. OOD=0.5 smoke hoàn tất 600 rows với 850 legal swaps + no-swap/query; peak `8,368,574,976` bytes. Cả hai scorer/provenance audits pass và không lưu evaluator outcomes. Combined process elapsed `35:08` (<60 phút), nhưng cả hai peak đều vượt 7.5 GiB.
+- `build-registry` theo policy cũ từ chối scientific-registry construction tại cap 7.5 GiB; rejection/raw attempts được giữ. Main plan revision mới bỏ cap dự phòng, nên kết luận resource-inconclusive chỉ do peak cao đã bị supersede. Câu hỏi khoa học active; tiếp tục cập nhật protocol/validator, profiling cost-only và chạy Stage A.
+
+## Current revision — bỏ memory cap dự phòng, ưu tiên Stage A (2026-10-08)
+
+**Authorization and rationale:** Người dùng cập nhật plan ở checkout chính sau smoke. Peak memory vẫn phải đo và báo, nhưng không còn là pass/fail hay launch gate. Chỉ sửa resource policy trước scored Stage A; không dùng supervised utility để đổi objective/scientific gates. Các execution snapshots và resource-inconclusive handoff phía trên là history, không còn là decision hiện hành.
+
+- Reviewed source fix `04abdbaab46f8c1d35f304e6cb8dbd1f43554b93` đã chạy hai scans 600 rows/cell và hai CUDA smokes 2 queries/cell. Smoke có 485 / 850 legal swaps/query, peaks 7,785 / 7,794 GiB, tổng elapsed 35:08; hoàn chỉnh, không OOM và không lưu evaluator utility outcomes.
+- Bỏ 7.5 GiB làm validator/launch gate. Peak là reported cost; run complete với peak cao không tự tạo STOP/INCONCLUSIVE hoặc profiling hold. Giữ compute budgets Stage A ≤8 GPU-hours/cell, ≤16 tổng; Stage B ≤24 GPU-hours/cell nếu được mở.
+- Giữ builder rejection cũ, failed attempts và raw receipts. Chúng chạy dưới protocol v1.1; không sửa raw/config cũ hay mô tả như đã chạy dưới v1.2. Reuse phải giữ tách biệt current policy hash với receipt source/protocol hashes.
+- Reconcile source fix/receipts; hoàn tất registry/launch lock với current source/config/protocol hashes, old receipt provenance và unique IDs; sau quota/profile gates chạy Stage A 16 queries/cell trong compute budgets. Theo dõi actual peak/runtime/OOM cho workload dài hơn; không áp dụng ngưỡng peak dự phòng.
+- Actual OOM/crash, incomplete coverage hoặc compute budget hết vẫn là execution/INCONCLUSIVE. Peak cao của run complete tự nó không phải failure.
+
+### Cost profile required before Stage A
+
+- Dùng workload cost-only trên smoke IDs đã excluded; tách baseline forward/backward, full-batch action trials, eight-view forwards, gradient aggregation, CPU hashing/serialization và peak memory.
+- Candidate trials chiếm phần lớn smoke elapsed theo `candidate_action_ms`; confirm chi tiết bằng component timings trước khi tối ưu. Chỉ tối ưu bottleneck đã đo bằng reuse, giảm duplicate transfers/synchronization hoặc batching bảo toàn by-sample/view mapping.
+- So before/after trên cùng workload, báo throughput/time/memory, baseline/objective values, selections, reset/cache, exhaustive coverage và label isolation. Không approximate, drop actions/views, đổi objective, batch visibility hay query quota.
+- Khi bottleneck được xử lý và Stage A dự toán nằm trong frozen budget, freeze source/config và launch; không biến tối ưu thành refactor vô hạn.
+
+### Trạng thái thực thi dưới revision hiện hành
+
+- Protocol/config/validator v1.2 được cập nhật trong coding worktree. Focused exact-objective suite: 36 pass; syntax/JSON/diff checks pass; targeted read-only review không còn finding. Thay đổi đang chờ commit và profile runs.
+- Registry regression nhận complete smoke peaks `8,358,872,576` và `8,368,574,976` bytes, ghi chúng vào provenance và tách receipt source/protocol v1.1 khỏi active v1.2 policy. Builder thử trực tiếp receipts cũ nhận peak nhưng scan 600 rows chưa đủ quota ở OOD=0: thiếu 8 Stage-A và 51 Stage-B IDs; quy tắc scan yêu cầu mở rộng lên 1.200 rows/cell.
+- Component profiler đã thêm cho cost-only smoke; GPU profile chưa chạy. Thử nghiệm CPU tối ưu forward từng query bị loại vì logits không bitwise-equal với batch gốc; production path giữ forward full-batch. Chi tiết ở [resource-policy revision](reports/resource-policy-revision.md).
+- Chưa có scientific registry/launch lock, Stage-A outcomes hoặc scientific decision. Next: commit v1.2 instrument, profile cost-only smokes trên excluded IDs, optimize chỉ bottleneck đo được với parity, run 1.200-row scans, freeze registry/lock, launch Stage A.
 
 ## 2. Phạm vi và nguyên tắc thực thi
 
@@ -197,7 +229,7 @@ Giá trị unresolved chặn scored campaign, không chặn literature/instrumen
 
 Module: [Instrument](../../.agents/skills/research-orchestrator/references/build-research-instrument.md). Coding worker triển khai contract P2 bằng cách tái sử dụng instrument hiện có sau audit; không viết deployable selector ở L0.
 
-**Trạng thái:** implementation và CPU validation hoàn tất trên worktree riêng; source commit và CUDA receipts còn mở. Không viết lại instrument chỉ để giảm số dòng. Reuse hoặc simplification chỉ khi giải quyết defect cụ thể hay cost đã đo.
+**Trạng thái:** reviewed source fix, prior CPU/full-suite validation, two v1.1 scans and two v1.1 smoke cells are complete. The v1.1 memory rejection is historical. Under v1.2 the measured peaks are report-only; current P3 remains open for component profiling, measured-cost optimization if justified, quota-complete scans, registry and launch lock. P4 has not started.
 
 ### Findings cần disposition trước scored launch
 
@@ -205,15 +237,15 @@ Module: [Instrument](../../.agents/skills/research-orchestrator/references/build
 |---|---|
 | Grouped isolation check chỉ lấy mẫu hai query đầu của action đầu. | Đã ghi `action_chunk_isolation_scope` và số forward checks trong raw receipt. CPU regression so sánh kết quả chunked/serial cho toàn bộ action/query fixture. Launch config mặc định chunk 1. CUDA receipt vẫn phải báo số check thực và không gọi sampled check là exhaustive. |
 | Raw audit không giữ tất cả objective tensors để tính lại từng raw value. | Đã thêm independent direct-formula replay trên tensor logits/view logits/feature/caption bank ở mọi baseline/action scorer call trong deterministic fixture; mapping caption bank so với per-row Ramen predictions được assert. Raw campaign analyzer vẫn xác minh scalar arithmetic, hashes và source/config/protocol provenance; report nêu rõ nó không dựng lại mọi tensor objective từ JSONL. |
-| Cost trên CLIP CUDA/8 GiB và smoke cap chưa đo. | Còn mở: smoke đo elapsed wall time, candidate/action/query/forward counts và allocator peak; tổng hai cell ≤60 phút và peak <7.5 GiB. Dự toán Stage A phải ghi workload/extrapolation limits. |
+| Cost trên CLIP CUDA/8 GiB. | Hai v1.1 smokes hoàn chỉnh trong `35:08`, với 485 / 850 legal swaps/query; peaks `8,358,872,576` / `8,368,574,976` bytes nay là report-only. New v1.2 component profile chưa chạy; Stage-A compute estimate chưa khóa. |
 | Stage B tính ba objective values dù chỉ lưu winner. | Chưa tối ưu trước `GO_CONFIRM`; đo cost smoke/Stage A và chỉ xem lại nếu đây là cost blocker. Bất kỳ thay đổi nào phải giữ winner score/selection và observation access theo protocol. |
 
 ### Thứ tự hoàn tất P3
 
-1. Reconcile source với v1.1; required code review tập trung findings trên và correctness/leakage/provenance. Ghi disposition từng finding; chưa gọi source review trong status check là required fresh-context review đã hoàn tất.
-2. Chạy regressions và required suite, lưu commands/results; commit implementation dùng cho smoke cùng source/protocol hashes và runtime differences.
-3. Unscored scan → chọn hai smoke queries/cell theo rule riêng → CUDA smoke trong tổng 60 phút, peak allocation <7.5 GiB. Có receipt về finite objectives, parity/reset/cache, exhaustive coverage, mapping và cost; không dùng smoke utility để tune objective.
-4. Dùng smoke để chốt safe chunk size và dự toán Stage A (≤8 GPU-hours/cell, ≤16 tổng). Nếu không khả thi trong caps, giữ failed attempts và ghi INCONCLUSIVE/resource decision; không giảm action set, số views, quota hay đổi scientific gate để đạt budget.
+1. Reconcile source với v1.1 và disposition code-review findings; hoàn tất ở commit `04abdba` với fresh `gpt-6.1-sol`/low review không còn finding.
+2. Required suite pass (35 focused; 443 full, 1 skipped); implementation fix đã commit cùng source/protocol hashes và runtime differences.
+3. Reuse old v1.1 scans/smokes only with explicit source/protocol provenance. The 600-row prefix is quota-short, so run 1,200-row scans under the frozen v1.2 source/policy; preserve both the 600-row and earlier failed attempts.
+4. Run one profile-only query per OOD cell on already excluded smoke IDs. Optimize only a measured bottleneck and keep exact action/view/formula coverage and bitwise batch parity; reprofile a changed execution path on the same workload.
 5. Freeze registry, exact CLI, source/config/protocol/transform hashes, smoke receipt và unique run IDs trong launch lock; cập nhật live state/readiness. Chỉ sau đó mở scored Stage A.
 
 - [x] Inspect `src/evaluation/oracle_support_utility.py`, `src/runtime/query_gradient_registry.py`, existing diagnostic/notebook paths và relevant configs; xác định phần reuse và sửa tối thiểu cần để đo exact objectives.
@@ -222,8 +254,9 @@ Module: [Instrument](../../.agents/skills/research-orchestrator/references/build
 - [x] Regression cho label isolation, trial order independence/reset, unchanged cache, baseline exact parity và exhaustive action coverage. Focused suite 32 pass; full suite 440 pass (1 skipped). CPU checks không chứng minh CUDA parity.
 - [x] Reviewer fresh context kiểm diff theo protocol và acceptance criteria; fix concrete findings rồi rerun checks bị ảnh hưởng. Final targeted `gpt-6.1-sol`/low review reported no remaining findings in the last diff.
 - [x] Freeze implementation source tree, config bundle, protocol SHA-256 và commit reviewed source trước CUDA; commit `b33549ad2e4e35e349a42909f7dbd4e32286ce58` dùng Git global identity đã khóa.
-- [ ] Freeze registry/exclusion, smoke receipts, exact commands/run IDs và hoàn tất launch lock sau scans + smoke, trước scored Stage A; ghi runtime/device differences và reproduction commands.
-- [ ] Chạy real CUDA smoke trên separate smoke queries, kiểm baseline/raw/log/provenance với numerical tolerance đã định trước; không dùng utility smoke để tune objective.
+- [x] Smoke registry/exclusions, receipts, exact commands/run IDs, runtime/device differences and hashes are preserved. The old v1.1 rejection is historical; current registry/launch lock is not yet created.
+- [x] Two real CUDA smoke cells completed with separate IDs; trace/action, baseline replay, reset/cache parity and exhaustive 485 / 850-swap coverage pass; peaks `8,358,872,576` / `8,368,574,976` bytes are report-only. Combined elapsed `35:08`; no evaluator outcomes were saved.
+- [ ] Run 1,200-row scans in both cells, cost-only component profiles and current registry/launch lock before Stage A.
 
 Các command đã có trong repo, thực thi sau khi xác nhận data root/runtime phù hợp:
 
@@ -236,11 +269,13 @@ PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py'
 
 `--offline` chỉ dùng khi dependencies đã cached; thiếu cache phải được ghi nhận và xử lý trong runtime setup. Không để tests tự tải data/checkpoint hoặc launch campaign. Campaign CLI/arguments sẽ ghi đúng theo implementation, không dùng placeholder command như thể đã chạy.
 
-**Exit:** findings có disposition, required checks và CUDA smoke có receipts; baseline parity/reset/access/exhaustiveness được chứng minh trong phạm vi đã ghi; cost phù hợp caps và launch lock hoàn tất. Nếu thiếu receipts, P3 vẫn mở. Campaign cần audit raw riêng.
+**Exit:** v1.2 report-only policy and provenance checks pass; profile and any chosen optimization have same-workload cost/parity receipts; quota-complete scans, registry and launch lock are frozen inside compute budgets. A high complete-run peak is not a P3 failure. Actual OOM/interruption or exhausted budget remains an execution shortfall. Scored campaign needs a separate raw audit.
 
 ## 9. P4 — L0 exhaustive execution và L1 information screen
 
 Module: [Research loop](../../.agents/skills/research-orchestrator/references/run-research-loop.md). Budget đúng launch plan P2/P3; lưu actual costs và failed attempts.
+
+**Trạng thái:** not started. v1.2 allows high complete-run peaks, but component profile, 1,200-row quota scans, scientific registry and launch lock remain unfinished. No Stage-A outcome or scientific result exists.
 
 **Bước kế tiếp sau P3:** chỉ launch Stage A 16 registered queries/cell và ba objectives đã freeze. `GO_CONFIRM` chọn một winner theo protocol trước khi mở Stage B 128 fresh queries/cell. `GO_P6` chỉ có sau independent Stage-B confirmation; Stage-A screening không trực tiếp mở estimator design.
 
@@ -260,7 +295,7 @@ Module: [Research loop](../../.agents/skills/research-orchestrator/references/ru
 | Decision | Evidence bắt buộc / hành động |
 |---|---|
 | INVALID | Provenance/leakage/parity/candidate mismatch, non-finite values trái contract hoặc campaign declared complete nhưng bỏ legal actions: repair instrument, giữ invalid run, không scientific STOP |
-| INCONCLUSIVE | Quota thiếu, execution/resource interruption hoặc <4 scored blocks/cell theo protocol v1.1: ghi thiếu gì; extension chỉ theo plan/revision riêng. Constant objective hoặc <8/16 defined rho do declared valid reasons là objective gate failure, không tự biến thành INCONCLUSIVE. Descriptive intervals không tạo thêm gate ngoài protocol. |
+| INCONCLUSIVE | Quota thiếu, actual execution/resource interruption, exhausted compute budget hoặc <4 scored blocks/cell theo protocol v1.2: ghi thiếu gì. High finite peak on a complete run is not INCONCLUSIVE. Constant objective or <8/16 defined rho for a declared valid reason is an objective gate failure. |
 | STOP OBJECTIVE FAMILY | Exact objectives đã kiểm trong family không có positive ranking/selected utility ổn định so controls hoặc cross-cell reversal theo numerical gates: đóng các formulations/access đã kiểm, không claim mọi entropy/label-free objective bất khả thi |
 | GO_CONFIRM | Complete valid Stage A có ít nhất một objective qua tất cả frozen §7 investment gates ở cả cells: freeze một winner theo mean rho/tie rule và mở fresh Stage B; chưa mở estimator. Sign precision và exploratory strata được báo cáo, không tự thêm thành gates. |
 | GO_P6 | Complete valid Stage B qua frozen utility/random-matched/Holm, median, contributor-removal, coverage và transition gates: mở case estimator riêng cho winner; chưa gọi là deployable success. |
@@ -273,6 +308,8 @@ Expected missing records trong interrupted campaign là incomplete/inconclusive;
 ## 10. P5 — L2 reliability, L3 evidence enrichment và L6 STOP
 
 Mở `CASE-QCGS-02` chỉ khi P4 decision chỉ ra giá trị thông tin còn lại, với budget và pre-run card mới.
+
+**Trạng thái:** not reached; P4 has not produced a decision.
 
 - [ ] L2 phân biệt target `max_a U(q,a)>0` với `U(q,a_selected)>0`; oracle headroom widespread có thể khiến target thứ nhất gần constant. Kiểm tra trivial always-adapt/always-abstain và base rates trước learned gate.
 - [ ] Observable reliability variables có thể dùng uncertainty/view response/source consistency/memory consensus đã định nghĩa; không dùng baseline true correctness, true OOD hoặc oracle quantities.
@@ -289,6 +326,8 @@ Mở `CASE-QCGS-02` chỉ khi P4 decision chỉ ra giá trị thông tin còn l�
 
 Mở `CASE-QCGS-03` cho winner của `CASE-QCGS-01` chỉ sau validated `GO_P6` từ Stage B. Channel mới ở P5 cần information/independent confirmation gates của case riêng trước estimator. Nếu upstream gate không đạt, phase này ghi `not reached` với upstream decision; không gọi là implementation thiếu.
 
+**Trạng thái:** not reached; không có Stage-A/Stage-B GO decision để mở estimator hoặc confirmation.
+
 - [ ] Tách fidelity với exact objective (`estimate_delta_z` so `delta_z`) khỏi alignment với supervised utility. Chọn estimator nhỏ nhất phù hợp geometry/update: gradient dot/sign-aware, finite difference/JVP; HVP/learned ranker chỉ khi failure signature và cost chứng minh cần thiết.
 - [ ] Coding/review theo cùng model/effort và scope P3. Giữ label isolation, reset/cache/baseline parity; compare exact-objective upper bound và matched compute controls.
 - [ ] Freeze objective, observation access, estimator, parameters, threshold, tie/no-swap/abstention rule, cost cap, source/config, Stage B fresh registry và GO/STOP gates trước confirmation.
@@ -302,13 +341,17 @@ Mở `CASE-QCGS-03` cho winner của `CASE-QCGS-01` chỉ sau validated `GO_P6` 
 
 Modules: [Case review](../../.agents/skills/research-orchestrator/references/review-research-case.md), [Paper evidence](../../.agents/skills/research-orchestrator/references/build-paper-evidence.md). Thực hiện sau mỗi meaningful cycle và tổng hợp khi nhánh đạt exit signal.
 
-- [ ] So kết quả với pre-run hypotheses/gates, audit validity trước interpretation; ghi returns về capability, infrastructure và scientific insight.
-- [ ] Decision record chọn continue/advance/pivot/stop, evidence thuận/nghịch, strongest alternative, unresolved risks, budget đã dùng và next action với success/stop signals.
-- [ ] Update live state và roadmap bằng liên kết decisions; không ghi đè lịch sử STOP hay biến reported evidence thành mới reproduced.
-- [ ] Claim matrix phân biệt oracle opportunity, exact-objective information, estimator fidelity, selective/deployable benefit và identifiability limitation; mỗi claim có supporting raw/report, uncertainty, contradiction và permissible wording.
-- [ ] Figures/tables cho objective–utility rankings, family/cell comparisons, harm/transition distributions, reliability coverage, estimator fidelity và cost nếu nhánh tương ứng thực sự có evidence.
-- [ ] Evidence packet gồm question, reference/change, decisive valid evidence, claim limits, source search/verification coverage, reproducibility commands/versions/hashes và next decision.
-- [ ] Outline hoặc grounded research note/paper sections theo evidence; negative audit có thể là kết quả khoa học. Không tự khẳng định novelty, universal impossibility, causal mechanism hay generalization chưa đo. Publishing/submission không thuộc plan này.
+### Historical P7 snapshot — v1.1 resource-gate disposition (superseded)
+
+- [x] So evidence với pre-run hypotheses/gates và audit validity trước interpretation; kết luận resource failure, không phải scientific evidence.
+- [x] Decision record chọn `INCONCLUSIVE` với evidence/alternative/risk/budget/next bounded test và success/stop signals.
+- [x] Cập nhật [research state](reports/research-state.md), [case readiness](reports/case-execution-readiness.md) và [roadmap](../../docs/research/ramen-thesis-research-roadmap.md); không sửa các historical STOPs hoặc coi reported metrics là newly reproduced.
+- [x] [Claim matrix](reports/claim-evidence-matrix.md) phân biệt oracle opportunity, objective information chưa đo, estimator/deployable claims chưa reached và resource feasibility.
+- [x] Cost/coverage/memory table được ghi trong [resource decision](reports/resource-gate-decision.md); scientific ranking/harm/reliability/estimator figures không áp dụng vì P4–P6 not reached.
+- [x] [Evidence packet](reports/evidence-packet.md) lưu question, prior work, valid evidence, claim limits, source coverage, commands, versions, hashes và next decision.
+- [x] [Grounded research note](reports/research-note.md) bám evidence; không claim novelty, impossibility, causal mechanism hoặc generalization. Publishing/submission ngoài phạm vi.
+
+Current P7 decision remains pending until P4 raw records are analyzed. The v1.1 resource decision is preserved as history, and active reports now point to the v1.2 revision.
 
 ## 13. Coverage toàn bộ synthesis và completion audit
 
@@ -325,20 +368,27 @@ Modules: [Case review](../../.agents/skills/research-orchestrator/references/rev
 | §36: GO/STOP logic | P2, P4–P6 | Numerical gates freeze trước run + independent audit/decision |
 | §37–39: interpretation, references, immediate action | P1, P2, P7 | Reference verification, 7-item protocol, evidence-grounded handoff |
 
-Trước khi đánh dấu toàn bộ chu kỳ hoàn tất:
+### Historical completion audit — v1.1 resource-gate snapshot (superseded)
 
-- [ ] Audit từng requirement trên và mọi explicit artifact/command/gate của protocol đã frozen; đọc authoritative files/raw/process status, không dựa vào intent hay roadmap checkbox.
-- [ ] Mọi required run đã terminal và có validity disposition; counts attempted/completed/validated/missing nhất quán. Mỗi command được ghi đúng là ran/planned/failed.
-- [ ] Các layer sau chỉ được đóng theo gate có evidence; `not reached` hợp lệ do scientific STOP/PIVOT, không dùng để che unexecuted required work hoặc thiếu data/compute.
-- [ ] Tất cả claims khớp verification scope. Missing raw, inaccessible sources, inconclusive precision hay unverified result còn là open work trong scope đã chọn.
-- [ ] Durable reports/decisions/evidence packet được lưu; source/config/registry/protocol hashes và artifact recovery đủ để người khác kiểm lại.
-- [ ] Handoff nêu câu hỏi đã giảm uncertainty gì, còn alternative nào, quyết định hiện tại và next bounded test. Không cần mọi hypothesis đúng để nghiên cứu hoàn tất; cần decision được chứng minh và không còn required task chưa xử lý.
+These checkboxes record the previous resource-gate handoff only; they do not complete the active execution plan.
 
-## 14. Việc thực hiện đầu tiên khi chạy plan
+- [x] Audit authoritative plan/protocol/source/raw/process status. P4–P6 are explicitly not reached because P3 memory gate failed; no scientific result is inferred.
+- [x] Every attempted run is terminal with validity disposition: one pre-batch CUDA-env failure, two over-cap pre-fix scans, two reviewed-source scans and two reviewed-source smokes; run IDs/counts/commands are recorded.
+- [x] Not-reached phases have the upstream P3 resource reason and are not presented as scientific STOPs or completed scored work.
+- [x] Claims match verification scope. Historical raw is missing and not recomputed; smoke utility is not used for interpretation.
+- [x] Durable reports, decision, claim matrix, evidence packet, source/config/registry/protocol hashes and raw artifact recovery paths are recorded.
+- [x] Handoff states that objective-to-utility uncertainty remains, identifies resource feasibility as the current alternative blocker, records the `INCONCLUSIVE` decision and defines a bounded next test. No required work remains within this resource-inconclusive cycle; any memory optimization is a new revision/cycle.
 
-1. Reconcile bản nháp P3 trong workspace chính với protocol v1.1; kiểm source/worktree/process state thực tế trước khi giao thêm writer. P0–P2 reports và registry partition check là đầu vào đã có, không làm lại chỉ để cập nhật checkbox.
-2. Required review và regressions tập trung vào isolation/view mapping, objective recomputation, baseline/reset/cache, label boundary và exhaustive coverage; lưu findings/dispositions và validation receipts.
-3. Commit source dùng cho smoke; chạy unscored scan và CUDA smoke trên registry riêng trong caps. Đo feasibility trước khi mở rộng reporting/optimization; resource failure có disposition và giữ artifacts.
-4. Nếu smoke đạt, chốt launch lock và cập nhật state/readiness; chạy Stage A 16 queries/cell, audit raw và ghi GO_CONFIRM/STOP/INVALID/INCONCLUSIVE theo protocol. Chỉ GO_CONFIRM mở Stage B; chỉ GO_P6 mở estimator case. P5 extension cần câu hỏi mới, case card và budget.
+## 14. Execution history — v1.1 resource-gate snapshot (superseded)
 
-Việc viết plan này không tự launch workers, tests hoặc CUDA campaign. Khi thực thi, launcher tiếp tục theo authorization hiện có, không chèn approval gates vào từng variant; chỉ dừng để lấy thông tin thực sự thiếu khiến bước phụ thuộc không thể tiến hành đúng.
+1. Reconciled implementation với protocol v1.1, user-edited plan và worktree/source state; P0–P2 reports và registry partition check được tái sử dụng.
+2. Fresh targeted source review, cache-memory regressions, 35 focused tests và 443-test full suite (1 skipped) hoàn tất; implementation fix được commit trước các GPU checks.
+3. Hai unscored scans và hai smoke cells chạy serial trên GPU theo locks/configs riêng. Coverage/provenance/parity receipts complete, nhưng memory cap fail trên cả hai cells; time cap pass. Mọi attempts và builder rejection được giữ.
+4. Under v1.1 the memory gate stopped registry construction before Stage A. Its rejection and `INCONCLUSIVE/resource` handoff are retained as history; the user’s v1.2 revision supersedes that decision.
+
+## 15. Current execution order — v1.2
+
+1. Commit the resource-policy, legacy-provenance and component-profile changes after the targeted review and focused validation.
+2. Run cost-only profile smoke jobs on already excluded IDs; record per-batch component timings and decide whether measured bottlenecks justify a parity-preserving optimization.
+3. Run 1,200-row unscored scans in both cells, validate eligibility/quota and build the current registry with separate v1.1 smoke receipt provenance.
+4. Freeze the launch lock and run Stage A 16 queries/cell within ≤8 GPU-hours/cell and ≤16 total. Analyze raw records; only `GO_CONFIRM` opens Stage B, and only Stage-B `GO_P6` opens P6.
