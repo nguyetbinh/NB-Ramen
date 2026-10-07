@@ -12,6 +12,7 @@ import json
 import re
 import time
 import statistics
+from types import SimpleNamespace
 from array import array
 from collections import deque
 from dataclasses import asdict
@@ -403,9 +404,17 @@ def ordered_stream_test(
     consensus_diagnostics_available = None
     memory_tracker = DeviceMemoryTracker(args.device)
     memory_tracker.start()
-    if getattr(tta_model, 'diagnostic_kind', None) in ('qcgs', 'qcgs-multiview'):
+    if getattr(tta_model, 'diagnostic_kind', None) in ('qcgs', 'qcgs-multiview', 'qcgs-exact-objective'):
         tta_model.reset_cuda_peak = memory_tracker.reset_scoped_cuda_peak
         tta_model.device_memory_summary = memory_tracker.summary
+    exact_evaluator = None
+    if getattr(tta_model, 'diagnostic_kind', None) == 'qcgs-exact-objective':
+        from evaluation.qcgs_exact_objective_audit import ExactObjectiveEvaluator
+        exact_evaluator = ExactObjectiveEvaluator(int(tta_model.cfg.get('random_seed', 0)))
+        from evaluation.qcgs_exact_objective_audit import write_scorer_outputs
+        # Persist the requested stage and an incomplete status before loading
+        # the first batch, so a pre-query failure remains visible to analysis.
+        write_scorer_outputs(tta_model, evidence_paths['run_dir'])
 
     try:
         for part_index, evaluation_part in enumerate(evaluation_parts):
@@ -453,6 +462,14 @@ def ordered_stream_test(
                 # receives it through its one-shot context hook only.
                 _provide_oracle_domain_context(tta_model, domain_idx)
                 _provide_oracle_ood_context(tta_model, is_ood)
+                if getattr(tta_model, 'diagnostic_kind', None) == 'qcgs-exact-objective':
+                    if open_set_stream is None:
+                        raise RuntimeError('exact-objective audit requires the open-set evaluator')
+                    tta_model.set_query_identity(sample_idx.to(torch.long))
+                    if tta_model.mode != 'scan':
+                        raw = [datasets[int(domain)].diagnostic_raw_image(int(index))
+                               for domain, index in zip(domain_idx, sample_idx)]
+                        tta_model.set_query_images(np.stack([pixels for pixels, _ in raw]), raw[0][1])
                 if getattr(tta_model, 'requires_oracle_known_label', False):
                     if args.tta_algo not in ('OracleSupportUtilityProbe', 'QueryGradientUtilityProbe', 'MultiViewQueryGradientUtilityProbe'):
                         raise RuntimeError('known labels are restricted to named utility diagnostics')
@@ -472,6 +489,23 @@ def ordered_stream_test(
                 _sync_device(args.device)
                 started = time.perf_counter()
                 logits = tta_model(image)
+                if getattr(tta_model, 'diagnostic_kind', None) == 'qcgs-exact-objective':
+                    from evaluation.qcgs_exact_objective_audit import (
+                        write_evaluator_outputs, write_scorer_outputs,
+                    )
+                    # The action/objective file is flushed before labels cross
+                    # into the evaluator-owned utility path.
+                    write_scorer_outputs(tta_model, evidence_paths['run_dir'])
+                    frozen_payload = tta_model.pop_evaluator_payload()
+                    if frozen_payload['queries']:
+                        outcomes = exact_evaluator.evaluate_batch(
+                            frozen_payload, label, is_ood, domain_idx,
+                            model=tta_model.model, batch_images=image,
+                            reference_context=frozen_payload['reference_context'],
+                            lr=tta_model.cfg['lr'],
+                            ood_cell=format(float(args.ood_ratio), 'g'),
+                        )
+                        write_evaluator_outputs(outcomes, evidence_paths['run_dir'])
                 if getattr(args, 'tta_algo', None) in ('OracleSupportUtilityProbe', 'QueryGradientUtilityProbe', 'MultiViewQueryGradientUtilityProbe'):
                     from evaluation.oracle_support_utility import write_probe_outputs
                     write_probe_outputs(tta_model, evidence_paths['run_dir'])
@@ -1069,7 +1103,12 @@ def main(args):
 
     if tta_method is None:
         print("Initializing model")
-        tta_method = method_class(model, datasets, args)
+        if args.tta_algo == 'QCGSExactObjectiveAudit':
+            scorer_datasets = SimpleNamespace(num_classes=datasets.num_classes, classes=datasets.classes)
+            scorer_args = SimpleNamespace(config=args.config, max_batch_size=args.max_batch_size)
+            tta_method = method_class(model, scorer_datasets, scorer_args)
+        else:
+            tta_method = method_class(model, datasets, args)
 
     if args.tta_mode in {'single', 'mixed'}:
         domain_names, dataset_accs, _ = ordered_stream_test(
@@ -1267,8 +1306,14 @@ def args_parser():
             parser.error('--open_set_per_domain_source_budget requires --open_set')
         args.known_class_split_path = None
         args.known_class_split_sha256 = None
-    if args.tta_algo in {'OracleIDGradientRamen', 'OracleDropOODRamen', 'OracleConsensusRamen'} and not args.open_set:
+    if args.tta_algo in {'OracleIDGradientRamen', 'OracleDropOODRamen', 'OracleConsensusRamen',
+                         'QCGSExactObjectiveAudit'} and not args.open_set:
         parser.error(f'--tta_algo {args.tta_algo} requires --open_set evaluator labels')
+    if args.tta_algo == 'QCGSExactObjectiveAudit' and (
+            args.dataset != 'CIFAR100C' or args.batch_size != 100 or args.stream_mode != 'block' or
+            args.stream_block_size != 64 or args.seed != 0 or args.stream_seed not in (None, 0) or
+            args.ood_ratio not in (0.0, 0.5) or args.open_set_per_domain_source_budget != 400):
+        parser.error('QCGSExactObjectiveAudit requires the frozen CIFAR100C batch-100 block-64 seed-0 stream')
 
     if args.cuda and args.device_request not in ('auto', 'cuda'):
         parser.error('--cuda cannot be combined with a non-CUDA --device')
@@ -1281,6 +1326,10 @@ def args_parser():
     if requested_device == 'mps' and not mps_available:
         parser.error('MPS was requested but torch.backends.mps.is_available() is false')
     args.device = torch.device(requested_device)
+    if args.tta_algo == 'QCGSExactObjectiveAudit' and (
+            args.device.type != 'cuda' or args.max_eval_samples is None or
+            args.max_eval_samples <= 0 or args.max_eval_samples > 6000 or args.max_eval_samples % 100):
+        parser.error('QCGSExactObjectiveAudit requires CUDA and a complete 100-row prefix of at most 6000 rows')
     if args.stream_seed is None:
         args.stream_seed = args.seed
     if args.legacy_mixed_order and args.stream_seed != args.seed:
@@ -1382,7 +1431,8 @@ if __name__ == '__main__':
     args = args_parser()
     torch.set_num_threads(args.num_threads)
     setup_seed(args.seed)
-    if args.tta_algo in ('QueryGradientUtilityProbe', 'MultiViewQueryGradientUtilityProbe'):
+    if args.tta_algo in ('QueryGradientUtilityProbe', 'MultiViewQueryGradientUtilityProbe',
+                         'QCGSExactObjectiveAudit'):
         torch.use_deterministic_algorithms(True)
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.backends.cudnn.allow_tf32 = False

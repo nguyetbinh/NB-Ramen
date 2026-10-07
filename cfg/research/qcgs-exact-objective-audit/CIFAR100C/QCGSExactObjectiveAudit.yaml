@@ -1,0 +1,14 @@
+beta: 5.0
+candidate_m: 10
+max_capacity: 750
+optimizer: signsgd
+lr: 0.01
+topk: 5
+action_chunk_size: 1
+qcgs_mode: scan
+objective_stage: all
+query_schedule: []
+dataset_fingerprint: null
+source_revision: null
+registry_sha256: null
+config_sha256: null

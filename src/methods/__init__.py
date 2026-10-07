@@ -34,3 +34,4 @@ def get_method_class(method_name):
 from .OracleSupportUtilityProbe import OracleSupportUtilityProbe
 from .QueryGradientUtilityProbe import QueryGradientUtilityProbe
 from .MultiViewQueryGradientUtilityProbe import MultiViewQueryGradientUtilityProbe
+from .QCGSExactObjectiveAudit import QCGSExactObjectiveAudit
