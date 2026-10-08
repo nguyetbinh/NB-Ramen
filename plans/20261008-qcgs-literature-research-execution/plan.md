@@ -19,7 +19,7 @@ scope: "Thực thi toàn bộ synthesis theo các gate nghiên cứu; các bư�
 
 Synthesis báo cáo oracle headroom, STOP của single-view entropy-sign và STOP Stage A của MV-target-θ_R. Plan coi đây là đầu vào cần đối chiếu với reports/raw artifacts, chưa mặc nhiên là kết quả đã được xác minh lại trong chu kỳ này. Roadmap cũ không quyết định trạng thái hiện tại.
 
-Plan này đã được commit tại `45ea8f4`; P0–P2, implementation/review/CPU validation và hai CUDA smoke đã hoàn tất theo reports/raw hiện có. Source fix mới nhất là `04abdba` ở coding worktree. Stage A chưa chạy; việc tiếp theo là áp dụng revision resource policy bên dưới, reconcile source/receipts và hoàn tất registry/launch lock tối thiểu để chạy Stage A.
+Plan gốc được commit tại `45ea8f4`; người dùng sửa resource policy ở các commit `f638c55`/`962e410`. P3 hiện đã hoàn tất trong coding worktree: v1.2 policy/code, deterministic cost profiles, quota-complete scans, registry và launch lock đều được đóng băng. Stage A chưa chạy; bước tiếp theo là launch hai cell serial trên GPU theo lock đã lưu.
 
 ## Execution snapshot — trước implementation validation, 2026-10-08
 
@@ -70,11 +70,14 @@ Implementation vẫn phục vụ synthesis §24: đo exact objective-to-utility 
 
 ### Execution status — 2026-10-08
 
-- Resource-policy/profile implementation committed at `5f486e4ada84fb5b6a1c4794c3a00dc9015654d5`; execution-report update committed at `f06094431ebe47258fcb8d4be4a1cdee074caf8f`. Protocol v1.2 SHA-256: `397e769d2eda50bad9a4744efbd7d928bf06640b9b15b06745ecd45955a5df03`.
-- Focused suite: 36 pass; syntax, protocol JSON and diff checks pass. Fresh targeted review has no remaining findings. The 600-row registry check accepted high smoke peaks but requested 1,200-row scans after OOD=0 was short by 8 Stage-A and 51 Stage-B eligible queries.
-- First profile launch attempt used a mistyped source SHA (`f0609445…` vs the actual `f06094431…`). OOD=0 completed but failed provenance audit; OOD=0.5 was stopped at 500 scan rows before scoring. Both attempts are preserved in `evidence/qcgs-exact-objective-audit/decisions/profile-source-revision-mismatch-20261008.json` and excluded from profile conclusions.
-- Corrected profile-only jobs are running serially on the same excluded IDs: `profile-ood-0-s0-v12r1-20261008` (config SHA `68ae21e62ea799269e903a89e5d89014e261134f291ab08c0179710a88f2ac45`) and `profile-ood-05-s0-v12r1-20261008` (config SHA `643fda47be89d1586b18242b1fc1e7b5705dd4c63e12b4893f66c36047bdedbc`). Logs: `log/qcgs-exact-objective-audit/profile-only-v12-correct/`. Stage A has not launched.
+- Active protocol: v1.2, SHA-256 `397e769d2eda50bad9a4744efbd7d928bf06640b9b15b06745ecd45955a5df03`; allocator peak is report-only. Current coding-worktree revision is `6cd46a8a785e97b1de234af118540cfdd0f562e8`, clean, with source tree fingerprint `c9898bceaa4b04801db1fe16d3899f73ba2cd1517a4d2e78af526452b81a9319`.
+- Query-invariant eight-view scoring fix `9206f08f5d66229a9d1d526667ed8ed9c03e8a65` passed the focused 37-test suite. Final cost-only profiles `profile-ood-0-s0-v12r3-20261008` and `profile-ood-05-s0-v12r3-20261008` completed under `CUBLAS_WORKSPACE_CONFIG=:4096:8`, `PYTHONHASHSEED=0`; scorer/provenance audits pass, with no evaluator outcomes. Candidate scorer wall times were 315.7 s (485 swaps) and 601.3 s (850 swaps); peak allocations 8,358,872,576 / 8,368,574,976 bytes remain report-only. No exact speed optimization was selected.
+- Unscored v1.2 scans `scan-ood-0-v12-r1-n1200-20261008` and `scan-ood-05-v12-r3-n1200-20261008` each have 1,200 scan and trace rows, clean source/protocol provenance and correct split hash. The builder selected shortest complete prefixes of 800 rows (OOD=0) and 1,100 rows (OOD=0.5).
+- Scientific registry is frozen at [scientific-registry-v12-6cd46a8-20261008.json](/home/thinkpad/NB-Ramen/evidence/qcgs-exact-objective-audit/registries/scientific-registry-v12-6cd46a8-20261008.json), registry SHA-256 `85d565842255691415178302142624824ec4d48701f5c659df874559f3accc52`. It assigns 16 Stage-A and 128 reserved Stage-B IDs per cell, keeps the 1,499 historical exclusions and four smoke IDs, and explicitly separates v1.1 smoke receipt provenance.
+- Frozen launch lock: [stage-a-launch-lock-v12-20261008.json](/home/thinkpad/NB-Ramen/evidence/qcgs-exact-objective-audit/locks/stage-a-launch-lock-v12-20261008.json), SHA-256 `66d714ec346f40036b2bf2d8b4c2d6390aba564e18a0233fb31e053f74155844`. Stage-A run IDs are `stage-a-ood-0-v12-r1-20261008` and `stage-a-ood-05-v12-r1-20261008`; deterministic CUDA commands are locked for serial execution. A conservative maximum-action forecast with 20% reserve is 6.94 / 7.55 GPU-hours per cell (14.49 total), within the frozen ≤8/cell, ≤16 total budgets; it is not a measured runtime guarantee.
+- Startup/launcher failures remain preserved and excluded: profile r2 lacked the deterministic cuBLAS environment; OOD=0.5 scan r1 had a truncated split hash; scan r2 resolved the base interpreter and could not import torch. No invalid attempt contributed records. Stage A has not launched; no objective-to-utility outcome or scientific decision exists.
 
+**Next:** launch Stage A serially with the frozen locks, then audit the raw scorer/evaluator records independently before deciding whether Stage B opens.
 ## 2. Phạm vi và nguyên tắc thực thi
 
 - Bắt đầu với CIFAR-100-C, CLIP ViT-B/16, OOD=0 và OOD=0.5, fixed Ramen candidate space, exhaustive legal one-swap actions và no-swap.
@@ -223,7 +226,7 @@ Giá trị unresolved chặn scored campaign, không chặn literature/instrumen
 
 Module: [Instrument](../../.agents/skills/research-orchestrator/references/build-research-instrument.md). Coding worker triển khai contract P2 bằng cách tái sử dụng instrument hiện có sau audit; không viết deployable selector ở L0.
 
-**Trạng thái:** reviewed source fix `04abdba`, CPU validation và hai CUDA smoke complete ở coding worktree. Còn reconcile vào execution checkout, áp dụng resource-policy revision và hoàn tất registry/launch lock. Không mở thêm memory-feasibility case chỉ vì peak vượt 7,5 GiB.
+**Trạng thái:** P3 prerequisites are complete in the coding worktree: v1.2 source/policy, final deterministic profiles, both 1,200-row scans, scientific registry and Stage-A launch lock are frozen. Stage A has not started. High finite peak remains report-only; no additional memory gate is introduced.
 
 ### Findings cần disposition trước scored launch
 
@@ -231,16 +234,15 @@ Module: [Instrument](../../.agents/skills/research-orchestrator/references/build
 |---|---|
 | Grouped isolation check chỉ lấy mẫu hai query đầu của action đầu. | Đã ghi `action_chunk_isolation_scope` và số forward checks trong raw receipt. CPU regression so sánh kết quả chunked/serial cho toàn bộ action/query fixture. Launch config mặc định chunk 1. CUDA receipt vẫn phải báo số check thực và không gọi sampled check là exhaustive. |
 | Raw audit không giữ tất cả objective tensors để tính lại từng raw value. | Đã thêm independent direct-formula replay trên tensor logits/view logits/feature/caption bank ở mọi baseline/action scorer call trong deterministic fixture; mapping caption bank so với per-row Ramen predictions được assert. Raw campaign analyzer vẫn xác minh scalar arithmetic, hashes và source/config/protocol provenance; report nêu rõ nó không dựng lại mọi tensor objective từ JSONL. |
-| Cost trên CLIP CUDA/8 GiB. | Đã đo hai smoke complete trong 35:08, peak 7,785 / 7,794 GiB. Peak là reported cost; mức dự phòng 7,5 GiB không còn là blocker. Báo runtime/action counts và extrapolation limits cho Stage A. |
+| Cost trên CLIP CUDA/8 GiB. | V1.2 profiles đo candidate scorer wall 315.7 / 601.3 s tại 485 / 850 swaps; peaks 8,358,872,576 / 8,368,574,976 bytes report-only. Max-action forecast +20% reserve là 6.94 / 7.55 GPU-hours/cell; kiểm actual costs trong Stage A. |
 | Stage B tính ba objective values dù chỉ lưu winner. | Chưa tối ưu trước `GO_CONFIRM`; đo cost smoke/Stage A và chỉ xem lại nếu đây là cost blocker. Bất kỳ thay đổi nào phải giữ winner score/selection và observation access theo protocol. |
 
 ### Thứ tự hoàn tất P3
 
-1. Reconcile reviewed source `04abdba` cùng findings/dispositions và receipts từ coding worktree; giữ label isolation, baseline/reset/cache và exhaustive coverage.
-2. Reuse required review/regressions/suite đã hoàn tất; chỉ kiểm phần validator/provenance bị ảnh hưởng bởi revision. Freeze source/protocol/config hashes dùng cho scored run, không mở lại vòng full validation khi không có thay đổi liên quan.
-3. Reuse hai unscored scans và hai CUDA smoke complete trên source fix `04abdba`; kiểm receipts về finite objectives, parity/reset/cache, coverage, mapping và cost. Cập nhật resource clause/validator theo revision trước scored run, ghi hash mới và provenance reuse. Không dùng smoke utility để tune objective, không yêu cầu rerun chỉ vì peak >7,5 GiB.
-4. Profile bottleneck trên cost-only smoke workload và tối ưu cục bộ để giảm thời gian experiment theo mục trên; kiểm before/after và parity của execution path thay đổi. Chốt chunk size và dự toán Stage A (≤8 GPU-hours/cell, ≤16 tổng). Peak memory là measurement; không giảm actions/views/quota hay đổi scientific gates, không mở case chỉ để đạt mức dự phòng.
-5. Freeze registry, exact CLI, source/config/protocol/transform hashes, smoke receipt và unique run IDs trong launch lock; cập nhật live state/readiness. Chỉ sau đó mở scored Stage A.
+1. Reconcile reviewed source, user resource-policy revision and prior v1.1 receipts with explicit source/protocol provenance; preserve all failed attempts.
+2. Commit the report-only policy, view-forward parity fix and focused regressions; complete scorer/provenance audits on final deterministic cost-only profiles. No exact speed optimization was justified.
+3. Run and audit the 1,200-row unscored scans; freeze the shortest quota-complete registry and verify 16 Stage-A / 128 reserved Stage-B IDs per cell with historical/smoke exclusions.
+4. Freeze source/config/protocol/data/transform hashes, Stage-A run IDs, deterministic CUDA environment and compute budget in the launch lock. P3 prerequisites are now complete; Stage A is the next step.
 
 - [x] Inspect `src/evaluation/oracle_support_utility.py`, `src/runtime/query_gradient_registry.py`, existing diagnostic/notebook paths và relevant configs; xác định phần reuse và sửa tối thiểu cần để đo exact objectives.
 - [x] Ghi action records đủ tái tính: query/action opaque keys, candidate snapshot/hash, baseline/action outcomes cho objective, evaluator CE/predictions riêng, valid/undefined reasons và costs.
@@ -248,7 +250,7 @@ Module: [Instrument](../../.agents/skills/research-orchestrator/references/build
 - [x] Regression cho label isolation, trial order independence/reset, unchanged cache, baseline exact parity và exhaustive action coverage. Focused suite 32 pass; full suite 440 pass (1 skipped). CPU checks không chứng minh CUDA parity.
 - [x] Reviewer fresh context kiểm diff theo protocol và acceptance criteria; fix concrete findings rồi rerun checks bị ảnh hưởng. Final targeted `gpt-6.1-sol`/low review reported no remaining findings in the last diff.
 - [x] Freeze implementation source tree, config bundle, protocol SHA-256 và commit reviewed source trước CUDA; commit `b33549ad2e4e35e349a42909f7dbd4e32286ce58` dùng Git global identity đã khóa.
-- [ ] Freeze registry/exclusion, smoke receipts, exact commands/run IDs và hoàn tất launch lock sau scans + smoke, trước scored Stage A; ghi runtime/device differences và reproduction commands.
+- [x] Freeze registry/exclusions and v1.1 smoke provenance; verify quota-complete scans and freeze exact Stage-A commands/run IDs, source/config/protocol/data/transform hashes, deterministic CUDA environment and compute budgets in the launch lock.
 - [x] Hai real CUDA smoke trên separate queries đã complete trên source `04abdba`; raw receipts ở `evidence/qcgs-exact-objective-audit/`. Reconcile receipts vào launch lock theo resource-policy revision; utility smoke không dùng để tune objective.
 
 Các command đã có trong repo, thực thi sau khi xác nhận data root/runtime phù hợp:
@@ -362,9 +364,9 @@ Trước khi đánh dấu toàn bộ chu kỳ hoàn tất:
 
 ## 14. Việc thực hiện đầu tiên khi chạy plan
 
-1. Reconcile reviewed source `04abdba` và completed smoke receipts từ coding worktree vào execution checkout; cập nhật live state và giữ historical attempts.
-2. Áp dụng revision bỏ cap dự phòng 7,5 GiB trong protocol/config/validator; profile runtime bottleneck và tối ưu cục bộ trên cost-only smoke IDs, kiểm speedup/parity trên cùng workload. Ghi source/config/protocol hashes mới và validation phù hợp cho code thay đổi.
-3. Freeze scientific registry/launch lock tối thiểu và chạy Stage A 16 queries/cell trong compute budget; theo dõi actual memory/runtime/OOM, audit raw và ghi scientific decision. Không tiếp tục tối ưu phần không phải bottleneck để trì hoãn phép thử.
-4. Chỉ GO_CONFIRM mở Stage B; chỉ GO_P6 mở estimator case. Actual execution failure được sửa hoặc chuyển hardware với failed attempts được giữ; P5 extension cần câu hỏi mới, case card và budget.
+1. P3 source, profile, scan, registry and launch-lock gates are complete; preserve all startup/CLI failures and v1.1 receipt provenance.
+2. Launch the two frozen Stage-A runs serially within ≤8 GPU-hours/cell and ≤16 total; record actual action coverage, runtime and peak allocation.
+3. Independently audit raw provenance, exhaustive actions, label isolation, utilities and frozen gates, then record the scientific decision.
+4. Only `GO_CONFIRM` opens Stage B; only `GO_P6` opens estimator work. Preserve any actual execution failure and bounded follow-up; any P5 extension needs a new question, case card and budget.
 
 Việc viết plan này không tự launch workers, tests hoặc CUDA campaign. Khi thực thi, launcher tiếp tục theo authorization hiện có, không chèn approval gates vào từng variant; chỉ dừng để lấy thông tin thực sự thiếu khiến bước phụ thuộc không thể tiến hành đúng.
