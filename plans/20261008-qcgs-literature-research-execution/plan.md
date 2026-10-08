@@ -19,7 +19,7 @@ scope: "Thực thi toàn bộ synthesis theo các gate nghiên cứu; các bư�
 
 Synthesis báo cáo oracle headroom, STOP của single-view entropy-sign và STOP Stage A của MV-target-θ_R. Plan coi đây là đầu vào cần đối chiếu với reports/raw artifacts, chưa mặc nhiên là kết quả đã được xác minh lại trong chu kỳ này. Roadmap cũ không quyết định trạng thái hiện tại.
 
-Plan gốc được commit tại `45ea8f4`; người dùng sửa resource policy ở các commit `f638c55`/`962e410`. P3 hiện đã hoàn tất trong coding worktree: v1.2 policy/code, deterministic cost profiles, quota-complete scans, registry và launch lock đều được đóng băng. Stage A chưa chạy; bước tiếp theo là launch hai cell serial trên GPU theo lock đã lưu.
+Plan gốc được commit tại `45ea8f4`; người dùng sửa resource policy ở các commit `f638c55`/`962e410`. P3 đã hoàn tất trong coding worktree: v1.2 policy/code, deterministic cost profiles, quota-complete scans, registry và launch lock đều được đóng băng. Stage A hiện chạy serial theo lock: OOD=0 đã complete và qua raw-integrity audit; OOD=0.5 đang chạy. Chỉ phân tích scientific gates sau khi cả hai cell complete và được audit.
 
 ## Execution snapshot — trước implementation validation, 2026-10-08
 
@@ -75,9 +75,9 @@ Implementation vẫn phục vụ synthesis §24: đo exact objective-to-utility 
 - Unscored v1.2 scans `scan-ood-0-v12-r1-n1200-20261008` and `scan-ood-05-v12-r3-n1200-20261008` each have 1,200 scan and trace rows, clean source/protocol provenance and correct split hash. The builder selected shortest complete prefixes of 800 rows (OOD=0) and 1,100 rows (OOD=0.5).
 - Scientific registry is frozen at [scientific-registry-v12-6cd46a8-20261008.json](/home/thinkpad/NB-Ramen/evidence/qcgs-exact-objective-audit/registries/scientific-registry-v12-6cd46a8-20261008.json), registry SHA-256 `85d565842255691415178302142624824ec4d48701f5c659df874559f3accc52`. It assigns 16 Stage-A and 128 reserved Stage-B IDs per cell, keeps the 1,499 historical exclusions and four smoke IDs, and explicitly separates v1.1 smoke receipt provenance.
 - Frozen launch lock: [stage-a-launch-lock-v12-20261008.json](/home/thinkpad/NB-Ramen/evidence/qcgs-exact-objective-audit/locks/stage-a-launch-lock-v12-20261008.json), SHA-256 `66d714ec346f40036b2bf2d8b4c2d6390aba564e18a0233fb31e053f74155844`. Stage-A run IDs are `stage-a-ood-0-v12-r1-20261008` and `stage-a-ood-05-v12-r1-20261008`; deterministic CUDA commands are locked for serial execution. A conservative maximum-action forecast with 20% reserve is 6.94 / 7.55 GPU-hours per cell (14.49 total), within the frozen ≤8/cell, ≤16 total budgets; it is not a measured runtime guarantee.
-- Startup/launcher failures remain preserved and excluded: profile r2 lacked the deterministic cuBLAS environment; OOD=0.5 scan r1 had a truncated split hash; scan r2 resolved the base interpreter and could not import torch. No invalid attempt contributed records. Stage A has not launched; no objective-to-utility outcome or scientific decision exists.
+- Startup/launcher failures remain preserved and excluded: profile r2 lacked the deterministic cuBLAS environment; OOD=0.5 scan r1 had a truncated split hash; scan r2 resolved the base interpreter and could not import torch. No invalid attempt contributed records. Stage-A run `stage-a-ood-0-v12-r1-20261008` completed 16/16 queries and passed scorer, raw-integrity and provenance audits; its integrity receipt is `decisions/stage-a-integrity-audit-ood-0-20261008.json`. Run `stage-a-ood-05-v12-r1-20261008` remains in progress. Objective-to-utility metrics have not been inspected and there is no scientific decision yet.
 
-**Next:** launch Stage A serially with the frozen locks, then audit the raw scorer/evaluator records independently before deciding whether Stage B opens.
+**Next:** let the active OOD=0.5 run reach a terminal state, audit raw scorer/evaluator records for both cells, then recompute the frozen Stage-A metrics and decide whether Stage B opens.
 ## 2. Phạm vi và nguyên tắc thực thi
 
 - Bắt đầu với CIFAR-100-C, CLIP ViT-B/16, OOD=0 và OOD=0.5, fixed Ramen candidate space, exhaustive legal one-swap actions và no-swap.
