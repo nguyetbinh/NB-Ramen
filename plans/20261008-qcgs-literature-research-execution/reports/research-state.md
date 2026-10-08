@@ -8,7 +8,7 @@
 
 ## Stage and question
 
-P0–P2 are complete. The implementation fix and v1.1 scans/smokes are historical completed inputs. Active policy is v1.2 with report-only peak allocation. P3 is open for component profiling, quota-complete scans and launch-lock construction; P4 Stage A has not started.
+P0–P2 are complete. The implementation fix and v1.1 scans/smokes are historical completed inputs. Active policy is v1.2 with report-only peak allocation. Final deterministic v1.2 component profiles are complete; P3 remains open for quota-complete scans, registry replay and launch-lock construction. P4 Stage A has not started.
 
 The current candidate question is narrower than generic TTA method selection: within one fixed Ramen query, cache snapshot, update rule and legal same-pseudo-class one-support-swap set, do label-free observations or exact post-update objective changes rank that query's supervised CE utility? This is provisional pending the current literature comparison. It does not claim a general theorem about identifying the best TTA action across deployment worlds.
 
@@ -54,11 +54,11 @@ The read-only P2a audit found a reusable path in `Ramen.py`, `OracleSupportUtili
 
 The existing probe is not an exact-objective audit: its registry, schemas and gates are specific to previous diagnostics. In particular, sign-direction deduplication only applies when the objective depends on the resulting SignSGD state, not when the objective depends on incoming/outgoing support identity. Historical grouped ViT parity guards cover only the first two active queries, so the new audit needs appropriate known-case coverage.
 
-One report lists evaluator peak memory near 7.24 GiB on an 8 GiB device before accounting for all retained allocations. Full candidate evaluation feasibility is unverified. Resource limits, action batching and exact estimator cost must be measured during an unscored bounded smoke; they must not silently change the frozen action set or baseline.
+One report lists evaluator peak memory near 7.24 GiB on an 8 GiB device before accounting for all retained allocations. Final v1.2 one-query cost-only profiles completed full candidate evaluation at 485 / 850 swaps with 8,358,872,576 / 8,368,574,976 peak bytes; these are reported costs, not gates. A conservative maximum-action forecast fits the frozen compute budgets, but actual Stage-A runtime remains unmeasured. Action batching and the frozen action set remain unchanged.
 
 ## Next decision
 
-The v1.1 7.5 GiB rejection is preserved as history and superseded by the user's v1.2 revision. The current registry check accepts complete high-peak smoke receipts when their v1.1 source/protocol provenance is explicit. At the 600-row scan prefix, OOD=0 lacks 8 Stage-A and 51 Stage-B eligible IDs, so the frozen doubling rule requests 1,200 rows/cell. Run cost-only component profiles on excluded smoke IDs, then quota scans, build the registry and launch lock, and run Stage A within the frozen budgets. No objective-to-utility outcome exists yet.
+The v1.1 7.5 GiB rejection is preserved as history and superseded by the user's v1.2 revision. The current registry check accepts complete high-peak smoke receipts when their v1.1 source/protocol provenance is explicit. At the 600-row scan prefix, OOD=0 lacks 8 Stage-A and 51 Stage-B eligible IDs, so the frozen doubling rule requests 1,200 rows/cell. Final cost-only profiles on excluded smoke IDs are complete and audited. Next: quota scans, registry replay, launch lock, then Stage A within the frozen budgets. No objective-to-utility outcome exists yet.
 
 ## P3 execution state — v1.1 receipts and v1.2 continuation
 
@@ -66,4 +66,4 @@ The exact-objective implementation is committed on `qcgs-exact-objective-code` a
 
 Under v1.1, two outcome-blind 600-row CUDA scans passed provenance/continuity checks but exceeded that protocol's 7.5 GiB precautionary cap. Both smoke cells completed with full registered action coverage and parity/provenance receipts. Their peaks were 8,358,872,576 bytes (OOD=0) and 8,368,574,976 bytes (OOD=0.5); combined process elapsed was 35:08. The v1.1 registry builder rejected construction at that gate. These are preserved cost observations, not evidence for or against any research hypothesis; v1.2 supersedes the peak threshold.
 
-The current protocol/config/validator and cost-profile instrumentation are committed at `5f486e4ada84fb5b6a1c4794c3a00dc9015654d5` (`src/` archive SHA-256 `bd8404099e12d4094166cfe171f1385305fd0cfee22b85f95288de9273a038ef`), with 36 focused tests passing and targeted review complete. A CPU target-row optimization attempt failed bitwise batch parity and was not retained. The full-batch path remains in place. Current profile runs have not launched. See [resource-policy revision](resource-policy-revision.md) for hashes, checks, quota result and next actions.
+The v1.2 protocol/config/validator and profile instrumentation are committed at `5f486e4ada84fb5b6a1c4794c3a00dc9015654d5`; query-invariant per-query view forwards are committed at `9206f08f5d66229a9d1d526667ed8ed9c03e8a65`. The focused suite passes 37 tests. A CPU target-row action-forward optimization failed bitwise batch parity and was discarded; production full-batch action forwards remain. Final r3 cost-only profiles on the frozen queries passed audits with no evaluator outcomes. See [resource-policy revision](resource-policy-revision.md) for hashes, costs, forecast, quota and next actions.

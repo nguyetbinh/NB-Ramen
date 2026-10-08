@@ -47,7 +47,7 @@ New known cases are needed for each objective's loss/reward orientation, constan
 
 1. Full multi-view exclusion IDs are absent with the raw archive. Current evidence supports a report-backed count of 27, not an exact locally auditable list.
 2. No exact-objective protocol, registry or executable schema is frozen. Objective formulas/access, query/action quotas, validity rules, thresholds, multiplicity, uncertainty and budget remain unspecified.
-3. Current CUDA parity has not been checked. This local PyTorch/CUDA/device differs from historical T4 evidence.
+3. This pre-implementation audit did not check CUDA parity. Later v1.2 r3 cost-only profiles ran on the local PyTorch/CUDA/device and passed scorer/provenance audits, but do not establish campaign-wide or historical-T4 parity; see [active resource-policy revision](resource-policy-revision.md).
 4. No raw records are present for independent recomputation of historical cache trajectories or result rows.
 5. Historical evaluator peak memory was reported near 7.24 GiB, leaving little headroom on the local 8 GiB GPU; exact audit batching and cost remain unknown.
 

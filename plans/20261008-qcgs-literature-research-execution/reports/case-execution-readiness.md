@@ -6,7 +6,7 @@
 
 **Scientific gates:** preserved from v1.1. **Active resource policy:** [`qcgs-exact-objective-audit-v1.2`](../../../docs/research/qcgs-exact-label-free-objective-audit.md), SHA-256 `397e769d2eda50bad9a4744efbd7d928bf06640b9b15b06745ecd45955a5df03`
 
-**Status:** scientific case remains active. Reviewed source and two v1.1 scans/smokes are complete. High peaks are report-only under v1.2. Component profiles, 1,200-row scans, current registry and launch lock remain outstanding; Stage A has not launched.
+**Status:** scientific case remains active. Reviewed v1.1 scans/smokes and final v1.2 cost-only profiles are complete. High peaks are report-only under v1.2. The 1,200-row scans, current registry and launch lock remain outstanding; Stage A has not launched. See [active resource-policy revision](resource-policy-revision.md) for profile hashes and cost forecast.
 
 ## Case card
 
@@ -38,7 +38,7 @@ Reviewed source commit: `04abdbaab46f8c1d35f304e6cb8dbd1f43554b93`; source archi
 
 The separate outcome-blind smoke registry SHA-256 is `40bd2afacb71482d01ddf65c33672c1a16340fc3fd9650eefdc6c70b5e014a8f`. Its OOD=0 run completed two registered queries and 485 legal swaps plus no-swap per query; peak was 8,358,872,576 bytes. OOD=0.5 completed two registered queries and 850 legal swaps plus no-swap per query; peak was 8,368,574,976 bytes. Both smoke scorer/provenance audits passed, and neither run persisted evaluator outcomes. Combined observed process elapsed was 35:08. A v1.1 builder rejected construction at its allocator cap; that policy decision is superseded. The source/protocol of these receipts remains v1.1 and must be recorded separately from active v1.2 registry provenance.
 
-The archived multi-view validation receipt reports 16,500 / 17,965 verified legal swaps across its two 16-query Stage-A cells, with per-query ranges 705–1,230 / 945–1,320. This is a scale reference only: its raw archive is missing and the new fresh-query cache states may yield different action counts. The new runner must emit exact attempted/enumerated/completed counts; smoke timing, not this historical report, locks the action chunk and confirms the Stage-A cost cap.
+The archived multi-view validation receipt reports 16,500 / 17,965 verified legal swaps across its two 16-query Stage-A cells, with per-query ranges 705–1,230 / 945–1,320. This is a scale reference only: its raw archive is missing and the new fresh-query cache states may yield different action counts. The new runner must emit exact attempted/enumerated/completed counts. The final v1.2 profile estimates Stage-A cost within the frozen budgets under a conservative 20% reserve, but only actual campaign timing can confirm those budgets.
 
 ## Run state
 
@@ -46,4 +46,5 @@ The archived multi-view validation receipt reports 16,500 / 17,965 verified lega
 - P1 literature mapping is committed. P2 v1 was committed at `973d81d`; the fresh read-only P2 audit and its four resolved corrections are recorded in [protocol review](protocol-consistency-review.md), with v1.1 hash above.
 - Reviewed implementation/fix commit is `04abdbaab46f8c1d35f304e6cb8dbd1f43554b93` on `qcgs-exact-objective-code`; source archive SHA-256 is `35af0d707d7702af2990e022d34d858b13004c42a45d5b70190c546da805c511`. The latest fresh code review found no remaining findings; 35 focused tests and 443 repository tests (1 skipped) passed.
 - The 600-row scan prefix is quota-short: the v1.2 builder dry run reported 8 Stage-A and 51 Stage-B eligible IDs missing at OOD=0 and requested 1,200 rows/cell. The high smoke peaks did not trigger rejection. This is a quota extension, not a scientific result.
-- No current scientific registry or executable launch lock exists. Stage A and later conditional stages are not reached. CASE-QCGS-01 remains active; objective-to-utility is untested. See [active resource-policy revision](resource-policy-revision.md).
+- Final r3 cost-only profiles on source `9206f08f5d66229a9d1d526667ed8ed9c03e8a65` completed under the required deterministic CUDA environment, passed scorer/provenance audits, and contain no evaluator outcomes. Full-batch candidate forwards dominate measured cost; no exact speed optimization was chosen.
+- No current scientific registry or executable launch lock exists. Stage A and later conditional stages are not reached. CASE-QCGS-01 remains active; objective-to-utility is untested. Next: 1,200-row scans, registry replay and launch lock. See [active resource-policy revision](resource-policy-revision.md).
